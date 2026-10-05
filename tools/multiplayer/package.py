@@ -78,7 +78,7 @@ def check_portable_launchers(output, python):
                 ("motion_timeline.py", ["--help"]),
                 ("abort_fixture.py", ["--help"]),
                 ("launcher_gui.py", ["--self-check"])):
-            result = subprocess.run([str(python), str(output / "tools/multiplayer" / entry)] + arguments,
+            result = subprocess.run([str(python), "-B", str(output / "tools/multiplayer" / entry)] + arguments,
                                     cwd=temporary, env=environment, stdin=subprocess.DEVNULL, text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
             if result.returncode:

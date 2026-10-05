@@ -3,7 +3,61 @@
 The public source export is for code review and development. It is not a
 self-contained playable release or a one-command clean build. The build uses
 locally installed game/SDK data and generated asset inputs that are deliberately
-excluded from the source export. Use an invited playable ZIP for the alpha.
+excluded from the source export. To play, download the complete playable ZIP
+from [GitHub Releases](https://github.com/Kvasir94/Killing-Floor-2-VR/releases).
+The launcher can be audited and assembled independently of the game/VR assets.
+
+## Audit and build the launcher
+
+The complete shipped launcher source is public. It uses Python's standard library,
+Tkinter and Windows APIs; there is no separate private launcher project or pip
+dependency. The PowerShell artwork is embedded in the GUI source.
+
+| Files | Responsibility |
+| --- | --- |
+| `tools/multiplayer/launcher_gui.py`, `friends.py` | Player window, game discovery, Solo/Host/Join and session cleanup |
+| `tools/multiplayer/package.py` (`LAUNCHER_MODULES`) | Exact shipped module inventory and portable entry-point checks |
+| `tools/multiplayer/session.py`, `native_fixture.py`, `release_state.py`, `recovery.py`, `watchdog.py` | Deployment validation, process ownership, recovery and release integrity |
+| `tools/multiplayer/diagnostics.py`, `vr_config.py`, `desktop_settings.py`, `workshop_loadout.py` | Local report sanitization and preference/content handling |
+| `tools/install-multiplayer-server.ps1`, `tools/multiplayer/dependencies.py`, `tools/dependency-pins.json` | Explicit server bootstrap and SHA-256-checked vendor downloads |
+| `tools/play-main.ps1`, `tools/play-gui.ps1`, `Play-KF2VR.cmd` | Development-checkout entry points; the portable ZIP uses the Python GUI |
+
+On Windows x64, install Python with Tkinter for running source tests. From a clean
+public checkout, run:
+
+```powershell
+python -m unittest discover -s tools/multiplayer -p 'test_*.py' -q
+python tools/multiplayer/build_launcher.py --output build/launcher-audit
+build/launcher-audit/app/runtime/python.exe -B build/launcher-audit/app/tools/multiplayer/launcher_gui.py --self-check
+```
+
+Choose a new output folder for each build; existing folders are never overwritten.
+The builder downloads CPython 3.14.3's official Windows embeddable ZIP and its
+official Tcl/Tk MSI component from the exact URLs in `tools/dependency-pins.json`.
+Both cached and downloaded archives must match their SHA-256 pins before extraction.
+Cache them under `build/multiplayer/` with the filenames in that JSON for an offline
+build. The MSI is extracted with `msiexec /a /qn` into a temporary directory; it is
+not installed. Python/Tk and their licenses remain local to the output folder.
+No SDK, game files, Steam login, personal profile or authoring scene is required.
+
+This produces **a launcher audit build**, with `Start KF2-VR.cmd`, declared launcher
+sources, defaults, runtime, licenses and a relative-file hash inventory in
+`app/launcher-build.json`. It runs the existing portable help/UI checks outside
+the checkout with a temporary preference directory. These checks start no game,
+server, Workshop downloads or synthetic gameplay. Bytecode caches are suppressed
+so absolute build paths do not enter the assembled kit.
+
+The audit build omits playable DLLs, game packages and `release.json`; use it to
+inspect or change the UI, not to launch the mod or replace files in a release.
+Full playable packaging still requires the matching compiled inputs below.
+Do not bypass integrity or game-compatibility checks when integrating changes.
+Local game discovery reads Steam/OpenXR registry paths. Actual play deploys the
+mod temporarily and maintains recovery records; hosting can explicitly download
+the server from Valve, and selected Workshop content can download through Steam.
+**Save logs for a bug report** creates sanitized local copies for user review;
+it does not upload them automatically. Review those paths and controls in the
+source when auditing safety; public source and passing tests are not a blanket
+security guarantee.
 
 ## Native adapter and CPU tests
 
@@ -90,4 +144,32 @@ There is no current documented switch in `tools/build-kf2vr.ps1` that removes
 these art dependencies and still builds the complete default VR package.
 Turning optional gameplay OFF at launch does not remove compile-time asset needs.
 Native-only review/build is the usable independent path above. Reconstructing
-the exact private VR art from a clean public checkout remains unfinished work.
+the exact current VR art from a clean public checkout remains unfinished work.
+
+### Closing the full-mod build gaps
+
+The following work is still required before advertising a reproducible full-mod
+build. It does not block the independent launcher build above.
+
+1. Pin the supported extractor and PSK/Blender importer versions and document the
+   exact source packages, object names and commands for exporting the KF2 hand rig
+   and stock reload/weapon inputs from the builder's own supported Steam game/SDK.
+   Generate outputs locally; do not commit extracted game packages or caches.
+2. Inspect the current `KF2VR-Horzine-Hands.blend` scene and its linked/packed source
+   textures for personal metadata, external paths and provenance. Publish only
+   reviewed authored inputs whose distribution is permitted, or supply an authored
+   replacement and regeneration recipe. The current stock-hand cutter does not
+   recreate the authored scene. No such scene/textures are included today.
+3. Document the hand/watch/export staging sequence and revision parameters,
+   followed by reload mesh generation, SDK import and `build-hand-assets.ps1`.
+   Generated mesh hashes/build receipts should come from each local build rather
+   than copied private machine records. RAVEN-7 rig/grip generation needs this skin.
+4. Document legitimate local Portal/Source/Engineer source requirements and
+   extraction/import commands, or decouple optional packages from the default
+   script compile. Launching with optional gameplay OFF currently leaves compile
+   dependencies in place. Review custom installation-path support separately.
+5. Build from a clean public checkout using only the documented supported tools
+   and locally owned game/SDK inputs, then run the existing CPU/launcher/package
+   gate. Record remaining gaps here; retain headset and real online acceptance.
+   Publish future playable changes as a new release without replacing old ZIPs
+   or moving their tags.

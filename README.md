@@ -5,11 +5,21 @@ Tracked hands, independently held weapons, physical melee, VR menus and wrist
 readouts run through a native OpenXR/D3D11 adapter and UnrealScript packages.
 KF2-VR is unaffiliated with Tripwire Interactive.
 
-## Playing the private alpha
+## Play the mod
 
-Invited testers receive a playable ZIP and report destination from the developer.
-No public playable download is announced here. Extract the whole ZIP into a
-fresh folder, connect your headset and activate its OpenXR runtime, then open
+Public playable alpha downloads are on [GitHub Releases](https://github.com/Kvasir94/Killing-Floor-2-VR/releases).
+For [the first public alpha](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/tag/v0.1.0-alpha.20261005),
+choose **KF2VR-Multiplayer-20261005-162042.zip** to play Solo, Host or Join.
+The **KF2VR-Source-20261005-190136-afd65184d77c.zip** and GitHub's automatic
+**Source code** archives are for development; they are not playable packages.
+Use the release notes for checksums, game compatibility and known limitations.
+The first playable ZIP retains its original private-alpha labels and metadata;
+the release makes those same bytes publicly available. Its source snapshot is
+newer than the playable build. Existing release ZIPs and tags remain unchanged;
+future playable updates receive a new version and release notes.
+
+Extract the whole playable ZIP into a fresh folder, leave `app` intact,
+connect your headset and activate its OpenXR runtime, then open
 **Start KF2-VR**. Start with **Play solo**; Host and Join also offer VR or Desktop.
 Keep the launcher open until KF2 exits and cleanup finishes.
 
@@ -34,11 +44,12 @@ and [feedback questions](docs/public-alpha/FEEDBACK-QUESTIONS.md).
 For reports, use **Save logs for a bug report**. It creates a local ZIP of
 sanitized report copies; originals remain local and nothing uploads automatically.
 Review the ZIP before sharing: unrecognized personal details in free-form text
-may need removal. Use the report destination from your invitation.
+may need removal. Use the Discord thread where the public release was shared,
+as described in the release notes.
 After interruption, quit KF2 and use **Fix a stuck session** before changing or
 deleting that release folder. Never mix DLLs or bypass game/package checks.
 
-## Source and contributions
+## Build and contribute
 
 Public source: [Kvasir94/Killing-Floor-2-VR](https://github.com/Kvasir94/Killing-Floor-2-VR).
 To obtain the source:
@@ -50,7 +61,10 @@ cd Killing-Floor-2-VR
 
 The source is for review and development. It is not a self-contained playable
 release: current builds require locally installed game/SDK data and excluded
-generated asset inputs. See [BUILDING](docs/BUILDING.md) for prerequisites,
+generated asset inputs and a missing authored hand scene.
+**The launcher can be audited and built independently**, without KF2, the SDK
+or private art; see [launcher source and build](docs/BUILDING.md#audit-and-build-the-launcher).
+See [BUILDING](docs/BUILDING.md) for native/full-mod prerequisites,
 commands and exact limitations; [CONTRIBUTING](CONTRIBUTING.md) has issue guidance.
 [Public source updates](docs/PUBLISHING.md) explains how to keep private development
 history separate and apply reviewed future exports as new public commits.
@@ -85,6 +99,8 @@ restores its temporary game-folder deployment when cleanup completes.
 [MIT](LICENSE) covers original KF2-VR contributions. Game, SDK, Workshop and
 Valve assets retain their owners' terms. The public source export omits Git
 history, local data, game/derived binary packages and assets with unresolved
-provenance. The private playable ZIP is separate; deferred private asset review
-does not grant public distribution clearance. See [PROVENANCE](docs/PROVENANCE.md)
+provenance. The public playable ZIP is a separate artifact that includes
+game-derived packages; its redistribution review remains unresolved, as disclosed
+in the release notes. Public availability does not establish rights clearance.
+See [PROVENANCE](docs/PROVENANCE.md)
 and [dependency pins](third_party/VERSIONS.md).
