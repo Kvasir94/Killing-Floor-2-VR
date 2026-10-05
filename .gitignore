@@ -1,0 +1,50 @@
+# Build output
+build/
+out/
+__pycache__/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+
+# Generated extracts — regenerable from the SDK via tools/, never redistributable
+extract/
+!extract/.gitkeep
+
+# Vendored third-party SDKs (fetched, not committed)
+third_party/*/
+!third_party/*.cmake
+!third_party/README.md
+
+# Local, machine-specific
+.worktrees/
+.vs/
+.vscode/
+*.user
+local.*
+
+# Local playtest audio, transcripts, reports and resumable session state
+playtest-notes/
+
+# Ghidra project database and raw analysis dumps — large, regenerable from the
+# pinned binary, and derived from copyrighted game code.
+reverse/ghidra-proj/
+reverse/out/
+!reverse/out/.gitkeep
+
+
+# Private/local material stays outside a public repository
+history/
+kf2vr_chat_export/
+kf2-vr-research/
+.worktrees/
+.pytest_cache/
+*.log
+*.dmp
+.env
+.env.*
+!third_party/minhook/
+!third_party/minhook/**

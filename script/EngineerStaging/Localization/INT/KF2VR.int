@@ -1,0 +1,31 @@
+[VREngineerPDA]
+ItemName=Construction PDA
+ItemCategory=Engineer Building Kit
+ItemDescription=Select a building blueprint, then place it with the toolbox.
+
+[VREngineerDestroyPDA]
+ItemName=Destruction PDA
+ItemCategory=Engineer Building Kit
+ItemDescription=Destroy an owned building.
+
+[VREngineerToolbox]
+ItemName=Toolbox
+ItemCategory=Engineer Building Kit
+ItemDescription=Position and rotate the selected blueprint, then place it.
+
+[VREngineerWrench]
+ItemName=Wrench
+ItemCategory=Engineer Building Kit
+ItemDescription=Build, repair, refill and upgrade your buildings using shared metal.
+
+[VREngineerWrangler]
+ItemName=Wrangler
+ItemCategory=Ported Weapons
+ItemDescription=Manually control your sentry. Primary fires bullets; secondary fires level-three rockets.
+
+[VREngineerKit]
+ItemName=Engineer Building Kit
+ItemDescription=Construction PDA, Destruction PDA, toolbox and wrench together, with one shared metal supply.
+
+[VRPortedTraderMenu]
+PortedTabLabel=Ported Weapons

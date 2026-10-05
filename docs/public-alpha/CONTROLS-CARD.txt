@@ -1,0 +1,82 @@
+KF2-VR CONTROLS - QUICK CARD (Touch labels)
+=========================================
+Full guide and tips: app\docs\VR_CONTROLS.md. Saved settings override defaults.
+Touch: X/Y left, A/B right. Index: A/B on each hand; use the menu chord.
+Vive/WMR/select-only profiles do not have complete face-button bindings supplied;
+do not assume the same wheel/reload controls without validating your runtime.
+
+WEAPONS AND HANDS
+  Trigger                 Fire/use that hand's equipped item. Open empty hand: interact.
+  X / A short tap         Reload on release. Physical reloads use the current mechanism.
+  X / A hold              Change a supported persistent mode once, or hold it and
+                          freshly pull trigger for secondary fire. Release trigger
+                          first if it was already held.
+  Y / B tap               Previous item; opens the hand if no distinct previous exists.
+  Y / B double tap        Stow an occupied hand. On an already empty hand: draw syringe.
+  Y / B hold 0.25 s        Open that hand's wheel, then release the button.
+  Point/move controller   Highlight a sector; squeeze AND RELEASE trigger to confirm.
+                          Stick tilt does not select. Y/B or an unhighlighted-centre
+                          trigger click cancels. Centre the stick after closing.
+  Grip at support contact Hold two-hand support by default; release/move away to detach.
+                          Primary weapons stay equipped when fingers relax.
+  Support-only carry      After old primary is stowed, move to primary grip and pull
+                          trigger to claim it; release then pull again to fire.
+  Y / B at temple         Toggle flashlight instead of quick-swap.
+  Wheel + submenu         Drop the held item (stock restrictions), God Mode, Back.
+
+HEAL, GRENADE, MELEE
+  Syringe                 Select it on the wheel or double-tap an already empty hand.
+                          No wrist/forearm pouch. Hand near upper chest + trigger:
+                          self-heal; otherwise aim and trigger for teammate healing.
+                          X/A + fresh trigger also requests self-heal. Stow/swap after.
+  Chest grenade           Empty the hand and release support; palm to visible grenade,
+                          squeeze/hold GRIP, swing, RELEASE GRIP to throw/drop.
+                          Trigger does not throw. No wheel fallback grenade throw.
+  Empty fist              Clench grip and swing to punch. Hold trigger while clenched
+                          to charge, then punch while holding. Open/release cancels.
+  Empty-fist guard         Raise both clenched empty fists; lower/re-raise to rearm.
+  Melee/gun bash           Swing for physical contacts. Two-hand guards brace across
+                          body; button-guard profiles use X/A, with X/A+trigger for
+                          supported secondary/heavy actions. Ion Thruster: X/A ultimate.
+  Zed/body grab            Empty hand + held grip near eligible target; release to
+                          drop/throw. Solo ON; multiplayer host-owned, initially OFF.
+  Teammate gestures        Multiplayer empty fists bump, open hands high-five.
+  Dosh                    Stock TossMoney (default KEYBOARD B); no active hip wallet.
+                          VR controller B still controls right-hand inventory.
+
+MOVE AND MENU (DEFAULT MOVEMENT HAND LEFT)
+  Left stick              Head-relative walking. Click while deflected latches sprint;
+                          centre or crouch ends it. Fire/reload/draw can pause sprint.
+  Right stick             Left/right: 30-degree snap turn. Outer rim up: jump, or stand
+                          from stick crouch first. Outer rim down: crouch toggle.
+  Right-stick click       Near closed/broken door: draw/return welder in RIGHT hand.
+                          Trigger welds; A+trigger unwelds. No stick bash.
+  Physical crouch         Uses captured height; seated/button crouch is separately set.
+  Teleport mode           Movement-stick deflection aims arc; RETURN TO CENTRE commits
+                          a valid destination. Movement-stick CLICK cancels.
+  Menu                    Menu button, or centred sticks + released triggers + both
+                          stick clicks held 0.6 s. Solo menu pauses when possible;
+                          online keeps running. Pointer trigger presses menu targets.
+  Trader                  Enter trader pod and use its floating stock menu.
+
+SETTINGS AND SPECIAL ITEMS
+  VR SETTINGS > INTERACTION > RELOAD MODE: BUTTON / PHYSICAL / PHYSICAL + PUMP.
+  Button is default. Unsupported weapons keep stock reloads; hints default ON.
+  BODY HOLSTERS default OFF: fresh grip at compatible shoulder/hip slot stows;
+  empty-hand grip draws. Set HOLSTER FIT; syringe/welder are excluded.
+  LOCOMOTION AND COMFORT changes movement hand/direction, turn and crouch.
+  MENU AND INTERFACE sets pointer/panel/recenter; CALIBRATION sets fit/height/chest.
+  HUD AND READOUTS adjusts watch/readouts/lasers/hints; GRAPHICS sets render scale.
+  Movement/dominant-hand settings do not swap physical face buttons; welder is right.
+  PRACTICE AND TOOLS opens calibration/range/armory. END PRACTICE ends the range;
+  closing its panel does not. Practice/God Mode makes the session unranked.
+  C4/Sentinel/Bombardier: hold trigger, swing, release to throw/place; X/A+trigger detonate.
+  RAVEN-7: hold trigger, swing, release to throw. Fresh airborne hold suspends; release
+  recalls. Resting axe: fresh press recalls. Fresh grip is a recall shortcut.
+  Optional Solo Portal Gun: trigger blue, X/A+trigger orange, quick X/A dismisses portals.
+  Portal see-through needs threaded rendering OFF. Optional Breacher: app\docs\BREACHER.md.
+
+Desktop uses stock KF2 bindings; full guide lists default keyboard controls.
+Keep the launcher open for cleanup. After a crash use Fix a stuck session.
+Save logs for a bug report; review the ZIP before sharing. See full guide for
+build-specific report privacy, launch/Host/Join, recovery and troubleshooting.

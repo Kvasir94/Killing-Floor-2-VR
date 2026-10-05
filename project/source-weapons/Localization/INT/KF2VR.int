@@ -1,0 +1,9 @@
+[VRWeap_SuperGravityGun]
+ItemName=Dark Energy Field Manipulator
+ItemCategory=Source test weapons
+ItemDescription=Powered Gravity Gun. Trigger launches targets. Hold A/X and press the same hand's trigger to pull or drop a target.
+
+[VRWeap_StickybombLauncher]
+ItemName=Stickybomb Launcher
+ItemCategory=Source test weapons
+ItemDescription=Hold the trigger to charge and release to launch. Hold A/X and press the same hand's trigger to detonate. Tap A/X to reload.

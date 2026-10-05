@@ -1,0 +1,28 @@
+# Search policy only: these files remain tracked/preserved and direct links work.
+# Use rg --no-ignore <pattern> history (or an explicit file) for historical work.
+/history/
+/kf2vr_chat_export/
+/kf2-vr-research/
+
+# Dated evidence and superseded instructions, not the current task queue.
+/docs/*_2026-*.md
+/docs/ai/*_2026-*.md
+/docs/re/*_2026-*.md
+/docs/kf2-vr-audit*.md
+/docs/TEST_REPAIR_PLAN.md
+/docs/TAKEOVER_ASSESSMENT.md
+/docs/PLAYTEST-CHECKLIST.md
+/docs/VR_CONTROL_PROPOSAL.md
+/docs/DUAL_WIELD_PLAN.md
+/docs/MULTIPLAYER_PLAN.md
+/docs/MULTIPLAYER_MVP.md
+/docs/MULTIPLAYER_SOURCE_AUDIT.md
+/docs/CONTROLS_REVISION_HEADSET_ACCEPTANCE.md
+
+# Retired task handovers remain navigable without competing in ordinary search.
+/docs/ai/PORTAL_HANDOVER.md
+/docs/ai/dual-wield-task.md
+/docs/ai/engineer-task.md
+/docs/ai/source-weapons-task.md
+/docs/ai/support-hand-weapons.md
+/docs/ai/PUBLIC_ALPHA_HANDOFF.md

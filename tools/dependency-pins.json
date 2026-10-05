@@ -1,0 +1,17 @@
+{
+  "python-3.14.3-embed-amd64.zip": {
+    "url": "https://www.python.org/ftp/python/3.14.3/python-3.14.3-embed-amd64.zip",
+    "sha256": "AD4961A479DEDBEB7C7D113253F8DB1B1935586B73C27488712BEEC4F2C894E6",
+    "provenance": "Published SHA-256 at https://www.python.org/downloads/release/python-3143/"
+  },
+  "python-3.14.3-tcltk-amd64.msi": {
+    "url": "https://www.python.org/ftp/python/3.14.3/amd64/tcltk.msi",
+    "sha256": "102D87005E40E0D55E2E806F6BF9D1E53D535878A783FC136E17958788820EBF",
+    "provenance": "Tcl/Tk 8.6.15 component of the official 3.14.3 installer, retrieved 2026-09-30; Authenticode-signed by the Python Software Foundation (python.org publishes no per-component hash). Supplies tkinter for the player window."
+  },
+  "steamcmd.zip": {
+    "url": "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip",
+    "sha256": "7669B170DEE42DB8EE2273775ED7DFB2D173BDBA1B849F70D2C7B379290BCE13",
+    "provenance": "Bootstrap bytes retrieved from Valve HTTPS endpoint 2026-09-24; pin requires deliberate update if Valve replaces the archive. SteamCMD subsequently updates itself and verifies game depots through Steam."
+  }
+}

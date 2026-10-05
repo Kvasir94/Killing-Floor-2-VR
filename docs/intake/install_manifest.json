@@ -1,0 +1,92 @@
+{
+  "schema": "kf2vr/install_manifest/1",
+  "generated_utc": "2026-09-12T05:22:57.7835099Z",
+  "generated_by": "tools/intake/fingerprint.ps1",
+  "read_only": true,
+  "game_root": "C:/Games/KillingFloor2",
+  "steam": {
+    "game": {
+      "appid": "232090",
+      "name": "Killing Floor 2",
+      "buildid": "13316885",
+      "lastupdated": "1787421487",
+      "size_on_disk": "102716836992"
+    },
+    "sdk": {
+      "appid": "232150",
+      "name": "Killing Floor 2 - SDK",
+      "buildid": "13316905",
+      "lastupdated": "1788917475",
+      "size_on_disk": "100899122"
+    }
+  },
+  "binaries": {
+    "game": {
+      "name": "KFGame.exe",
+      "size_bytes": 35525120,
+      "modified_utc": "2024-09-09T23:56:21.0934797Z",
+      "pe_machine": "x86-64",
+      "file_version": "1, 0, 8767, 0",
+      "sha256": "77AB9C2CF43AEAA3038274FFF3822064815A3EA02A1B3C81870CDC12A885C994"
+    },
+    "editor": {
+      "name": "KFEditor.exe",
+      "size_bytes": 67883520,
+      "modified_utc": "2026-09-09T01:30:51.5812568Z",
+      "pe_machine": "x86-64",
+      "file_version": "1, 0, 8767, 0",
+      "sha256": "B937AADAA06F728354044461CB8490EF2C20B17245535CF88D3F23CD81DDB85C"
+    }
+  },
+  "engine_parity": {
+    "game_file_version": "1, 0, 8767, 0",
+    "editor_file_version": "1, 0, 8767, 0",
+    "match": true
+  },
+  "packages": {
+    "kfgame": {
+      "package": "KFGame.u",
+      "file_version": 871,
+      "licensee_version": 1117
+    },
+    "kfgamecontent": {
+      "package": "KFGameContent.u",
+      "file_version": 871,
+      "licensee_version": 1117
+    },
+    "engine": {
+      "package": "Engine.u",
+      "file_version": 871,
+      "licensee_version": 1117
+    }
+  },
+  "unrealscript_source": {
+    "root": "C:/Games/KillingFloor2\\Development\\Src",
+    "packages": {
+      "AkAudio": 16,
+      "BaseAI": 19,
+      "Core": 9,
+      "Engine": 1392,
+      "GameFramework": 105,
+      "GFxUI": 17,
+      "GFxUIEditor": 4,
+      "IpDrv": 50,
+      "KFGame": 827,
+      "KFGameContent": 1195,
+      "OnlineSubsystemDingo": 10,
+      "OnlineSubsystemSteamworks": 6,
+      "SubstanceAir": 11,
+      "SubstanceAirEd": 5,
+      "UDKBase": 120,
+      "UnrealEd": 200,
+      "WebAdmin": 53,
+      "WinDrv": 4
+    },
+    "total_uc_files": 4043
+  },
+  "xr": {
+    "openxr_active_runtime": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\SteamVR\\steamxr_win64.json",
+    "steamvr_installed": true,
+    "headset_observed": false
+  }
+}

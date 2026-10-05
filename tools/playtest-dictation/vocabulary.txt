@@ -1,0 +1,95 @@
+KF2
+KF2-VR
+Killing Floor 2
+Zed
+Clot
+Scrake
+Fleshpound
+FP
+9mm
+M1911
+Desert Eagle
+Deagle
+HMTech-101
+Medic Pistol
+AK-12
+SA80
+L85A2
+MB500
+SG 500
+Boomstick
+magwell
+magazine
+slide
+bolt
+charging handle
+pump
+fore-end
+top-up
+dry fire
+slide lock
+support hand
+gun hand
+dominant hand
+off hand
+haptic
+haptics
+OpenXR
+SteamVR
+Quest 2
+Join
+Solo
+M14
+M14 EBR
+EBR
+AA-12
+AA12
+HMTech-201
+Medic SMG
+AR-15
+AR15
+SCAR
+SCAR-H
+MP7
+Kriss
+Kriss Vector
+P90
+bullpup
+bolt carrier
+drum
+drum magazine
+ejection port
+loading port
+tube
+hinge
+break action
+double barrel
+hunting shotgun
+flick
+glow
+ring
+ghost
+hint
+pouch
+hip pouch
+holster
+pending lock
+slide release
+elite reload
+tactical reload
+perk
+Support
+Commando
+SWAT
+Sharpshooter
+Field Medic
+Gunslinger
+dedicated server
+manual pump
+interactive reloads
+body holsters
+reload hints
+X button
+A button
+magwell glow
+follower

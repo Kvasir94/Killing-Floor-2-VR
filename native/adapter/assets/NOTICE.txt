@@ -1,0 +1,11 @@
+Embedded bell sound resources
+
+Source: BigSoundBank, "Boxing bell #1" (sound #1926)
+https://bigsoundbank.com/boxing-bell-1-s1926.html
+Publisher licence: CC0 (public domain)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+ringside_bell_ding.wav uses the final strike; ringside_bell_ready.wav uses
+three strikes. Both were trimmed, faded and normalized to -14 dBFS peak.
+These sounds are embedded by RingsideBell.rc. This notice records provenance;
+it does not change the upstream CC0 terms or cover any other game asset.

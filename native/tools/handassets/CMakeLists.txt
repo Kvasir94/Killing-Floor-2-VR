@@ -1,0 +1,7 @@
+if(NOT WIN32 OR NOT TARGET kf2vr_minhook)
+  return()
+endif()
+add_library(kf2vr_hand_asset_bridge SHARED HandAssetBridge.cpp)
+target_compile_definitions(kf2vr_hand_asset_bridge PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(kf2vr_hand_asset_bridge PRIVATE kf2vr_minhook bcrypt)
+set_target_properties(kf2vr_hand_asset_bridge PROPERTIES OUTPUT_NAME KF2VRHandAssetBridge PREFIX "")

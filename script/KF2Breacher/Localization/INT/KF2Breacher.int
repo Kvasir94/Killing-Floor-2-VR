@@ -1,0 +1,10 @@
+[BreacherPerk]
+PerkName=Breacher
+EXPAction1=Experimental perk: progression is not implemented.
+EXPAction2=Line up distinct living Zeds for Cascade shots.
+LevelString=Level
+WeaponDroppedMessage=Breacher weapon dropped.
+
+[BreacherDeadbolt]
+ItemName=Deadbolt
+ItemDescription=Industrial nail driver. Cascade gains damage and width through distinct living enemies. Prototype balance.

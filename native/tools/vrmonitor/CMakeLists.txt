@@ -1,0 +1,5 @@
+if(WIN32 AND EXISTS "${PROJECT_SOURCE_DIR}/third_party/openvr-monitor/openvr.h")
+  add_executable(kf2vr_runtime_monitor main.cpp)
+  target_include_directories(kf2vr_runtime_monitor PRIVATE "${PROJECT_SOURCE_DIR}/third_party/openvr-monitor")
+  target_compile_definitions(kf2vr_runtime_monitor PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+endif()

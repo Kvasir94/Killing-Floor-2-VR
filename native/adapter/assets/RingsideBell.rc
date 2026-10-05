@@ -1,0 +1,4 @@
+// CC0 "Boxing bell #1" by BigSoundBank (bigsoundbank.com/sound-1926.html),
+// trimmed and lowered to -14 dBFS peak.
+ringside_bell_ding WAVE "ringside_bell_ding.wav"
+ringside_bell_ready WAVE "ringside_bell_ready.wav"

@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.24)
+project(KF2VRSourceAssetTools LANGUAGES C CXX)
+if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+  message(FATAL_ERROR "The pinned Source asset importer requires Windows x64.")
+endif()
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(MINHOOK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/minhook")
+add_library(source_asset_minhook STATIC
+  "${MINHOOK_ROOT}/src/buffer.c" "${MINHOOK_ROOT}/src/hook.c"
+  "${MINHOOK_ROOT}/src/trampoline.c" "${MINHOOK_ROOT}/src/hde/hde64.c")
+target_include_directories(source_asset_minhook PUBLIC "${MINHOOK_ROOT}/include")
+add_library(kf2vr_source_asset_bridge SHARED SourceAssetBridge.cpp)
+target_compile_definitions(kf2vr_source_asset_bridge PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(kf2vr_source_asset_bridge PRIVATE source_asset_minhook bcrypt)
+set_target_properties(kf2vr_source_asset_bridge PROPERTIES OUTPUT_NAME KF2VRSourceAssetBridge PREFIX "")

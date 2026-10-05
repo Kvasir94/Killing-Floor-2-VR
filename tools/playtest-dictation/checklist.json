@@ -1,0 +1,446 @@
+[
+  {
+    "weapon": "General",
+    "scenario": "Setup",
+    "instruction": "Turn on INTERACTIVE RELOADS in VR SETTINGS > INTERACTION. Say your perk, dominant hand, and Solo or Join.",
+    "watch": "Say whether RELOAD HINTS, MANUAL PUMP and BODY HOLSTERS are on."
+  },
+  {
+    "weapon": "9mm",
+    "scenario": "Empty reload",
+    "instruction": "Empty the pistol: dry fire clicks and keeps the magazine. Eject with X/A or a pouch grab, seat the new one, rack.",
+    "watch": "Slide stays locked back until racked; fires on the next pull; nothing moves before the magazine is in."
+  },
+  {
+    "weapon": "9mm",
+    "scenario": "Magazine insertion",
+    "instruction": "Insert from the left, right, above and at bad angles. Release early once; release after a partial insert once.",
+    "watch": "Wrong-side or sideways approaches must not latch; early release drops it; a partial release settles once."
+  },
+  {
+    "weapon": "9mm",
+    "scenario": "Top-up",
+    "instruction": "Reload with rounds left, then fire straight away.",
+    "watch": "No rack needed; round count; the old magazine drops; the HUD shows 0 while it is out."
+  },
+  {
+    "weapon": "9mm",
+    "scenario": "Slide release and interruption",
+    "instruction": "After seating into an empty gun press gun-hand X/A instead of racking. Then swap weapons after seating and come back.",
+    "watch": "X/A drops the slide; a pending lock only ticks the trigger until X/A or a free-hand rack."
+  },
+  {
+    "weapon": "Pistols",
+    "scenario": "M1911, Desert Eagle, HMTech-101",
+    "instruction": "Empty reload and top-up on each. Use your perk's elite reload if you have one.",
+    "watch": "Magazine path and fit in the hand; slide lock on each; the HMTech dart still fires with a pending lock."
+  },
+  {
+    "weapon": "AK-12 and SA80",
+    "scenario": "Closed-bolt rack",
+    "instruction": "Empty reload on both: seat, then pull the bolt from closed and let go.",
+    "watch": "Bolt travel reads; the SA80 rear magwell is reachable; two-hand support does not fight the pull."
+  },
+  {
+    "weapon": "M14 EBR",
+    "scenario": "Empty reload and top-up",
+    "instruction": "Empty reload: seat the magazine, pull the bolt handle straight back and let go. Then a top-up.",
+    "watch": "Bolt cover rides the bolt; magazine path from the pouch; magazine and well glow placement."
+  },
+  {
+    "weapon": "AA-12",
+    "scenario": "Drum reload",
+    "instruction": "Empty reload with the drum, pulling the charging handle; then a top-up.",
+    "watch": "Drum fits the hand and seats; handle stroke reads; drum glow visible from where you look."
+  },
+  {
+    "weapon": "HMTech-201",
+    "scenario": "Short bolt",
+    "instruction": "Empty reload: the bolt stroke is short. Then a top-up and a heal dart.",
+    "watch": "Rack registers without over-pulling; the fold-out handle rides the bolt; the dart is unaffected."
+  },
+  {
+    "weapon": "AR-15",
+    "scenario": "Handle and bolt",
+    "instruction": "Empty reload: pull the rear charging handle; watch the bolt carrier through the ejection port. Then a top-up.",
+    "watch": "Bolt follows the handle and sits shut after; handle glow at the rear; the fore-grip support does not fight the pull."
+  },
+  {
+    "weapon": "SCAR-H",
+    "scenario": "Side handle",
+    "instruction": "Empty reload with the side charging handle, then a top-up.",
+    "watch": "Bolt follows; the glow strip along the receiver reads as the part to pull; the magazine seats in the well."
+  },
+  {
+    "weapon": "MP7",
+    "scenario": "Rear handle",
+    "instruction": "Empty reload: pull the rear charging handle; then a top-up. Try it carried one-handed, then two-handed.",
+    "watch": "Bolt follows; the grip glow reads as the magwell; reach from the pouch on a short gun."
+  },
+  {
+    "weapon": "Kriss",
+    "scenario": "Left handle",
+    "instruction": "Empty reload: pull the top-left charging handle (a short stroke). Then a top-up.",
+    "watch": "Rack registers; the rear stop is silent by design and the return sounds; the lower housing glow reads as the magwell."
+  },
+  {
+    "weapon": "P90",
+    "scenario": "Top magazine",
+    "instruction": "Empty reload: the magazine leaves from the top; seat the new one along the receiver top, then pull a front handle.",
+    "watch": "Drop direction; insertion path along the top; receiver glow under the magazine; handle glow at the front."
+  },
+  {
+    "weapon": "Tommy Gun",
+    "scenario": "Drum and lock",
+    "instruction": "Empty the drum: the handle should stay back. Seat a drum, then pull and release the top handle. Then a top-up.",
+    "watch": "Handle holds back on empty; the drum seats in the well from below; bolt follows the handle."
+  },
+  {
+    "weapon": "Mac-10",
+    "scenario": "Top handle",
+    "instruction": "Empty reload: pull the top charging handle; then a top-up. One-handed and two-handed.",
+    "watch": "Bolt follows; the magazine seats up the grip; reach from the pouch on a short gun."
+  },
+  {
+    "weapon": "G36C",
+    "scenario": "Lock and handle",
+    "instruction": "Empty the magazine: the handle should stay back. Seat a magazine, then pull and release the top handle. Then a top-up.",
+    "watch": "Bolt and handle hold back on empty and release together; the curved magazine seats along its arc."
+  },
+  {
+    "weapon": "Zed MKIII",
+    "scenario": "Side handle",
+    "instruction": "Empty reload: pull the side charging handle; then a top-up.",
+    "watch": "Rack registers; the magazine and well glows line up; stock audio sounds right with the hand."
+  },
+  {
+    "weapon": "HRG Stunner",
+    "scenario": "Drum",
+    "instruction": "Empty reload: seat the drum, pull the side handle; then a top-up.",
+    "watch": "Drum seats from below; bolt follows the handle; the reload sounds follow the hand."
+  },
+  {
+    "weapon": "S12",
+    "scenario": "Main magazine",
+    "instruction": "Empty reload of the main magazine: seat it, pull the bolt handle. Then switch to the launcher and reload it.",
+    "watch": "Main magazine is physical; the launcher keeps its stock reload and the magazine session never takes it."
+  },
+  {
+    "weapon": "UMP",
+    "scenario": "Left handle",
+    "instruction": "Empty reload: lock the handle back before the magazine, seat it, then slap or press X/A (its bolt release). Then a top-up.",
+    "watch": "Bolt follows the handle; the reload sounds follow the hand."
+  },
+  {
+    "weapon": "MP5 RAS",
+    "scenario": "Left handle",
+    "instruction": "Empty reload: before the magazine, pull the left handle fully back and let go so it parks in its notch; seat the magazine, then slap it (pull a little and let go). Also try it without locking first.",
+    "watch": "Bolt follows; the curved magazine seats along its arc; the reload sounds follow the hand."
+  },
+  {
+    "weapon": "HMTech-301",
+    "scenario": "Two-tone magazine",
+    "instruction": "Empty reload: seat the magazine, pull the fold-out handle; then a top-up.",
+    "watch": "The held magazine shows its body and rounds in the gun's own colours; the healing dart keeps its stock reload."
+  },
+  {
+    "weapon": "HMTech-401",
+    "scenario": "Two-tone magazine",
+    "instruction": "Empty reload: seat the magazine, pull the fold-out handle; then a top-up.",
+    "watch": "The held magazine shows its body and rounds in the gun's own colours; bolt and handle return shut."
+  },
+  {
+    "weapon": "Glock 18C",
+    "scenario": "Slide lock",
+    "instruction": "Empty the pistol: the slide stays back. Seat a magazine, then rack or press X/A.",
+    "watch": "Slide holds back on empty; releases on rack or button; sounds land on the slide."
+  },
+  {
+    "weapon": "HRG 93R",
+    "scenario": "Slide lock",
+    "instruction": "Empty the pistol: the slide stays back. Seat a magazine, then rack or press X/A.",
+    "watch": "Slide holds back on empty; the rounds are gone from the dropped magazine."
+  },
+  {
+    "weapon": "Disrupter",
+    "scenario": "No slide",
+    "instruction": "Empty reload: drop the magazine, seat a new one.",
+    "watch": "No rack step: the reload completes on the seat with its electric charge-in sound."
+  },
+  {
+    "weapon": "Trench Gun",
+    "scenario": "Shells and pump",
+    "instruction": "Fire it dry, load shells one at a time into the port, then pump. Fire and pump a few times.",
+    "watch": "Shells load like the MB500; its own rack and insert sounds; the pump ejects a hull at the rear stop."
+  },
+  {
+    "weapon": "M79",
+    "scenario": "Break open",
+    "instruction": "Fire, pull the barrel down by hand (or X/A), load the grenade, flick or push it shut.",
+    "watch": "Latch click then the barrel drops and the spent case ejects; insert and close sounds land on the hand."
+  },
+  {
+    "weapon": "HX25",
+    "scenario": "Swing-out barrel",
+    "instruction": "Fire, swing the barrel out, load the round, close it.",
+    "watch": "The barrel swings sideways about the bore (not down); barrel smoke on opening."
+  },
+  {
+    "weapon": "Dragon's Blaze",
+    "scenario": "Four barrels",
+    "instruction": "Fire some shells, open, load each empty chamber, close. Then a partial reload.",
+    "watch": "Four hulls eject on opening; each shell seats in its own chamber; live shells stay visible."
+  },
+  {
+    "weapon": "M4",
+    "scenario": "Tube and port",
+    "instruction": "Empty it, then reload: the first shell goes into the open ejection port, the rest into the tube. Fire without pumping.",
+    "watch": "The bolt is open while the first shell drops in and closes by itself; no pump after shots; shell sounds on contact and seat."
+  },
+  {
+    "weapon": "M99",
+    "scenario": "Bolt",
+    "instruction": "Fire, then grab the bolt handle: lift it and pull it back, load the round, push it forward and down.",
+    "watch": "The bolt follows the hand along its lift-then-pull path; the spent case ejects on opening; bolt sounds on lift, rear, forward and down."
+  },
+  {
+    "weapon": "Mosin",
+    "scenario": "Bolt and stripper clip",
+    "instruction": "Fire some rounds, open the bolt, press a stripper clip into the guides, close the bolt. Then a partial reload.",
+    "watch": "One clip loads every missing round; the bolt handle lifts and turns as the bolt slides; clip-out and bolt-close sounds on closing."
+  },
+  {
+    "weapon": "Winchester",
+    "scenario": "Side gate",
+    "instruction": "Empty it, reload: the first round chambers through the open action, the rest go through the side gate one at a time.",
+    "watch": "Each round seats from the hand into the gate; the lever works on the stock clock; gate and chamber sounds differ."
+  },
+  {
+    "weapon": "SPX 464",
+    "scenario": "Side gate",
+    "instruction": "Empty it, reload one round at a time; then a top-up.",
+    "watch": "Rounds load like the Winchester; scope stays clear of the hand."
+  },
+  {
+    "weapon": ".500 Magnum",
+    "scenario": "Cylinder",
+    "instruction": "Open the cylinder (grab and swing it out, or X/A), seat the speedloader, flick or push it closed.",
+    "watch": "Cases eject on opening; one speedloader loads every round; a wrist flick closes it; rounds show live after the seat."
+  },
+  {
+    "weapon": "Rhino",
+    "scenario": "Cylinder",
+    "instruction": "Open, seat the speedloader, close (flick or push).",
+    "watch": "Same as the .500 with its own sounds; six rounds."
+  },
+  {
+    "weapon": "Stoner",
+    "scenario": "Feed cover",
+    "instruction": "Open the feed cover by hand, let the old box drop, seat a new box, close the cover.",
+    "watch": "Old box falls and lands; new box and belt load every round; the belt shows after the seat."
+  },
+  {
+    "weapon": "MG3",
+    "scenario": "Feed cover",
+    "instruction": "Open the cover, seat the new box, close it.",
+    "watch": "Cover swings about 55 degrees; box and belt sounds land on the hand."
+  },
+  {
+    "weapon": "Bastion",
+    "scenario": "Feed cover",
+    "instruction": "Same as the Stoner.",
+    "watch": "Same as the Stoner with a 60-round box."
+  },
+  {
+    "weapon": "1858",
+    "scenario": "Cylinder swap",
+    "instruction": "Open the loading lever (pin slides out), let the old cylinder drop, seat a loaded one, close the lever.",
+    "watch": "The old cylinder falls and lands; one seat loads all six; pin, lever and hammer sounds on closing."
+  },
+  {
+    "weapon": "M32",
+    "scenario": "Canister",
+    "instruction": "Empty it, then load grenades one at a time into the open canister.",
+    "watch": "Each grenade is drawn from its own mesh and texture; the canister indexes after each one on the stock clock."
+  },
+  {
+    "weapon": "Hints",
+    "scenario": "Part glow timing",
+    "instruction": "Pause a second at each step of an empty reload, then do a fast one. Dry fire twice on an empty gun.",
+    "watch": "Only the next part glows after the pause; a fast reload shows nothing; two dry fires show it at once; no flicker between eyes."
+  },
+  {
+    "weapon": "Pouch",
+    "scenario": "Grab choice at the hip",
+    "instruction": "With BODY HOLSTERS on, grip at the hip near the pouch and near the holster. Grip at the pouch with a full gun.",
+    "watch": "The nearer target wins; a full gun's squeeze stays an ordinary grip; no accidental reload while fighting."
+  },
+  {
+    "weapon": "MB500",
+    "scenario": "Empty reload and first shell",
+    "instruction": "Empty the shotgun. The first shell goes in through the ejection port, the rest into the tube. Pump, fire.",
+    "watch": "First-shell ring or ghost at the port after a pause; shell in the fingers; pump glow until chambered."
+  },
+  {
+    "weapon": "MB500",
+    "scenario": "Pump and support hand",
+    "instruction": "Pump at comfortable and fast speeds with the support hand, in hold and toggle grip. Release at the rear once.",
+    "watch": "Stroke ownership; rear stop and forward lock feel; releasing at the rear needs another full stroke."
+  },
+  {
+    "weapon": "MB500",
+    "scenario": "Top-up, pouch start, manual pump",
+    "instruction": "Top up a part-loaded gun by gripping at the pouch, no X/A. With MANUAL PUMP on, fire and pump between shots.",
+    "watch": "The pouch grip starts it; shell count; fire withheld until a full stroke; sounds at both stops."
+  },
+  {
+    "weapon": "Boomstick",
+    "scenario": "Open, load, close",
+    "instruction": "Open with X/A, then with the fore-end trigger grip. Load two shells; close by grip-up, muzzle-up flick, muzzle-down flick.",
+    "watch": "Breech glow until the first shell; shells follow the hinge; the flick never fires; fire blocked while open."
+  },
+  {
+    "weapon": "Boomstick",
+    "scenario": "Top-up and inspection",
+    "instruction": "One-shell top-up; one-shell reserve; open a full gun and close it.",
+    "watch": "The right number of shells asked for; opening a full gun changes no ammo; sound and smoke at the open."
+  },
+  {
+    "weapon": "Handedness",
+    "scenario": "Left-handed",
+    "instruction": "Switch the dominant hand in VR settings and repeat one pistol, one rifle and the shotgun reload.",
+    "watch": "Pouch on the correct hip; mirrored hand pose; anything that is only wrong on one side."
+  },
+  {
+    "weapon": "Feel",
+    "scenario": "Audio and haptics",
+    "instruction": "Describe reload sounds and pulses on a pistol, a rifle and the shotgun.",
+    "watch": "Eject, contact, seat, rear stop, return: once each, at the hand, audible over gunfire; a failed insert double-pulses."
+  },
+  {
+    "weapon": "FAMAS",
+    "scenario": "Magazine and rod",
+    "instruction": "Empty it, swap the magazine, then pull the charging rod under the carry handle. Then a top-up, then fire the M26 and let it reload.",
+    "watch": "The rod moves with the hand, not the carry handle; mag out, mag in and bolt sounds at their moments; the M26 reload stays stock."
+  },
+  {
+    "weapon": "FN FAL",
+    "scenario": "Magazine and handle",
+    "instruction": "Empty it, swap the magazine, rack the left-side handle. Then a top-up.",
+    "watch": "The bolt follows the handle; mag and handle sounds at their moments."
+  },
+  {
+    "weapon": "M16 M203",
+    "scenario": "Magazine and handle",
+    "instruction": "Empty it, swap the magazine, pull the T-handle. Then fire the M203 and let it reload.",
+    "watch": "The latch and bolt follow the handle; the M203 reload stays stock."
+  },
+  {
+    "weapon": "AF2011",
+    "scenario": "Slide lock",
+    "instruction": "Empty it (the slide holds back), swap the magazine, release or rack the slide. Then a top-up.",
+    "watch": "Both barrels' slide moves as one; the slide-release sound plays on closing."
+  },
+  {
+    "weapon": "Kaboomstick",
+    "scenario": "Break action",
+    "instruction": "Fire both barrels, break it open, load two shells, flick it shut. Then a one-shell top-up.",
+    "watch": "Opens and closes like the hunting shotgun; the breech hint shows both chamber mouths; open, insert and close sounds."
+  },
+  {
+    "weapon": "Elephant Gun",
+    "scenario": "Four barrels",
+    "instruction": "Fire all four, break it open (it drops almost straight down), load four shells one at a time, close it.",
+    "watch": "Each shell seats in the next barrel; four casings eject on opening; bullet-in sound per shell."
+  },
+  {
+    "weapon": "HRG Buckshot",
+    "scenario": "Speedloader",
+    "instruction": "Empty it, swing the cylinder out, push a speedloader in, flick it shut.",
+    "watch": "The loader carries five shotshells; the open cylinder shows empty; the empty loader falls away on seating."
+  },
+  {
+    "weapon": "Flare Gun",
+    "scenario": "Cylinder swap",
+    "instruction": "Empty it, break it open, let the old cylinder drop, seat a full cylinder, close it.",
+    "watch": "The barrel and cylinder swing together; cylinder out, cylinder in and close sounds; all six flares show when closed."
+  },
+  {
+    "weapon": "Blunderbuss",
+    "scenario": "Drum swap",
+    "instruction": "Empty it, pull the drum, seat a full one. Then a top-up.",
+    "watch": "No floating spare drum beside the gun; the hammer cocks after an empty reload with its sound; the drum turns per shot."
+  },
+  {
+    "weapon": "Rack magazine guns",
+    "scenario": "HZ12, HRG Incendiary, Teslauncher, Medic GL, Boomy, riot-shield G18, Sonic Gun, Seal Squeal",
+    "instruction": "On each: empty it, swap the magazine, work the pump, handle or slide. Then a top-up.",
+    "watch": "The new magazine seats from the hand; the handle or pump follows the hand; the G18 slide and Boomy bolt hold back when empty; underbarrel launchers keep their stock reload."
+  },
+  {
+    "weapon": "No-action magazine guns",
+    "scenario": "Nailguns, Laser Cutter, Microwave Assault, Storm Cannon, Shrink Ray, Minigun, Parasite Implanter, Gravity Imploder, Bladed Pistol, Medic Bat",
+    "instruction": "On each: empty it, pull the magazine, battery or box, seat a new one.",
+    "watch": "The reload completes on the seat; the gun's other parts finish on their own with their sounds (Nailgun air, Microwave barrel, Parasite bolt); battery arcs still show."
+  },
+  {
+    "weapon": "Tanks and pods",
+    "scenario": "CaulkBurn, Flamethrower, Microwave Gun, Arc Generator, Seeker Six, Locust, Thermite Bore",
+    "instruction": "Empty each, pull the tank, battery or rocket pod, seat a full one.",
+    "watch": "Prop matches the part on the gun; doors, handles and spinners still move and sound; no floating spare."
+  },
+  {
+    "weapon": "RPG-7 and Medic Missile",
+    "scenario": "Rocket",
+    "instruction": "Fire, then push a new rocket into the muzzle.",
+    "watch": "Contact sound as the rocket's nose enters the tube, seat sound when it locks; no eject sound."
+  },
+  {
+    "weapon": "Winterbite and Scorcher",
+    "scenario": "Break actions",
+    "instruction": "Winterbite: break open, swap the cylinder, close. Scorcher: empty it, open it (it turns about the bore), load a flare, flick it shut.",
+    "watch": "Same feel as the Flare Gun and HX25; the Scorcher's spent casing does not stay drawn in the open breech."
+  },
+  {
+    "weapon": "Cranial Popper and Hemogoblin",
+    "scenario": "Swing-out cylinder",
+    "instruction": "Empty it, swing the housing out, push the speedloader in, swing it shut.",
+    "watch": "The lock and slide frame retract with the housing; the loader carries seven darts and falls away empty; steam, open, pop, cartridge and close sounds."
+  },
+  {
+    "weapon": "Freeze Thrower, Healthrower, Ballistic Bouncer, Mine Reconstructor",
+    "scenario": "Seated mid-motion",
+    "instruction": "Empty each, pull the cartridge or canister, push a new one in until it takes.",
+    "watch": "It takes at the open chamber or partway in, then the gun closes or slides it home by itself; the Bouncer and Reconstructor canisters show full liquid after the reload."
+  },
+  {
+    "weapon": "Pulverizer, Doshinegun, Frost Fang",
+    "scenario": "Odd loads",
+    "instruction": "Pulverizer: empty it, swap the shell clip. Doshinegun: empty it, push a wad of dosh into the box. Frost Fang: load shells one at a time.",
+    "watch": "The Pulverizer clip carries its four shells (no doubled shells on the gun); no dosh wad floats beside the Doshinegun and none drops at the start; the Frost Fang shell seats with its insert sound."
+  },
+  {
+    "weapon": "Railgun and Incision",
+    "scenario": "Stock reload",
+    "instruction": "Fire and let it reload.",
+    "watch": "No battery pair floats behind or below the gun; the stock reload still runs."
+  },
+  {
+    "weapon": "Interruptions",
+    "scenario": "Tracking and menus",
+    "instruction": "Open the menu or cover a controller mid-rack and mid-carry; throw a grenade after seating.",
+    "watch": "On recovery nothing chambers or seats by itself; the hand returns cleanly; no stuck reload."
+  },
+  {
+    "weapon": "Multiplayer",
+    "scenario": "Join",
+    "instruction": "On a dedicated server: fast empty and top-up reloads, then fire immediately. Say explicitly if not tested.",
+    "watch": "HUD, magazine and reserve match after each reload; the first shot after a fast reload registers."
+  },
+  {
+    "weapon": "General",
+    "scenario": "Freeform",
+    "instruction": "Describe anything else you tested, and what you would change. Say explicitly what was not tested.",
+    "watch": "Other weapons, comfort, menus and requested changes."
+  }
+]

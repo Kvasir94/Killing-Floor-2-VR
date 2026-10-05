@@ -1,0 +1,25 @@
+KF2-VR candidate third-party notices
+
+CPython 3.14.3 Windows embeddable runtime: Python Software Foundation and
+contributors. Complete bundled license: runtime/LICENSE.txt. The Python archive
+is pinned to the publisher's SHA-256 before extraction; see dependency-pins.json.
+
+Khronos OpenXR loader: Khronos Group and contributors, Apache License 2.0.
+See OpenXR-LICENSE.txt and OpenXR-LICENSES for bundled notices/licenses.
+
+MinHook: Tsuda Kageyu and contributors; BSD-style license and included hde
+decoder notices. See MinHook-LICENSE.txt.
+
+Microsoft runtime components included in CPython's official distribution retain
+their upstream terms. The game installation supplies other game/runtime content.
+SteamCMD is downloaded separately from Valve; Steam handles subsequent signed
+updates and depot validation. It is not included in this ZIP.
+
+Killing Floor 2 and its assets belong to their respective rights holders.
+This private alpha includes the existing locally derived hand asset. Optional Workshop
+content is downloaded separately and is never copied from the development cache
+into the distribution. No ownership rights are asserted over game/Workshop assets.
+
+Embedded bell sounds: BigSoundBank "Boxing bell #1" (sound #1926), CC0.
+https://bigsoundbank.com/boxing-bell-1-s1926.html
+The embedded resources use trimmed/faded strikes normalized to -14 dBFS peak.

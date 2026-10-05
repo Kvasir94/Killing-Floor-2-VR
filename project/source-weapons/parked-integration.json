@@ -1,0 +1,12 @@
+{
+  "schema": "kf2vr-source-integration-v2",
+  "required_interfaces": ["VRTrackedWeapon", "VRTrackedPresentation"],
+  "weapon_profiles": [
+    "(WeaponClassName=VRWeap_SuperGravityGun,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=false)",
+    "(WeaponClassName=VRWeap_StickybombLauncher,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=false)"
+  ],
+  "starter_definitions": [
+    "class'VRWeapDef_SuperGravityGun'",
+    "class'VRWeapDef_StickybombLauncher'"
+  ]
+}

@@ -1,0 +1,68 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <string>
+#include "kf2vr/adapter/VerifiedLayout.h"
+#include "kf2vr/xr/XrBackend.h"
+
+namespace kf2vr::adapter {
+
+struct EyeRect {
+    std::uint32_t x{}, y{}, width{}, height{};
+};
+struct StereoAtlas { EyeRect left, right; };
+struct EyeMatrices {
+    pinned::NativeMatrix4 view{}, projection{};
+};
+// The tracked reference shared with gameplay aim, and the orientation already
+// included by the stock camera. cameraRotation uses native camera axes
+// (+X right,+Y up,+Z forward), not XR or Unreal actor axes.
+struct AppliedHeadAim {
+    HeadInTracking reference;
+    Quat cameraRotation;
+    Quat bodyRotation;
+};
+
+// Optional local inspection offset, in Unreal WORLD axes/units. This never
+// changes the gameplay camera, tracked reference, controller poses or FOV.
+inline constexpr float kMaxWorldViewOffset = 400.0f;
+bool IsValidWorldViewOffset(const Vec3& offset) noexcept;
+
+// Pure calculation, exposed for offline validation. Matrices use UE3's
+// row-vector camera convention (+X right, +Y up, +Z forward). Native depth
+// projection coefficients remain unchanged. World scale is provisional.
+bool BuildStereoMatrices(const pinned::NativeMatrix4& baseView,
+                         const pinned::NativeMatrix4& baseProjection,
+                         const HeadInTracking& initialHead,
+                         const xr::FrameState& frame,
+                         std::array<EyeMatrices, 2>& out, std::string& error,
+                         const Quat& appliedCameraRotation = {},
+                         const Vec3& worldViewOffset = {});
+
+// One instance, used/reset only on the verified game thread. The adapter must
+// already have verified the pinned executable hash and normal family identity.
+class StereoViews {
+public:
+    // false: no submission occurred; caller can run the original stock path.
+    // true: originalSubmit was called exactly once, with two copied eye views.
+    // Engine exceptions propagate; RAII restores the family during unwinding.
+    bool SubmitStereoPair(void* family, const xr::FrameState& frame,
+                          pinned::SubmitSceneFamilyFn originalSubmit,
+                          void* canvas, std::uintptr_t baseAddress,
+                          std::string& error, const AppliedHeadAim* appliedAim = nullptr,
+                          const Vec3& worldViewOffset = {});
+    void ResetReference() noexcept;
+    void SetSingleViewDiagnostic(bool enabled, unsigned eye=0) noexcept { singleViewDiagnostic_=enabled; singleEye_=eye?1:0; }
+    bool ReferenceReady() const noexcept { return referenceReady_; }
+    const StereoAtlas& LastAtlas() const noexcept { return lastAtlas_; }
+
+private:
+    HeadInTracking initialHead_{};
+    bool referenceReady_ = false;
+    StereoAtlas lastAtlas_{};
+    bool singleViewDiagnostic_=false;
+    unsigned singleEye_=0;
+};
+
+} // namespace kf2vr::adapter
