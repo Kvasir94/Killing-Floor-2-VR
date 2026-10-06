@@ -88,7 +88,7 @@ unsynced samples, and samples with invalid head pose take the shared unavailable
 input path. Subsequent samples in the new epoch can resume, with production
 release-to-rearm semantics still in force.
 
-## Verification boundary
+## Parser and gameplay boundary
 
 `native_replay_input` checks stream parsing, per-hand press/hold/release/double-tap
 values, timestamps, availability, stale samples, epochs, owner replacement and
@@ -98,74 +98,11 @@ normal script/weapon path. A synthetic input run does not establish headset or
 live-controller acceptance. Input timestamps are deterministic; Unreal game
 DeltaTime and weapon timers remain engine-owned.
 
-## Supported developer launch
+## Developer tools
 
-Keep the selected production candidate immutable. `SourceRoot` is its checkout;
-the integrated runner can use the same checkout and matching native build.
-An independently owned replay checkout may also target that candidate. Build
-the native adapter with the repository build script, then compile the observer
-against the selected candidate's production script output:
-
-```powershell
-$SourceRoot = (Get-Location).Path
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-multiplayer-native.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/replay/build-observer.ps1 `
-  -ProductionScriptRoot "$SourceRoot/build/multiplayer/script"
-powershell -NoProfile -ExecutionPolicy Bypass -File "$SourceRoot/tools/test-bootstrap.ps1" `
-  -UsabilityCapture -PrepareOnly
-```
-
-Use the printed fresh `run.json` path as `$Record`. Preparation verifies the
-candidate source/package guard. Steam must be running and authenticated.
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/replay/run.ps1 `
-  -SourceRoot $SourceRoot -Record $Record `
-  -InputFile tools/replay/stock-launchers.input -Observer -TimeoutSeconds 180
-```
-
-The runner disables legacy script drivers in the copied game config before
-launching, preserves encoding and line endings, verifies candidate files and
-native/observer build hashes, and never changes the selected-release pointer.
-Each attempt needs a new prepared directory. It writes `input-replay-run.json`
-there and retains the native deployment journal for crash recovery. Do not
-retry a run with an unresolved deployment journal or a live owned child.
-
-Before native deployment, the runner requires one override for each standard
-INI inside that prepared directory. Keep the original BOM-free ANSI bytes or
-BOM-marked UTF-16, including byte order and line endings. Do not copy configs
-through `utf-8-sig` or a text writer that adds a UTF-8 BOM or translates CRLF.
-The runner preserves those bytes when disabling the legacy script input flags.
-
-UE3 misreads a UTF-8 BOM at the first section of an INI. For
-`KFSystemSettings.ini`, this can discard `[SystemSettings]`, initialize graphics
-values to zero and reduce the world viewport to 1x1 while chat remains visible.
-The preflight rejects a UTF-8 BOM in every standard override and requires the
-complete `[SystemSettings]` section with finite, positive `ResX`, `ResY`,
-`ScreenPercentage` and `MaxDrawDistanceScale`. Prepare again from intact configs
-when it fails; do not force renderer flags or camera fading to manufacture a
-visible world. A successful PNG write or normal process exit alone does not
-establish visible-world capture. Inspect the actual saved pixels separately
-from input-event observations.
-
-`tools/replay/run.py` and its config tests are development tooling absent from
-the player package. Updating them does not require rebuilding or reselecting
-an unchanged playable release; a clean source export carries their new identity.
-
-The optional observer declares its setup: HX25 in the left hand, M79 in the
-right, toggle carry, stock fallback reload. It calls the production inventory
-API to establish those initial holdings, then only observes input/weapon state.
-It requires two fires and reloads per weapon, loaded chambers and matching
-reserve debit. It does **not** prove physical break-action insertion/closure,
-rendered-world quality or headset behavior. Those require separate authored
-controller trajectories and observations through the same ingress.
-
-For a retained game log, the same acceptance parser can be run directly:
-
-```powershell
-python tools/replay/analyze.py '<prepared run>/game.log'
-```
-
-With `-Observer`, the runner also requires this parser's evidence of unavailable
-input, held-trigger reconnect suppression, released-trigger rearming, and a
-subsequent shot in each hand. A normal process exit alone is not acceptance.
+The normal player launcher does not enable this input source. The optional
+`tools/replay/` helpers prepare an isolated session and parse its output; use
+them only when deliberately investigating a supported input/gameplay issue.
+Do not combine replay flags with a normal headset or network session. Complete
+cleanup before changing releases, and use a fresh prepared directory for each run.
+Headset feel and real online behavior still require human testing.

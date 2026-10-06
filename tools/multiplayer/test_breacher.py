@@ -10,6 +10,7 @@ import breacher
 import friends
 import join_code
 import launch_menu
+import launch_state
 import workshop_loadout
 import package
 from session import config_hashes, read_ini
@@ -60,6 +61,28 @@ class BreacherTests(unittest.TestCase):
             join.profile_root = args.profile_root
             workshop_loadout.load_preferences(join)
             self.assertFalse(join.breacher, "host preference must not silently enable unknown joins")
+
+    def test_saved_host_on_can_be_disabled_without_optional_package(self):
+        from unittest.mock import patch
+        profile = self.root / 'profile'
+        profile.mkdir()
+        (profile / 'launcher.json').write_text(json.dumps({'breacher': True}))
+        with patch.object(workshop_loadout, 'profile_root', return_value=profile):
+            self.assertTrue(launch_state.describe(None, None, self.root)['breacher'])
+        args = friends.parse_options(['--host', '--desktop', '--no-breacher', '--mods', 'none'])
+        args.profile_root = profile
+        workshop_loadout.load_preferences(args)
+        self.assertFalse(args.breacher)
+        breacher.prepare(args, self.root / 'missing-package', {})
+        self.assertIsNone(breacher.descriptor(args))
+        self.assertNotIn('Breacher', launch_menu.host_url(args))
+        workshop_loadout.save_preferences(args)
+        restored = friends.parse_options(['--host'])
+        restored.profile_root = profile
+        workshop_loadout.load_preferences(restored)
+        self.assertFalse(restored.breacher)
+        with patch.object(workshop_loadout, 'profile_root', return_value=profile):
+            self.assertFalse(launch_state.describe(None, None, self.root)['breacher'])
 
     def test_compiled_core_package_and_hash_are_required(self):
         with self.assertRaisesRegex(RuntimeError, "experimental core"):

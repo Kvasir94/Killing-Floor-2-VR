@@ -11,6 +11,7 @@
 #include "ScriptField.h"
 #include "WeaponIsolation.h"
 #include "PerkContext.h"
+#include "PromoEventLog.h"
 
 // Deliberately separate from the rendering/XR adapter. No local player, camera,
 // shared pawn effects scope, or client executable address is used here.
@@ -21,6 +22,7 @@ ProcessInternal originalProcess=nullptr;
 std::unique_ptr<GameScript> script;
 std::atomic<DWORD> authorityThread{0};
 FILE* logFile=nullptr;
+kf2vr::adapter::promo::Log promoLog;
 constexpr auto serverHash="2ea16bb5e37d2330a30f82f6d4cf50919c008ac8c96a8917b3b9ba010dfbce71";
 
 bool HashFile(const wchar_t* path,std::string& result) {
@@ -86,6 +88,11 @@ void HookProcess(void* object,void* stack,void* result) {
         }
     }
     if(authorityThread.load()!=GetCurrentThreadId()) { originalProcess(object,stack,result);return; }
+    kf2vr::adapter::promo::Log::PhysicalScope promoPhysical(promoLog,*script,object,name);
+    if (promoLog.Enabled() && name==script->Intern(L"InitGame") && script->IsClass(object,L"KFGameInfo"))
+        promoLog.BeginTravel();
+    kf2vr::adapter::promo::Log::DamageScope promoDamage(promoLog,*script,
+        name==script->Intern(L"TakeDamage")?object:nullptr,function);
     const bool removal=name==script->Intern(L"RemoveFromInventory");
     bool pending=false;
     for(const auto* entry:{L"GetPendingFireLength",L"PendingFire",L"IsPendingFire",L"SetPendingFire",L"ClearPendingFire",L"ClearAllPendingFire"})
@@ -118,6 +125,8 @@ void HookProcess(void* object,void* stack,void* result) {
             perkScope.Enter(LedgerForPawn(call.pawn),call);
     }
     originalProcess(object,stack,result);
+    if (name==script->Intern(L"ScoreDamage"))
+        promoLog.Score(*script,object,function,GameScript::At<void*>(stack,0x2c));
 }
 } // namespace
 
@@ -138,6 +147,7 @@ DWORD WINAPI AdapterMain(void*) {
     // Ledger callbacks are plain UObject ProcessEvent. On this server its
     // virtual slot is 0x210; client 0x218 is ProcessDelegate here and is unsafe.
     script=std::make_unique<GameScript>(base,GameScript::ReflectionProfile{0xc3b70,0xc8f40,0x210,0x7b200});
+    promoLog.Start();
     if(MH_Initialize()!=MH_OK || MH_CreateHook(reinterpret_cast<void*>(base+0x7b590),
        reinterpret_cast<void*>(&HookProcess),reinterpret_cast<void**>(&originalProcess))!=MH_OK ||
        MH_EnableHook(reinterpret_cast<void*>(base+0x7b590))!=MH_OK) {

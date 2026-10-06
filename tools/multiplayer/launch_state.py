@@ -71,6 +71,7 @@ def describe(game, server, package_root):
         "inventory_focus": bool(saved.inventory_focus),
         "multiplayer_grabs": bool(saved.multiplayer_grabs),
         "portal_gun": bool(saved.portal_gun),
+        "breacher": bool(saved.breacher),
         "threaded_render": bool(saved.threaded_render),
         "mods": list(saved.mods or []),
         "vr_mods": list(vr_mods or []),

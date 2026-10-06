@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <unknwn.h>
+#include <cstring>
 
 // Every export resolves only the system copy. No engine work happens under
 // loader lock; a worker may run only after DLL initialization has returned.
@@ -17,7 +18,38 @@ BOOL CALLBACK LoadSystem(PINIT_ONCE,void*,void**) {
 }
 template<class Function> Function Resolve(const char* name) {
     if (!InitOnceExecuteOnce(&once,LoadSystem,nullptr,nullptr)) return nullptr;
-    return reinterpret_cast<Function>(GetProcAddress(systemInput,name));
+    // An overlay can intercept GetProcAddress("DirectInput8Create") and return
+    // its wrapper even for the system HMODULE. When its saved original is this
+    // proxy, resolving through that API again recurses overlay -> proxy -> overlay.
+    // Forward to the actual export of the explicitly loaded System32 image.
+    // Do not patch code, remove hooks, or change the overlay/authentication DLLs.
+    const auto* base=reinterpret_cast<const unsigned char*>(systemInput);
+    const auto* dos=reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if(dos->e_magic!=IMAGE_DOS_SIGNATURE || dos->e_lfanew<=0 || dos->e_lfanew>4096)return nullptr;
+    const auto* nt=reinterpret_cast<const IMAGE_NT_HEADERS64*>(base+dos->e_lfanew);
+    if(nt->Signature!=IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC)return nullptr;
+    const auto size=nt->OptionalHeader.SizeOfImage;
+    const auto inside=[size](DWORD rva,std::size_t count){return rva<size && count<=size-rva;};
+    const auto directory=nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if(!directory.VirtualAddress || !inside(directory.VirtualAddress,directory.Size) || directory.Size<sizeof(IMAGE_EXPORT_DIRECTORY))return nullptr;
+    const auto* exports=reinterpret_cast<const IMAGE_EXPORT_DIRECTORY*>(base+directory.VirtualAddress);
+    if(!inside(exports->AddressOfNames,std::size_t(exports->NumberOfNames)*sizeof(DWORD)) ||
+       !inside(exports->AddressOfNameOrdinals,std::size_t(exports->NumberOfNames)*sizeof(WORD)) ||
+       !inside(exports->AddressOfFunctions,std::size_t(exports->NumberOfFunctions)*sizeof(DWORD)))return nullptr;
+    const auto* names=reinterpret_cast<const DWORD*>(base+exports->AddressOfNames);
+    const auto* ordinals=reinterpret_cast<const WORD*>(base+exports->AddressOfNameOrdinals);
+    const auto* functions=reinterpret_cast<const DWORD*>(base+exports->AddressOfFunctions);
+    const auto length=std::strlen(name)+1;
+    for(DWORD i=0;i<exports->NumberOfNames;++i) {
+        if(!inside(names[i],length) || std::memcmp(base+names[i],name,length)!=0)continue;
+        if(ordinals[i]>=exports->NumberOfFunctions)return nullptr;
+        const auto rva=functions[ordinals[i]];
+        if(!rva || !inside(rva,1))return nullptr;
+        // A forwarder string is not callable. Do not reenter an intercepted API.
+        if(rva>=directory.VirtualAddress && rva-directory.VirtualAddress<directory.Size)return nullptr;
+        return reinterpret_cast<Function>(const_cast<unsigned char*>(base+rva));
+    }
+    return nullptr;
 }
 }
 extern "C" HRESULT WINAPI ProxyDirectInput8Create(HINSTANCE instance,DWORD version,REFIID iid,void** out,LPUNKNOWN outer) {

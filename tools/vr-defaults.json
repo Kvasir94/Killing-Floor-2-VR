@@ -5,6 +5,7 @@
   "FirearmAimPitchDegrees": "0.0",
   "bToggleGrip": "True",
   "bHoldSupportGrip": "True",
+  "bDisableSupportHandAim": "False",
   "bBodySlotsEnabled": "False",
   "ActiveControllerFitProfile": "Neutral",
   "bZedGrabEnabled": "True",

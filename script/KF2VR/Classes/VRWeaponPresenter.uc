@@ -328,6 +328,7 @@ simulated function SyncTracking()
     NativeDepthSupported = RootBridge.NativeDepthSupported;
     NativeKeepWorldDepth = RootBridge.NativeKeepWorldDepth;
     bSightLineConvergence = RootBridge.bSightLineConvergence;
+    bDisableSupportHandAim = RootBridge.bDisableSupportHandAim;
     bWeaponLasers = RootBridge.bWeaponLasers;
     NativeControlsEnabled = RootBridge.NativeControlsEnabled;
     NativeConnection = RootBridge.NativeConnection;

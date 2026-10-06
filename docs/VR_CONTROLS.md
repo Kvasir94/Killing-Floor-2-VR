@@ -9,9 +9,11 @@ Start the extracted ZIP with **Start KF2-VR**. Pick **VR headset** or
 **Desktop - no headset**, then **Play solo**, **Host a game** or **Join a friend**.
 Solo/Host have a **Start** button after their options; Join uses **Paste code**
 then **Join**. In the lobby choose a perk and Ready. Keep the launcher open for
-cleanup when the game exits. Start ordinary Steam KF2 once before first setup,
+cleanup when the game exits. Start ordinary KF2 from your store once before first setup,
 and activate your headset software's OpenXR runtime for VR. The package must
-match the installed Steam KF2 executable; Epic is unsupported.
+match the exact installed Steam or Epic KF2 executable. Epic is experimental
+Solo VR only, using session Launch Options pasted into the official Epic launcher.
+Host/Join/Desktop and recording are unavailable for Epic; see READ ME FIRST.
 
 Button names below refer to physical controllers, not keyboard keys. Touch has
 X/Y on the left and A/B on the right: X/A are the lower action buttons, Y/B the
@@ -27,7 +29,7 @@ For a fresh profile: left stick moves relative to the head, right stick turns,
 30-degree snap turn is ON, click-to-sprint is used, and down-stick crouch is ON.
 The weapon hand defaults right; menu pointer defaults right. Performance / 75%
 render scale is the launcher starting point. Button reloads, latched transfer/
-brace grip and held support grip are defaults. Physical reloads/manual pump,
+brace grip, held support grip and support-hand gun aiming are defaults. Physical reloads/manual pump,
 body holsters, threaded rendering, Portal/Breacher content and host inventory
 slowdown start OFF. Solo Zed grabs start ON; experimental multiplayer grabs
 start OFF and follow the host. Saved preferences override starting defaults.
@@ -92,7 +94,8 @@ requires an in-match score widget. Walk into the trader pod to use its stock
 menu in VR. The root also has perks/skills, game settings, local-match/server-
 leave controls, practice/tools and Quit.
 
-Use **VR SETTINGS > CALIBRATION** for global weapon fit/profile reset, standing/
+Use **CALIBRATION** directly from the root VR menu, or **VR SETTINGS > CALIBRATION**,
+for global weapon fit/profile reset, standing/
 seated baseline and chest-zone capture/reset. **MENU AND INTERFACE** sets pointer
 hand, panel placement and recenter. **HUD AND READOUTS** adjusts ammo/top-HUD
 placement, watch/readouts, damage popups, laser pointer and reload hints. **GRAPHICS**
@@ -181,7 +184,7 @@ Keep the launcher until cleanup completes. After interruption use **Fix a stuck
 session** before deleting that folder, changing releases or playing ordinary KF2.
 Extract updates into fresh folders; finish cleanup before reopening an older ZIP.
 Never combine release DLLs. **Save logs for a bug report** creates a ZIP beside
-Start KF2-VR; nothing uploads automatically. This candidate's collector anonymizes
+Start KF2-VR; nothing uploads automatically. The launcher's collector anonymizes
 recognized paths, known usernames/player names, account IDs, network addresses
 and emails in report copies; passwords, recognized tokens and join codes are
 removed. Original logs stay unchanged; configs and crash dumps are excluded.
@@ -211,7 +214,7 @@ Existing fit values survive. The Advanced Hand / Holster Calibration panel still
 owns detailed aim-fit adjustment. The portable ZIP contains a standalone quickstart.
 
 
-The selected multiplayer candidate lets VR players hold two different owned
+The multiplayer mod lets VR players hold two different owned
 supported weapons, with independent triggers and A/X reloads. An empty hand can
 support the other gun. Desktop players retain stock weapon handling. Supported
 stock pairs use shared solo/network conversion; live acceptance remains pending.
@@ -319,9 +322,7 @@ haptics. A trigger held on entry cannot equip or fire. Trigger with nothing
 highlighted and Y/B cancel; page/settings navigation keeps the selector open.
 The owning stick is captured and does nothing while its wheel is open, and it
 must return to neutral before resuming movement or turning. (Stick-tilt
-selection, added in `f782843`, was removed after the 2026-09-26 headset
-playtest: two simultaneous methods made the wheel unpredictable.) Wheel labels
-are drawn in a single pass; see HUD for the text-alpha path.
+selection is not supported.)
 
 Single-tap Y/B waits 240 ms to distinguish a double tap without performing an
 intermediate swap. A second held press opens the wheel; it does not first empty
@@ -330,6 +331,13 @@ remain a separate consumed gesture. Settings still use their calibration editor;
 inventory selection never shows both hands in columns.
 
 ## Weapons
+
+For a physical gun stock, select **VR SETTINGS > INTERACTION > SUPPORT HAND
+AIMS GUN: OFF**. The primary controller owns firearm aim and placement while
+the support grip retains its usual braced spread/recoil benefits. This saves
+across Solo/multiplayer (`bDisableSupportHandAim=True`). ON remains the default.
+The support hand must still reach the authored contact. This option does not
+calibrate stock mount spacing or change two-hand melee. Headset feedback is pending.
 
 Pistols and revolvers can be braced with an empty hand: bring it to the firing
 hand at the grip and squeeze grip. The support hand uses the weapon's authored
@@ -625,12 +633,8 @@ becomes adjustable while interactive reloads are enabled. Turning hints off
 keeps the physical pouch, ammunition, hand motion, assistance and haptics.
 Coverage extends beyond the initial pistol/shotgun/AK-12/SA80 set through the
 current reload catalog. Supported mechanisms vary by exact weapon; unsupported
-items retain their stock button path. Use physical reloads
-for the per-family catalog and current open work for acceptance. The normal-launcher
-1858/9mm smoke is prepared only.
-The old hidden unlock is no longer required. This build targets the magazine
-guns for headset testing; both settings default OFF and await headset acceptance.
-physical reloads describes optional per-family mechanisms.
+items retain their stock button path. Per-family mechanisms are described below. No hidden unlock is required;
+Button reloads remain available when a physical mechanism blocks play.
 For magazine guns and the MB500, missing assets or unusable stock reload motion keep the
 ordinary reload before any magazine is hidden or timer is paused.
 
@@ -713,8 +717,7 @@ Full guns and guns without reserve can also be opened and closed for inspection.
 Opening a loaded gun for inspection does not spend or grant ammunition.
 
 The stock reload keeps its perk-scaled speed for every part it plays; faster
-reload skills also widen the magnet. Design and costs:
-physical reloads.
+reload skills also widen insertion assistance.
 
 ## Teleport locomotion
 
@@ -773,8 +776,7 @@ BlinkScale=1.0
 ```
 
 `BlinkScale=0` removes the fade entirely for players who prefer an instant cut.
-Design, numbers and open acceptance are in
-teleport locomotion.
+
 
 ## Optional body holsters
 
@@ -790,8 +792,7 @@ every frame from the head pose with no deadzone or catch-up, so a slot is
 always where it was the last time you reached for it. It hangs from a neck
 point 15 UU below the eyes along the head's own up axis, so looking down does
 not slide anchors forward, and its facing holds when looking straight down.
-The design follows Arizona Sunshine 2; see
-the rig reference.
+The placement follows Arizona Sunshine 2.
 
 Slots capture within 20 UU. An empty hand only answers to a filled slot, and a
 stow squeeze during a fast swing (over 200 UU/s) is refused. Where anchors
@@ -802,10 +803,7 @@ point are long guns `(0, +/-20, -2)` and sidearms `(9, +/-38, -55)`. A legacy
 `BodySlotOffsets` (head minus 42 UU) keeps its old level-head placement until
 HOLSTER FIT replaces it.
 
-Ammunition pouches, physical magazine handling, a latched continuous-tool
-accessibility preset and finished holster art remain
-future work. The body-slot prototype neither creates ammunition nor changes
-stock reload timings or inventory weight.
+Holsters do not create ammunition or change stock reload timings or inventory weight.
 
 ## VR Calibration & Practice Mode (In-VR)
 

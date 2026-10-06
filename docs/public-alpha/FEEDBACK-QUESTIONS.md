@@ -1,6 +1,6 @@
 # Alpha feedback: what we most want to hear
 
-Post bug reports in Discord. Say which headset,
+Post public bug reports in GitHub Issues. Say which store, headset,
 GPU and play mode (Solo / Host / Join, VR / Desktop) you used, and attach the
 "Save logs for a bug report" ZIP when something broke. Review it before sharing.
 Short, specific answers beat long ones:

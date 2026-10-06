@@ -158,7 +158,7 @@ class Recorder {
 public:
     std::vector<Sample> samples;
     bool Recording()const{return recording_;}
-    void StartRecording(double now){samples.clear();samples.reserve(MaxFrames);down_=active_=0;started_=now;recording_=true;}
+    void StartRecording(double now,std::size_t reserveFrames=MaxFrames){samples.clear();samples.reserve(std::min(reserveFrames,MaxFrames));down_=active_=0;started_=now;recording_=true;}
     void Stop(){recording_=false;}
     bool Append(Sample s,double now){
         if(!recording_)return false; // disabled: no allocation/serialization

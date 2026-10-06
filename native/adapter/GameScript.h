@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include "include/kf2vr/adapter/GameBuild.h"
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
@@ -97,7 +98,7 @@ public:
         std::uintptr_t processEventTarget=0;
     };
     explicit GameScript(std::uintptr_t base=0) : base_(base) {}
-    GameScript(std::uintptr_t base, ReflectionProfile profile) : base_(base), profile_(profile) {}
+    GameScript(std::uintptr_t base, ReflectionProfile profile) : base_(base), explicitProfile_(true), profile_(profile) {}
     void Initialise(std::uintptr_t base) { base_=base; }
     static bool Accessible(const void* p,std::size_t size) {
         auto cursor=reinterpret_cast<std::uintptr_t>(p);
@@ -130,7 +131,7 @@ public:
         if (found!=names_.end()) return found->second;
         Name value=0;
         using ConstructName=Name*(*)(Name*,const wchar_t*,std::int32_t);
-        reinterpret_cast<ConstructName>(base_+profile_.constructName)(&value,text,1);
+        reinterpret_cast<ConstructName>(base_+(explicitProfile_ ? profile_.constructName : build::Rva(profile_.constructName)))(&value,text,1);
         names_.emplace(text,value);
         return value;
     }
@@ -185,7 +186,7 @@ public:
     void* FindFunction(void* object,const wchar_t* function) {
         using Find=void*(*)(void*,Name,std::int32_t);
         if (!Accessible(object,0x58)) return nullptr;
-        return reinterpret_cast<Find>(base_+profile_.findFunction)(object,Intern(function),0);
+        return reinterpret_cast<Find>(base_+(explicitProfile_ ? profile_.findFunction : build::Rva(profile_.findFunction)))(object,Intern(function),0);
     }
     bool Invoke(void* object,void* function,void* parameters) {
         if (!Accessible(object,0x58) || !Accessible(function,0xf8) ||
@@ -201,6 +202,7 @@ public:
     }
 private:
     std::uintptr_t base_{};
+    bool explicitProfile_=false;
     ReflectionProfile profile_{};
     std::unordered_map<std::wstring,Name,NameHash,NameEqual> names_;
     std::unordered_map<std::uintptr_t,std::unordered_map<Name,std::uint32_t>> offsets_;

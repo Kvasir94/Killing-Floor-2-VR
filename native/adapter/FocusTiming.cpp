@@ -1,3 +1,4 @@
+#include "include/kf2vr/adapter/GameBuild.h"
 #include "FocusTiming.h"
 #include "FrameTiming.h"
 #include <windows.h>
@@ -40,10 +41,10 @@ bool Match(std::uintptr_t at, const unsigned char* bytes, std::size_t size) {
 bool CreateHooks(std::uintptr_t base, Decide decide, Finish finish) noexcept {
     static constexpr unsigned char entry[] = {0x48,0x8b,0xc4,0xf3,0x0f,0x11,0x50,0x18,0x48,0x89,0x48,0x08};
     static constexpr unsigned char seam[] = {0xf3,0x41,0x0f,0x11,0x84,0x24,0xf0,0x05,0x00,0x00};
-    if (!base || !decide || !Match(base+WorldTickRva,entry,sizeof(entry)) ||
-        !Match(base+SimulationDeltaRva,seam,sizeof(seam))) return false;
-    auto* world = reinterpret_cast<void*>(base+WorldTickRva);
-    auto* simulation = reinterpret_cast<void*>(base+SimulationDeltaRva);
+    if (!base || !decide || !Match(base+build::Rva(WorldTickRva),entry,sizeof(entry)) ||
+        !Match(base+build::Rva(SimulationDeltaRva),seam,sizeof(seam))) return false;
+    auto* world = reinterpret_cast<void*>(base+build::Rva(WorldTickRva));
+    auto* simulation = reinterpret_cast<void*>(base+build::Rva(SimulationDeltaRva));
     if (MH_CreateHook(world,reinterpret_cast<void*>(&HookWorldTick),
                       reinterpret_cast<void**>(&originalTick)) != MH_OK) return false;
     if (MH_CreateHook(simulation,reinterpret_cast<void*>(&FocusSimulationDetour),

@@ -1,3 +1,4 @@
+#include "../adapter/include/kf2vr/adapter/GameBuild.h"
 #include "PortalCapture.h"
 #include <cstring>
 
@@ -40,7 +41,7 @@ bool PortalCapture::ValidateCode() const {
     };
     if (!base_) return false;
     for (const auto& entry:entries) {
-        auto* address=reinterpret_cast<const void*>(base_+entry.rva);
+        auto* address=reinterpret_cast<const void*>(base_+adapter::build::Rva(entry.rva));
         MEMORY_BASIC_INFORMATION region{};
         if (!Script::Accessible(address,sizeof(entry.bytes))
             ||!VirtualQuery(address,&region,sizeof(region))
@@ -62,7 +63,7 @@ bool PortalCapture::IsPortal(void* actor) {
 }
 void PortalCapture::Render(void* probe,void* renderer) {
     if (!originalRender) return;
-    if (!Script::Accessible(probe,ProbeBytes)||Script::At<std::uintptr_t>(probe,0)!=base_+ProbeVtableRva) {
+    if (!Script::Accessible(probe,ProbeBytes)||Script::At<std::uintptr_t>(probe,0)!=base_+adapter::build::Rva(ProbeVtableRva)) {
         originalRender(probe,renderer); return;
     }
     auto* entry=Script::At<void*>(probe,Owner);

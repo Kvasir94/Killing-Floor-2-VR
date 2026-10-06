@@ -1,13 +1,12 @@
 # Contributing and reporting issues
 
-Please read [AGENTS](AGENTS.md) for the repository workflow and allowed tests,
-[source setup](docs/BUILDING.md) for build limits, and [known issues](docs/public-alpha/RELEASE-NOTES-DRAFT.md)
-before changing or reporting a feature. Keep fixes focused. Include the reason,
-affected behavior and relevant compile/fast-gate result in a change description.
-Do not include game extracts, compiled packages, local logs or personal data in commits.
+Read [BUILDING](docs/BUILDING.md), [contributor workflow](AGENTS.md) and the
+[known issues](docs/public-alpha/RELEASE-NOTES-DRAFT.md) before changing a feature.
+Keep fixes focused and describe the affected behavior, reason and relevant checks.
+Do not commit game extracts, compiled packages, local logs or personal data.
 
-Invited players should use the report destination supplied with their invitation.
-If the project owner later enables public GitHub issues, the same template works:
+Use the feedback channel linked from the [release](https://github.com/Kvasir94/Killing-Floor-2-VR/releases).
+For a useful report, include:
 
 ```text
 Build ID or source commit:
@@ -20,13 +19,10 @@ Does it repeat?
 Sanitized log ZIP or screenshot, if useful:
 ```
 
-Use Save logs for a bug report and review the ZIP before attaching it. The
-collector replaces recognized identifiers and removes recognized credentials;
-free-form text may still need manual removal. Keep passwords/join codes, raw
-session folders, configs and crash dumps private. For reloads add normal/elite,
-empty/tactical and left/right hand. For online issues identify which player saw
-the problem and whether they were outside the host's network.
-
-Send suspected credential exposure privately to the project owner via the
-invitation contact rather than putting the secret in an issue. No specific
-public/private reporting service is announced by this source export.
+Use **Save logs for a bug report** and review the ZIP before sharing. Recognized
+identifiers and credentials are sanitized, but free-form text can need manual
+removal. Keep passwords, join codes, raw session folders, configs and crash dumps
+private. For reloads add normal/elite, empty/tactical and left/right hand. For
+online issues identify which player saw it and whether they were outside the
+host's network. Contact the maintainer privately for sensitive reports; never
+post an exposed credential in a public issue or channel.

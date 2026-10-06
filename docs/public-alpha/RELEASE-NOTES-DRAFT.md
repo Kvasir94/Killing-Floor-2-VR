@@ -1,18 +1,30 @@
-# Private invited alpha — release notes
+# Public alpha - release notes
 
-This is an early PCVR fan adaptation of Steam Killing Floor 2 for Windows.
-It is unaffiliated with Tripwire Interactive. The developer supplies invited
-testers with the download; this document does not
-announce a public playable release.
+This is an early PCVR fan adaptation of Killing Floor 2 for Windows.
+It is unaffiliated with Tripwire Interactive. Download complete playable ZIPs
+from [GitHub Releases](https://github.com/Kvasir94/Killing-Floor-2-VR/releases).
+Use this ZIP's build ID and store support, rather than an older release's notes.
 
 Read the launcher build ID and `app/release.json` for the exact version,
 source commit, protocol and supported game-executable hash. All players in a
-session need the same ZIP and their own Steam copy of KF2. Epic is unsupported.
+Steam multiplayer session need the same ZIP and their own Steam copy of KF2.
+Epic is an experimental Solo VR option in the same player launcher; Host, Join,
+Desktop and cross-store online play are unavailable. Its official launcher
+handles authentication through a manual session Launch Options paste.
 Extract each update into a fresh folder and keep the previous ZIP for rollback.
 
 ## Included behavior and defaults
 
-- Solo, Host and Join in VR or Desktop, with a portable launcher and recovery.
+- Shared Steam/Epic detection and selection, with exact executable gates and
+  temporary native deployment/recovery. Epic opens the stock frontend and
+  carries Solo VR options through isolated INIs; headset retesting is pending.
+- Localized VR Use/hold prompts and an optional physical-stock aim setting
+  retaining support grip/recoil while the primary controller aims. Both await
+  headset feedback. Support-hand aim remains enabled by default.
+- Steam retains motion recording/highlight logging. Epic disables both because
+  their configuration is not integrated into its native session handoff.
+
+- Steam Solo, Host and Join in VR or Desktop, with a portable launcher and recovery.
   First hosting downloads the separate free dedicated server (about 32 GB).
 - Tracked hands, independent weapons, motion melee, VR menus and wrist readouts.
   Start with Performance graphics at 75% render scale and Button reload mode.
@@ -43,6 +55,15 @@ Please include its build ID when reporting a recurrence.
   feedback after its carry and two-hand brace corrections. M79/HX25 deliberate
   reload requests now survive shot recovery; physical opening/insertion/closure
   still need headset feedback. Select Button mode if physical reloads block play.
+- **Lever rifles:** primary-hand release to drive the lever while the support
+  hand anchors the rifle is missing. Off-hand cycling exists, but its proposed
+  workaround has not been headset-confirmed and does not satisfy the requested
+  interaction. This remains a handling blocker.
+- **Epic:** experimental; overall headset acceptance remains incomplete.
+  Earlier testing confirmed partial controller/gameplay functionality including
+  Outpost, 1858/Deagle tracking and trader access. The current menu-first startup
+  and final ZIP have not had a headset retest. Host/Join/Desktop and cross-store
+  online play are unavailable.
 - **Earlier fit reports:** SCAR magazine rotation, HMTech-501 magazine offset,
   Blunderbuss reload difficulty and FAL glove appearance.
 - **Combat and networking:** crowded/grabbed retaliation, melee contacts,
@@ -50,8 +71,8 @@ Please include its build ID when reporting a recurrence.
   Multiplayer grabs initially remain OFF.
 - **Coverage:** other headsets, larger player counts, sustained performance and
   complete matches are not comprehensively verified. Prior developer headset,
-  hosted-server and install/recovery testing supports this private invitation;
-  this is not a new claim of complete acceptance on the final ZIP.
+  hosted-server and install/recovery testing does not establish runtime acceptance
+  of this final ZIP. Quest over Link is the primary developer setup.
 - **Progression:** custom multiplayer does not promise ordinary perk XP/ranked
   progression. Practice and God Mode make the session unranked.
 
@@ -70,8 +91,9 @@ account IDs, addresses and emails with aliases; passwords, recognized tokens
 and join codes are removed. Original files remain local; configs, deployment
 backups and crash dumps are excluded. Review the ZIP before sharing because
 free-form text can contain other personal details. Keep raw logs/configs/dumps,
-passwords and join codes private. Post bug reports in Discord.
-Contact the maintainer privately on Discord if needed.
+passwords and join codes private. Post public reports in
+[GitHub Issues](https://github.com/Kvasir94/Killing-Floor-2-VR/issues); keep
+sensitive details private.
 
 Include build ID, Solo/Host/Join and VR/Desktop, map/perk/character/weapon,
 headset/runtime/GPU, relevant options, last action, expected/actual result and
@@ -82,9 +104,9 @@ the host's network. The bundled FEEDBACK-QUESTIONS guide suggests useful feedbac
 Keep the launcher open until cleanup finishes. After interruption, quit KF2
 and use **Fix a stuck session** before deleting that folder or changing releases.
 Never mix DLLs between releases or bypass a game/package mismatch. After cleanup,
-ordinary KF2 can be started from Steam.
+ordinary KF2 can be started from your store.
 
-This private package includes locally derived assets. Redistribution review
-remains deferred for the private test; no public distribution clearance is
-claimed. The public source export excludes game/derived binary asset packages
-and is a separate deliverable. See the included third-party notices.
+Playable packages include KF2/Valve-derived assets whose rights remain with
+their respective owners. Redistribution clearance is unresolved; public availability
+does not establish clearance. Source archives exclude these binary packages and
+require local game/SDK inputs to build. See the included third-party notices.

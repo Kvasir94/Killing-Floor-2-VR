@@ -17,11 +17,12 @@ No legal clearance of game-derived assets is claimed by this source export.
 | Embedded bell WAVs | CC0 BigSoundBank Boxing bell #1, trimmed/faded/normalized; included with source notice |
 | Local logs, profiles, reports, history and chat/research archives | Excluded; source export contains no Git history |
 
-A private invited playable ZIP is a separate deliverable containing derived
-asset packages; its asset review remains deferred for that private test.
-This decision does not approve a public playable binary release. Owning a game
-is not by itself permission to redistribute its assets. Keep licence/notices
-with any independently cleared third-party inputs you add.
+Playable ZIPs are separate deliverables containing derived asset packages.
+Public availability does not establish redistribution clearance of game-derived
+content. Existing release bytes remain unchanged. The source build
+extracts required game inputs only from the builder's local installations and
+generates outputs locally. Owning a game is not by itself permission to
+redistribute its assets. Keep licence/notices with third-party inputs you add.
 
 Bell source: [BigSoundBank Boxing bell #1](https://bigsoundbank.com/boxing-bell-1-s1926.html),
 listed as CC0 by the publisher. `native/adapter/assets/NOTICE.txt` records the

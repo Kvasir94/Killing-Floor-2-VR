@@ -1,6 +1,7 @@
 # Killing Floor 2 VR
 
-A fan-made PCVR adaptation of the Steam Windows build of Killing Floor 2.
+A fan-made PCVR adaptation of Killing Floor 2 for Windows, with Steam support
+and experimental Epic Solo VR.
 Tracked hands, independently held weapons, physical melee, VR menus and wrist
 readouts run through a native OpenXR/D3D11 adapter and UnrealScript packages.
 KF2-VR is unaffiliated with Tripwire Interactive.
@@ -8,29 +9,34 @@ KF2-VR is unaffiliated with Tripwire Interactive.
 ## Play the mod
 
 Public playable alpha downloads are on [GitHub Releases](https://github.com/Kvasir94/Killing-Floor-2-VR/releases).
-For [the first public alpha](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/tag/v0.1.0-alpha.20261005),
-choose **KF2VR-Multiplayer-20261005-162042.zip** to play Solo, Host or Join.
-The **KF2VR-Source-20261005-190136-afd65184d77c.zip** and GitHub's automatic
-**Source code** archives are for development; they are not playable packages.
-Use the release notes for checksums, game compatibility and known limitations.
-The first playable ZIP retains its original private-alpha labels and metadata;
-the release makes those same bytes publicly available. Its source snapshot is
-newer than the playable build. Existing release ZIPs and tags remain unchanged;
-future playable updates receive a new version and release notes.
+Choose the complete **KF2VR-Multiplayer-*.zip** attached to the release you
+want to play. The separate **KF2VR-Source-*.zip** and GitHub's automatic
+**Source code** archives are for development. See that release's notes and
+`app/release.json` for checksums, supported stores/builds and limitations.
+The older October 5 alpha is Steam-only; Steam/Epic support requires a newer
+release explicitly listing both stores. Existing release ZIPs and tags stay intact.
 
 Extract the whole playable ZIP into a fresh folder, leave `app` intact,
 connect your headset and activate its OpenXR runtime, then open
-**Start KF2-VR**. Start with **Play solo**; Host and Join also offer VR or Desktop.
+**Start KF2-VR**. Auto selects a sole installation or the last valid folder
+used in that extracted release. With both stores installed, choose the store
+you want. Steam offers Solo/Host/Join in VR or Desktop; Epic offers Solo VR only.
 Keep the launcher open until KF2 exits and cleanup finishes.
 
-You need your own Steam KF2 on Windows 10/11; Epic is unsupported. Start ordinary
-KF2 once before first setup. Each ZIP targets one exact game executable and
-refuses mismatches after updates. Python and launcher runtimes are bundled;
-Steam supplies the game's normal prerequisites. Solo/Join need no dedicated
+You need your own Steam or Epic KF2 on Windows 10/11. Start ordinary
+KF2 once before first setup. Exact game-executable hashes are checked before
+deployment; updates require a compatible release. Python and launcher runtimes
+are bundled; the store supplies the game's normal prerequisites. Solo/Join need no dedicated
 server; first hosting downloads the free server (about 32 GB). Internet hosts
 forward UDP 7777/27015. Share join codes privately because they include passwords.
 
-Solo has had the most developer headset testing, using Quest over Link.
+Epic requires copying generated session Launch Options into the official Epic
+launcher, then launching there. Remove that line and restore your previous options
+after quitting. Host/Join/Desktop, cross-store online play and recording are disabled.
+The current Epic menu-first route has not passed overall headset acceptance;
+earlier tests confirmed only partial controller/gameplay functionality.
+
+Steam Solo has had the most developer headset testing, using Quest over Link.
 The developer has also tested remote joining of a hosted server and
 install/recovery. This is an early alpha; broader hardware, complete matches,
 remote gestures, travel and arsenal coverage need feedback. Defaults are
@@ -44,8 +50,8 @@ and [feedback questions](docs/public-alpha/FEEDBACK-QUESTIONS.md).
 For reports, use **Save logs for a bug report**. It creates a local ZIP of
 sanitized report copies; originals remain local and nothing uploads automatically.
 Review the ZIP before sharing: unrecognized personal details in free-form text
-may need removal. Use the Discord thread where the public release was shared,
-as described in the release notes.
+may need removal. Use [GitHub Issues](https://github.com/Kvasir94/Killing-Floor-2-VR/issues)
+for public bug reports; keep sensitive details private.
 After interruption, quit KF2 and use **Fix a stuck session** before changing or
 deleting that release folder. Never mix DLLs or bypass game/package checks.
 
@@ -59,15 +65,15 @@ git clone https://github.com/Kvasir94/Killing-Floor-2-VR.git
 cd Killing-Floor-2-VR
 ```
 
-The source is for review and development. It is not a self-contained playable
-release: current builds require locally installed game/SDK data and excluded
-generated asset inputs and a missing authored hand scene.
+The source is for review and development. Building a playable candidate requires
+your own supported KF2/SDK and Portal 2 installations, Windows build tools and
+Blender. The source build extracts needed game inputs locally and regenerates
+its glove/watch, reload props and weapon art; generated outputs stay excluded.
+This route does not recreate the first alpha's exact hand-art revision or ZIP bytes.
 **The launcher can be audited and built independently**, without KF2, the SDK
-or private art; see [launcher source and build](docs/BUILDING.md#audit-and-build-the-launcher).
+or authored game art; see [launcher source and build](docs/BUILDING.md#audit-and-build-the-launcher).
 See [BUILDING](docs/BUILDING.md) for native/full-mod prerequisites,
 commands and exact limitations; [CONTRIBUTING](CONTRIBUTING.md) has issue guidance.
-[Public source updates](docs/PUBLISHING.md) explains how to keep private development
-history separate and apply reviewed future exports as new public commits.
 
 | Path | Purpose |
 | --- | --- |
@@ -97,9 +103,8 @@ can trigger antivirus heuristics. Review/build the source if needed; the launche
 restores its temporary game-folder deployment when cleanup completes.
 
 [MIT](LICENSE) covers original KF2-VR contributions. Game, SDK, Workshop and
-Valve assets retain their owners' terms. The public source export omits Git
-history, local data, game/derived binary packages and assets with unresolved
-provenance. The public playable ZIP is a separate artifact that includes
+Valve assets retain their owners' terms. Source archives omit local data, game-derived binary packages and assets
+with unresolved provenance. The public playable ZIP is a separate artifact that includes
 game-derived packages; its redistribution review remains unresolved, as disclosed
 in the release notes. Public availability does not establish rights clearance.
 See [PROVENANCE](docs/PROVENANCE.md)

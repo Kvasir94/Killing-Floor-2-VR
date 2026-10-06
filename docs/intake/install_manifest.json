@@ -1,8 +1,5 @@
 {
   "schema": "kf2vr/install_manifest/1",
-  "generated_utc": "2026-09-12T05:22:57.7835099Z",
-  "generated_by": "tools/intake/fingerprint.ps1",
-  "read_only": true,
   "game_root": "C:/Games/KillingFloor2",
   "steam": {
     "game": {
@@ -83,10 +80,5 @@
       "WinDrv": 4
     },
     "total_uc_files": 4043
-  },
-  "xr": {
-    "openxr_active_runtime": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\SteamVR\\steamxr_win64.json",
-    "steamvr_installed": true,
-    "headset_observed": false
   }
 }

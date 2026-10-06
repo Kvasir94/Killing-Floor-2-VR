@@ -655,6 +655,7 @@ function float HandValue(name Key)
         case 'PreferredWeaponHand': return (Hands != None ? Hands.PreferredWeaponHand : C.default.PreferredWeaponHand);
         case 'bToggleGrip': return int(Hands != None ? Hands.bToggleGrip : C.default.bToggleGrip);
         case 'bHoldSupportGrip': return int(Hands != None ? Hands.bHoldSupportGrip : C.default.bHoldSupportGrip);
+        case 'bDisableSupportHandAim': return int(Hands != None ? Hands.bDisableSupportHandAim : C.default.bDisableSupportHandAim);
         case 'bControllerRelativeMovement': return int(Hands != None ? Hands.bControllerRelativeMovement : C.default.bControllerRelativeMovement);
         case 'bStickCrouch': return int(Hands != None ? Hands.bStickCrouch : C.default.bStickCrouch);
         case 'LocomotionMode': return (Hands != None ? Hands.LocomotionMode : C.default.LocomotionMode);
@@ -700,6 +701,10 @@ function SetHandValue(name Key, float Value)
         case 'bHoldSupportGrip':
             if (Hands != None) Hands.bHoldSupportGrip = Value != 0;
             else C.default.bHoldSupportGrip = Value != 0;
+            break;
+        case 'bDisableSupportHandAim':
+            if (Hands != None) Hands.bDisableSupportHandAim = Value != 0;
+            else C.default.bDisableSupportHandAim = Value != 0;
             break;
         case 'bControllerRelativeMovement':
             if (Hands != None) Hands.bControllerRelativeMovement = Value != 0;
@@ -781,6 +786,9 @@ function SetHandValue(name Key, float Value)
     if (Hands != None) Hands.SaveConfig();
     else C.static.StaticSaveConfig();
     Notice = "SAVED  /  Changes apply immediately.";
+    if (Key == 'bDisableSupportHandAim')
+        Notice = Value != 0 ? "SAVED  /  Primary hand aims; support still braces."
+            : "SAVED  /  Both hands align long guns; support still braces.";
 }
 
 function SavePreferences()
@@ -840,7 +848,8 @@ function BuildMenuRows()
         AddRow(4, "GAME SETTINGS", MA_Page, PAGE_GAME);
         AddRow(5, "PRACTICE AND TOOLS", MA_Page, PAGE_TOOLS);
         AddRow(6, (PC != None && PC.WorldInfo.NetMode == NM_Client) ? "LEAVE SERVER / SOLO MATCH" : "LOCAL MATCH", MA_Page, PAGE_MATCH);
-        AddRow(7, "QUIT GAME", MA_Page, PAGE_QUIT, 3);
+        AddRow(7, "CALIBRATION", MA_Page, PAGE_CALIBRATION);
+        AddRow(8, "QUIT GAME", MA_Page, PAGE_QUIT, 3);
         break;
     case PAGE_SETTINGS:
         AddRow(0, "LOCOMOTION AND COMFORT", MA_Page, PAGE_LOCOMOTION);
@@ -876,7 +885,7 @@ function BuildMenuRows()
         AddRow(3, "SOLO ZED GRABBING: " $ OnOff('bZedGrabEnabled'), MA_HandToggle, 0, 1, 'bZedGrabEnabled');
         AddRow(4, "RELOAD MODE: " $ (HandValue('bInteractiveReloads') == 0 ? "BUTTON" :
             (HandValue('bManualPump') != 0 ? "PHYSICAL + PUMP" : "PHYSICAL")), MA_Reload, 0, 1);
-        AddRow(5, "WEAPONS STAY EQUIPPED UNTIL SWITCHED OR DROPPED", MA_None, 0, 4);
+        AddRow(5, "SUPPORT HAND AIMS GUN: " $ (HandValue('bDisableSupportHandAim') != 0 ? "OFF" : "ON"), MA_HandToggle, 0, 1, 'bDisableSupportHandAim');
         AddRow(6, "BODY HOLSTERS: " $ OnOff('bBodySlotsEnabled'), MA_HandToggle, 0, 1, 'bBodySlotsEnabled');
         AddRow(7, "MELEE HIT STOP: " $ OnOff('bMeleeHitStop'), MA_HandToggle, 0, 1, 'bMeleeHitStop');
         AddRow(8, "EXPERIMENTAL MULTIPLAYER GRABBING", MA_Page, PAGE_EXPERIMENTAL);

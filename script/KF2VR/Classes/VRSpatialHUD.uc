@@ -61,6 +61,7 @@ var bool bBossActive;
 var string ObjectiveTitle, ObjectiveText;
 var string WavePriorityTitle, WavePriorityText;
 var string InteractionPromptText, InteractionPromptButton;
+var string InteractionHoldText, InteractionHoldButton;
 var string MapNoticeText, MapCounterText;
 var float ObjectiveProgress;
 var float WavePriorityUntil, InteractionPromptUntil;
@@ -202,13 +203,16 @@ simulated function bool FloatingWaveNotice()
     return WavePriorityActive() && !Bridge.bWristwatchHUD;
 }
 
-simulated function bool CaptureInteractionMessage(string Text, string KeyBind, float Duration)
+simulated function bool CaptureInteractionMessage(string Text, string KeyBind, float Duration,
+    optional string HoldText, optional string HoldButton)
 {
     if (!ContextValid() || !bSessionSupported || Text == "") return false;
     InteractionPromptText = Text;
     if (KeyBind == "" || Caps(KeyBind) == "E" || Caps(KeyBind) == "USE")
         InteractionPromptButton = "EMPTY-HAND TRIGGER";
     else InteractionPromptButton = Caps(KeyBind);
+    InteractionHoldText = HoldText;
+    InteractionHoldButton = HoldButton;
     if (Duration <= 0) Duration = 2.5;
     InteractionPromptUntil = WorldInfo.RealTimeSeconds + FClamp(Duration, 0.5, 10.0);
     if (Panels[4] != None && Panels[4].Display != None) Panels[4].Display.bNeedsUpdate = true;
@@ -219,6 +223,8 @@ simulated function ClearInteractionMessage()
 {
     InteractionPromptText = "";
     InteractionPromptButton = "";
+    InteractionHoldText = "";
+    InteractionHoldButton = "";
     InteractionPromptUntil = 0;
     if (Panels[4] != None && Panels[4].Display != None) Panels[4].Display.bNeedsUpdate = true;
 }
@@ -334,6 +340,7 @@ simulated function HideBossSource(bool bHide)
 simulated function SuspendHUD()
 {
     local int I;
+    PouchVisibleUntil = 0;
     if (PC != None) RefreshSource();
     for (I = 0; I < 3; ++I)
     {
@@ -464,28 +471,32 @@ simulated function bool PouchEntry(int HandIndex)
 
 simulated function string PouchKey()
 {
-    return PouchEntry(0) @ Ammo[0].Reserve @ Ammo[0].Capacity @ string(Ammo[0].WeaponImage)
-        @ PouchEntry(1) @ Ammo[1].Reserve @ Ammo[1].Capacity @ string(Ammo[1].WeaponImage);
+    return string(Ammo[0].Weapon) @ PouchEntry(0) @ Ammo[0].Reserve @ Ammo[0].Capacity @ string(Ammo[0].WeaponImage)
+        @ string(Ammo[1].Weapon) @ PouchEntry(1) @ Ammo[1].Reserve @ Ammo[1].Capacity @ string(Ammo[1].WeaponImage);
 }
 
 // Shown while the player looks down at the pouch or brings a hand to it.
 simulated function PlacePouchCounter()
 {
-    local vector Pouch, Position, ViewLocation;
+    local vector Pouch, Position;
     local vector HeadForward, HeadRight, HeadUp, PanelNormal, PanelRight, PanelUp;
-    local rotator ViewRotation;
     local int H;
     local bool bNear;
-    if (!Bridge.bWeaponAmmoReadouts || (!PouchEntry(0) && !PouchEntry(1)))
+    if (!Bridge.bWeaponAmmoReadouts || Bridge.NativeHeadTracked == 0
+        || (!PouchEntry(0) && !PouchEntry(1)))
     {
+        PouchVisibleUntil = 0;
         Panels[5].PlacePanel(vect(0,0,0), rot(0,0,0), vect(10,4,0), false);
         return;
     }
     Pouch = Bridge.AmmoPouchPosition(1 - Clamp(Bridge.PreferredWeaponHand, 0, 1),
         class'VRInteractiveReload'.default.BeltOffset);
-    PC.GetPlayerViewPoint(ViewLocation, ViewRotation);
+    // Use the same fresh, calibrated world headset frame as the card's roll.
+    // The stock camera can lag or clamp controller pitch; stereo retains the
+    // residual HMD pose, so its gaze is not necessarily GetPlayerViewPoint's.
+    GetAxes(Bridge.NativeHeadRotation, HeadForward, HeadRight, HeadUp);
     // Within about 35 degrees of gaze, or a palm within reach of the pouch.
-    bNear = (vector(ViewRotation) dot Normal(Pouch - Bridge.HeadPosition)) > 0.82;
+    bNear = (HeadForward dot Normal(Pouch - Bridge.HeadPosition)) > 0.82;
     for (H = 0; H < 2 && !bNear; ++H)
         bNear = (Bridge.NativeValidMask & (1 << H)) != 0 && VSize(Bridge.PalmPosition(H) - Pouch) < 22;
     if (bNear) PouchVisibleUntil = WorldInfo.RealTimeSeconds + 0.4;
@@ -494,7 +505,6 @@ simulated function PlacePouchCounter()
     // Cube's front is -X, text runs across +Y and up +Z. A direction-only
     // rotator fixes roll against world up, which becomes ambiguous looking
     // straight down. Project the headset's right axis onto the card instead.
-    GetAxes(Bridge.NativeHeadRotation, HeadForward, HeadRight, HeadUp);
     PanelNormal = Normal(Position - Bridge.HeadPosition);
     PanelRight = HeadRight - PanelNormal * (HeadRight dot PanelNormal);
     if (VSizeSq(PanelRight) < 0.0001) PanelRight = HeadUp cross PanelNormal;
@@ -851,7 +861,8 @@ simulated function ReadValues()
         @ bTraderNavActive @ int(TraderDistance) @ int(TraderBearingAngle * 100) @ TraderElevationDiff
         @ RhythmCounterActive() @ RhythmCount @ RhythmMax);
     Dirty(4, WavePriorityTitle @ WavePriorityText @ int(FMax(0, WavePriorityUntil - WorldInfo.RealTimeSeconds) * 10)
-        @ InteractionPromptText @ InteractionPromptButton @ int(FMax(0, InteractionPromptUntil - WorldInfo.RealTimeSeconds) * 10));
+        @ InteractionPromptText @ InteractionPromptButton @ InteractionHoldText @ InteractionHoldButton
+        @ int(FMax(0, InteractionPromptUntil - WorldInfo.RealTimeSeconds) * 10));
 }
 
 simulated function UpdateWatchNotifications()
@@ -883,7 +894,14 @@ simulated function ReadWeapon(int HandIndex)
     local HUDWeaponReadout A;
     local int FireMode;
     W = Bridge.GetHUDWeapon(HandIndex);
-    if (Ammo[HandIndex].Weapon != W) Panels[HandIndex + 1].bDrawn = false;
+    if (Ammo[HandIndex].Weapon != W)
+    {
+        Panels[HandIndex + 1].bDrawn = false;
+        // The hip texture shares both hands' reserves. Conceal the old
+        // ownership layout until its redraw, including transfers and swaps
+        // between weapons with identical icons and counts.
+        Panels[5].bDrawn = false;
+    }
     A.Weapon = W; A.Capacity = 1; A.SecondaryReserve = -1; A.Charge = -1;
     if (W != None)
     {
@@ -1625,8 +1643,20 @@ simulated function RenderAlertPanel(Canvas C)
         Text(C, MapCounterText, 128, 94, 768, 58, Amber, true);
         if (InteractionPromptActive())
         {
-            Text(C, InteractionPromptButton, 128, 190, 220, 38, Amber, true);
-            Text(C, InteractionPromptText, 378, 190, 518, 38, Ink, true);
+            // Alert textures are 256 pixels high. Keep both rows below the
+            // map counter and inside the target, including the text shadow.
+            if (InteractionHoldText != "")
+            {
+                Text(C, InteractionPromptButton, 128, 170, 220, 32, Amber, true);
+                Text(C, InteractionPromptText, 378, 170, 518, 32, Ink, true);
+                Text(C, InteractionHoldButton, 128, 212, 220, 32, Amber, true);
+                Text(C, InteractionHoldText, 378, 212, 518, 32, Ink, true);
+            }
+            else
+            {
+                Text(C, InteractionPromptButton, 128, 190, 220, 38, Amber, true);
+                Text(C, InteractionPromptText, 378, 190, 518, 38, Ink, true);
+            }
         }
         else if (FloatingWaveNotice())
         {
@@ -1644,6 +1674,8 @@ simulated function RenderAlertPanel(Canvas C)
     {
         Text(C, InteractionPromptButton, 128, 68, 220, 48, Amber, true);
         Text(C, InteractionPromptText, 378, 68, 518, 48, Ink, true);
+        Text(C, InteractionHoldButton, 128, 128, 220, 48, Amber, true);
+        Text(C, InteractionHoldText, 378, 128, 518, 48, Ink, true);
     }
 }
 

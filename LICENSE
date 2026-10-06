@@ -24,8 +24,8 @@ This licence applies to original KF2-VR code, scripts and documentation.
 It does not grant rights to Killing Floor 2, its SDK or game assets, Steam
 Workshop content, Valve content, or other third-party material. Those remain
 subject to their respective rights holders' terms. Owning a game is not a
-redistribution licence. The public source export excludes game binaries,
-extracted/derived asset packages and local caches; the private playable
-package is a separate deliverable whose asset review remains deferred.
+redistribution licence. The source repository excludes game binaries, extracted/derived asset
+packages and local caches. Playable packages contain derived content and do
+not establish permission to redistribute third-party assets.
 Third-party components retain their own licences; see third_party/VERSIONS.md,
 docs/PROVENANCE.md and the notices in a playable package.

@@ -1,5 +1,6 @@
 #pragma once
 #include "MotionClip.h"
+#include "MotionSession.h"
 #include "GameScript.h"
 #include <chrono>
 #include <filesystem>
@@ -7,6 +8,10 @@
 
 namespace kf2vr::adapter::motion {
 class Runtime {
+    // Adapter globals live until process termination. Keep the worker resident
+    // unless Shutdown is called explicitly; never join/write under loader lock.
+    SessionRecorder* session_=nullptr;
+    bool configured_=false;
     Recorder recorder_; Player player_;int request_=0,status_=0;std::size_t namesIndex_=~std::size_t{};
     bool network_=false;double playStarted_=0;std::size_t edgeIndex_=0;
     static double Now(){return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();}
@@ -60,6 +65,23 @@ class Runtime {
         std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));std::ifstream f(path,std::ios::binary);f.read(reinterpret_cast<char*>(bytes.data()),bytes.size());
         return bool(f)&&decode(bytes,player_.samples);}catch(...){return false;}}
 public:
+    void Configure(bool stereo,bool desktop,SessionRecorder::Logger logger=nullptr) noexcept {
+        if(configured_)return;configured_=true;
+        try {
+            if(SessionRecorder::Environment(L"KF2VR_RECORD_MOTION")!=L"1")return;
+            SessionRecorder::Config config;
+            if(!stereo||desktop||Fixture()||!SessionRecorder::FromEnvironment(config)) {
+                if(logger)logger("MotionSession disabled=1 reason=launch_config");return;
+            }
+            session_=new SessionRecorder();
+            if(!session_->Start(std::move(config),logger)) {
+                if(logger)logger("MotionSession disabled=1 reason=session_start");
+                delete session_;session_=nullptr;
+            }
+        }catch(...) {if(logger)logger("MotionSession disabled=1 reason=launch_config");}
+    }
+    void Shutdown() noexcept {if(session_)session_->Close();}
+    bool CaptureConfigured() const noexcept {return session_!=nullptr;}
     void Update(GameScript& script,void* bridge,void* pc,const xr::FrameState& raw,
                 const HeadInTracking& reference,const Quat& body,bool referenceValid,bool stereo,bool desktop,std::uint64_t age){
         const auto now=Now();const int request=script.Read<int>(pc,L"MotionRequest");
@@ -81,13 +103,15 @@ public:
         script.Write(bridge,L"MotionNetwork",network_?1:0);
         script.Write(bridge,L"MotionHasPose",0);
         script.Write(bridge,L"MotionFixtureEnabled",Fixture()&&desktop&&!stereo?1:0);
-        script.Write(bridge,L"MotionEnabled",recorder_.Recording()?1:0);
+        const bool sessionRecording=session_&&session_->Active();
+        script.Write(bridge,L"MotionEnabled",recorder_.Recording()||sessionRecording?1:0);
         script.Write(bridge,L"MotionPlayback",player_.playing?1:0);
-        if(recorder_.Recording()&&script.Read<int>(bridge,L"MotionPumpPhase")==1){
+        if((recorder_.Recording()||sessionRecording)&&script.Read<int>(bridge,L"MotionPumpPhase")==1){
             Sample s;s.synthetic=Fixture();s.input=raw;s.reference=reference;s.body=body;s.referenceValid=referenceValid;s.visual=Read(script,bridge);
             // Preserve raw runtime validity and action state; mark its age separately.
             s.visual.state[11]=static_cast<int>(std::min<std::uint64_t>(age,INT32_MAX));
-            if(!recorder_.Append(s,now)&&!recorder_.Recording())status_=3;
+            if(sessionRecording)session_->Append(s,SessionRecorder::Clock());
+            if(recorder_.Recording()&&!recorder_.Append(s,now)&&!recorder_.Recording())status_=3;
         }
         if(player_.playing){const auto* s=player_.Tick(now);if(s){
             // A map transition needs an explicit load in that map; never project into another world.

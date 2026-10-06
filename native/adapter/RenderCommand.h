@@ -1,3 +1,4 @@
+#include "include/kf2vr/adapter/GameBuild.h"
 #pragma once
 #include <atomic>
 #include <cstddef>
@@ -30,7 +31,7 @@ public:
 
     void Initialise(std::uintptr_t base) noexcept { base_=base; }
     bool Threaded() const noexcept {
-        return base_ && *reinterpret_cast<const volatile std::int32_t*>(base_+ThreadedRenderingRva)!=0;
+        return base_ && *reinterpret_cast<const volatile std::int32_t*>(base_+build::Rva(ThreadedRenderingRva))!=0;
     }
     // The thread that last executed one of these commands: the game thread
     // under -onethread, UE3's rendering thread otherwise.
@@ -49,7 +50,7 @@ public:
         Allocate(context,sizeof(Command));
         if (static_cast<std::uint32_t>(context.end-context.start)<sizeof(Command)) {
             if (context.start) {
-                *reinterpret_cast<std::uintptr_t*>(context.start)=base_+SkipCommandVtableRva;
+                *reinterpret_cast<std::uintptr_t*>(context.start)=base_+build::Rva(SkipCommandVtableRva);
                 *reinterpret_cast<std::uint32_t*>(context.start+8)=static_cast<std::uint32_t>(context.end-context.start);
             }
             Commit(context);
@@ -87,12 +88,12 @@ private:
     };
     void Allocate(Allocation& context,std::size_t size) const {
         using AllocateFn=Allocation*(*)(Allocation*,void*,std::uint32_t);
-        reinterpret_cast<AllocateFn>(base_+AllocateRva)(&context,reinterpret_cast<void*>(base_+RingRva),
+        reinterpret_cast<AllocateFn>(base_+build::Rva(AllocateRva))(&context,reinterpret_cast<void*>(base_+build::Rva(RingRva)),
             static_cast<std::uint32_t>(size));
     }
     void Commit(Allocation& context) const {
         using CommitFn=void(*)(Allocation*);
-        reinterpret_cast<CommitFn>(base_+CommitRva)(&context);
+        reinterpret_cast<CommitFn>(base_+build::Rva(CommitRva))(&context);
     }
     std::uintptr_t base_=0;
     std::atomic<DWORD> executing_{0},draining_{0};

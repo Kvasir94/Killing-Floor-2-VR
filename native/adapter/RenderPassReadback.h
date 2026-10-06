@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include "include/kf2vr/adapter/GameBuild.h"
 #include <cstring>
 
 namespace kf2vr::adapter {
@@ -11,17 +12,20 @@ namespace kf2vr::adapter {
 inline bool VerifyRenderPassReadback(std::uintptr_t base) {
     constexpr unsigned char copy[] = {0x83,0x3d,0x58,0xa2,0x8f,0x01,0x00,0x75,0x0d,
         0x8b,0x0d,0xe8,0xbe,0x5d,0x01,0x41,0x89,0x8f,0xec,0x00,0x00,0x00};
-    return std::memcmp(reinterpret_cast<const void*>(base+0x8ff0b9),copy,sizeof(copy))==0 &&
-        *reinterpret_cast<const std::uintptr_t*>(base+0x1eda1a4)==base+0x171ec98 &&
-        *reinterpret_cast<const std::uintptr_t*>(base+0x1eda1ac)==base+0x1edafb0 &&
-        std::memcmp(reinterpret_cast<const void*>(base+0x171ec98),L"DepthPrepass",sizeof(L"DepthPrepass"))==0;
+    constexpr unsigned char epicCopy[] = {0x83,0x3d,0x08,0xad,0xa4,0x01,0x00,0x75,0x0d,
+        0x8b,0x0d,0x48,0xb1,0x72,0x01,0x41,0x89,0x8f,0xec,0x00,0x00,0x00};
+    const auto* expected=build::selected==build::Store::Epic ? epicCopy : copy;
+    return std::memcmp(reinterpret_cast<const void*>(base+build::Rva(0x8ff0b9)),expected,sizeof(copy))==0 &&
+        *reinterpret_cast<const std::uintptr_t*>(base+build::Rva(0x1eda1a4))==base+build::Rva(0x171ec98) &&
+        *reinterpret_cast<const std::uintptr_t*>(base+build::Rva(0x1eda1ac))==base+build::Rva(0x1edafb0) &&
+        std::memcmp(reinterpret_cast<const void*>(base+build::Rva(0x171ec98)),L"DepthPrepass",sizeof(L"DepthPrepass"))==0;
 }
 struct RenderPassReadback {
     int depthPrepass=-1;
     int constructorOverride=-1;
 };
 inline RenderPassReadback ReadRenderPassSettings(std::uintptr_t base) {
-    return {*reinterpret_cast<const int*>(base+0x1edafb0),
-            *reinterpret_cast<const int*>(base+0x21f9318)};
+    return {*reinterpret_cast<const int*>(base+build::Rva(0x1edafb0)),
+            *reinterpret_cast<const int*>(base+build::Rva(0x21f9318))};
 }
 }

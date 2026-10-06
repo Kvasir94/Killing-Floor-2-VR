@@ -1,8 +1,8 @@
 # Building KF2-VR from source
 
 The public source export is for code review and development. It is not a
-self-contained playable release or a one-command clean build. The build uses
-locally installed game/SDK data and generated asset inputs that are deliberately
+self-contained playable release. The full source builder uses your own installed
+game/SDK data and generates asset inputs locally; those inputs are deliberately
 excluded from the source export. To play, download the complete playable ZIP
 from [GitHub Releases](https://github.com/Kvasir94/Killing-Floor-2-VR/releases).
 The launcher can be audited and assembled independently of the game/VR assets.
@@ -10,8 +10,7 @@ The launcher can be audited and assembled independently of the game/VR assets.
 ## Audit and build the launcher
 
 The complete shipped launcher source is public. It uses Python's standard library,
-Tkinter and Windows APIs; there is no separate private launcher project or pip
-dependency. The PowerShell artwork is embedded in the GUI source.
+Tkinter and Windows APIs; its source and module inventory are included here. The PowerShell artwork is embedded in the GUI source.
 
 | Files | Responsibility |
 | --- | --- |
@@ -38,7 +37,7 @@ Both cached and downloaded archives must match their SHA-256 pins before extract
 Cache them under `build/multiplayer/` with the filenames in that JSON for an offline
 build. The MSI is extracted with `msiexec /a /qn` into a temporary directory; it is
 not installed. Python/Tk and their licenses remain local to the output folder.
-No SDK, game files, Steam login, personal profile or authoring scene is required.
+This launcher audit route requires no game/SDK or Steam login.
 
 This produces **a launcher audit build**, with `Start KF2-VR.cmd`, declared launcher
 sources, defaults, runtime, licenses and a relative-file hash inventory in
@@ -51,7 +50,8 @@ The audit build omits playable DLLs, game packages and `release.json`; use it to
 inspect or change the UI, not to launch the mod or replace files in a release.
 Full playable packaging still requires the matching compiled inputs below.
 Do not bypass integrity or game-compatibility checks when integrating changes.
-Local game discovery reads Steam/OpenXR registry paths. Actual play deploys the
+Local game discovery reads Steam library manifests/registry paths and Epic
+completed-install manifests; OpenXR runtime discovery reads its registry path. Actual play deploys the
 mod temporarily and maintains recovery records; hosting can explicitly download
 the server from Valve, and selected Workshop content can download through Steam.
 **Save logs for a bug report** creates sanitized local copies for user review;
@@ -84,27 +84,68 @@ CPU tests. Passing those tests does not mean the adapter DLL was built.
 
 ## Scripts, assets and playable packaging
 
+The adapter and shared launcher recognize exact Steam and Epic executable hashes
+in `tools/multiplayer/game_install.py`. Epic runtime support is experimental Solo
+VR through its official launcher; there is no Epic SDK build route. Compile the
+shared script packages with the supported Steam SDK below. Epic limits and manual
+Launch Options cleanup are in [READ ME FIRST](public-alpha/READ-ME-FIRST.txt).
+
 Install your own Steam KF2 and KF2 SDK. The build scripts compare game/editor
 hashes with `docs/intake/install_manifest.json`; this source targets Steam game
 build **13316885** (KFGame.exe file version **1.0.8767.0**) and Steam SDK build
 **13316905**, with the exact executable hashes in that file. A different game update
 requires a compatibility update, not bypassing the check.
 
-The current tools use example installation defaults such as
-`D:\SteamLibrary\steamapps\common\killingfloor2`. Supply `-GameRoot` on the
-individual script builders where available. The aggregate builder does not
-forward a GameRoot override; inspect its component parameters for a custom
-installation. It also expects CMake in its standard Windows install location.
+Use `tools/build-from-source.ps1` in a fresh checkout for a separate playable
+candidate. It accepts installation/tool paths and never selects or replaces an
+existing release. Install Blender **5.2.1 LTS**, Python with Tkinter, Git, CMake
+and Visual Studio's C++ desktop tools/Windows SDK and MASM. Windows supplies the
+Arial/Bahnschrift/Consolas fonts used by the procedural watch artwork. You also
+need your own Portal 2 installation: the current VR script compile references
+Portal assets even when Portal gameplay is OFF. Source/Engineer assets belong
+to separate optional content builders and are not required by this default route.
 
-Playable builds need Blender (current tools expect Blender 5.2 at its standard
-Windows location), the applicable PSK import tooling, local game extracts,
-floating-hand/watch/reload mesh inputs and receipts, and Portal/Source/Engineer
-asset packages and receipts used by the combined script build. These are not
-included. Asset tools
-under `tools/` describe the generation/import steps; this export does not
-claim that a fresh clone can reconstruct the current private art automatically.
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/build-from-source.ps1 `
+  -GameRoot 'C:\Games\KillingFloor2' `
+  -Portal2Root 'C:\Games\Portal 2' `
+  -Blender 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe'
+```
 
-Once local prerequisites and generated inputs exist, close KF2/editor/server and run:
+Supply `-Python` and `-CMake` for nonstandard tool locations. Close KF2, its
+editor and dedicated servers before building. The builder validates game/SDK
+executable hashes, fetches pinned public dependencies, extracts only required
+KF2/Portal inputs, generates hand/watch/reload/RAVEN-7/Portal art, imports packages
+through the SDK, builds native/scripts, runs the fast CPU/launcher gate and
+packages with `--no-select`. Logs and outputs stay under ignored `build/` and
+`extract/`; installed game content and user profiles remain untouched. Blender
+uses factory preferences and pinned addon source, not a global addon installation
+or a saved authoring scene. An idle Blender UI can remain open.
+
+The builder prints the candidate folder and ZIP paths. Extract that ZIP into a
+fresh folder and open **Start KF2-VR**. The development CMD launcher needs a
+selected package; this source builder deliberately does not select one.
+
+Dependency URLs, commits and archive SHA-256 pins are in
+`tools/art-dependency-pins.json`. `tools/prepare_art_dependencies.py` verifies
+downloaded/cached PSK importer 9.1.3, its Python format library, UModel and SDL
+before use, and requires clean exact-pinned SourceIO/OpenXR Git checkouts.
+`tools/extract_kf2_build_assets.py` derives the narrow package/object inventory
+from the public reload generators, records local input hashes, and refuses
+conflicting existing extracts. UModel is a pinned historical executable from its
+author's public repository; its digest is the checked file pin, not a vendor
+signature. These tools/downloads and extracted game data are not source-export
+assets. Retain their upstream licences locally.
+
+The procedural hand/watch route uses authored revision 59 from public generator
+source. It creates an authoring scene locally, skins it to the locally extracted
+KF2 rig, then bakes and exports it. The first public alpha used a later
+hand-art revision. A source-built candidate therefore differs in art and build
+metadata; this recipe does not promise a byte-identical recreation of that ZIP.
+Check a source-built candidate in a headset before relying on its gameplay.
+
+For subsequent development builds with prepared inputs and the default installation,
+close KF2/editor/server and run:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/build-kf2vr.ps1
@@ -125,17 +166,17 @@ python -m unittest discover -s tools/multiplayer -p 'test_*.py' -q
 Headset play and real online testing establish behavior. Do not start runtime
 automation as a routine build step; repository rules are in [AGENTS](../AGENTS.md).
 
-## Exact remaining asset inputs
+## Full build inputs
 
 | Input / location | Existing route | Default build dependency / status |
 | --- | --- | --- |
-| `extract/arms-audit/CHR_1P_Arms_MESH/SkeletalMesh3/Wep_1stP_Naked_Hands_Rig.psk` | Locally export the KF2 naked-hand rig; `tools/generate_floating_hands.py` can cut it and write PSK/FBX | Game-derived; an exact clean extraction recipe/tool pin is not supplied here |
-| Current `KF2VR-Horzine-Hands.blend` authoring scene and source textures | `tools/export_reference_hands.py`, then `tools/stage_watch_candidate.py` and the relevant hand tools | Current private hand art depends on this ignored scene; missing public authoring input, not automatically reconstructed by the older stock-hand cutter |
+| KF2 hand rig, skin textures and stock reload/weapon inputs | `tools/extract_kf2_build_assets.py` with pinned UModel | Extracted from the builder's supported installed KF2; no whole game packages are copied into source |
+| Authored hand/watch scene | `tools/generate_public_hands.py` through `tools/blender_build_runner.py` | Created from public procedural source and local rig/textures; no ignored developer scene or cache required |
 | `build/hand-meshes/VRFloatingHands.psk`, `.fbx`, `VRFloatingHands.json`, wristwatch mesh, hand/watch textures | Above export plus `tools/generate_wristwatch.py`; receipts checked by `tools/script-sources.ps1` | Required by default hand build; generated output intentionally excluded |
-| Reload meshes/stock weapon extracts and `build/hand-meshes/` props | `tools/generate_reload_props.py`, `tools/reload_sound_map.py`, `tools/build-reload-assets.ps1` | Required by default hand build despite Physical reloads being OFF at runtime; local game-derived inputs |
+| Reload meshes/stock weapon extracts and `build/hand-meshes/` props | `tools/generate_reload_props.py` | Required by default hand build despite Physical reloads being OFF at runtime; the sound mapping source is already included |
 | `build/hand-assets/KF2VRHands.upk` and `build.json` | `tools/build-hand-assets.ps1` | Required for the current VR script compile/package; generated game-derived package |
-| `build/portal-assets/KF2VRPortal.upk` and `build.json` | `tools/extract_portal_assets.py`, `tools/prepare_portal_asset_config.py`, `tools/build-portal-assets.ps1` | Portal play is optional, but current IncludeVRClient compile copies/requires this package; Valve-derived inputs remain local |
-| Source/Engineer packages and receipts for combined optional content | `tools/extract_source_weapons.py`, `tools/build-source-assets.ps1`, `tools/extract_engineer_assets.py`, `tools/build-engineer-assets.ps1` | Needed by the combined content/art path, not by native-only compilation; runtime features remain optional |
+| `build/portal-assets/KF2VRPortal.upk` and `build.json` | `tools/extract_portal_assets.py`, `tools/build_portal_meshes.py`, `tools/prepare_portal_asset_config.py`, `tools/build-portal-assets.ps1` | Local Portal 2 and pinned SourceIO; current IncludeVRClient compile requires this package; Valve-derived inputs remain local |
+| Source/Engineer packages and receipts for separate optional content | `tools/extract_source_weapons.py`, `tools/build-source-assets.ps1`, `tools/extract_engineer_assets.py`, `tools/build-engineer-assets.ps1` | Separate optional content route, outside `build-from-source.ps1` and the default aggregate build |
 | RAVEN-7 meshes and textures | Included `assets/weapons/raven7/material-atlas-v2.png`; `tools/raven7_model.py`, `tools/raven7_rig.py`, `tools/raven7_grip.py`, `tools/generate_tomahawk.py` | Generators/atlas included; rig/grip generation still depends on the floating-hand skin above |
 
 `tools/build-multiplayer-scripts.ps1` without `-IncludeVRClient` builds only
@@ -143,33 +184,13 @@ KF2VRNet source. It does not produce the shared VR client or a playable ZIP.
 There is no current documented switch in `tools/build-kf2vr.ps1` that removes
 these art dependencies and still builds the complete default VR package.
 Turning optional gameplay OFF at launch does not remove compile-time asset needs.
-Native-only review/build is the usable independent path above. Reconstructing
-the exact current VR art from a clean public checkout remains unfinished work.
+The source builder above supplies the default art dependencies locally. Exact
+recreation of the first alpha's later hand-art revision remains outside this route.
 
 ### Closing the full-mod build gaps
 
-The following work is still required before advertising a reproducible full-mod
-build. It does not block the independent launcher build above.
-
-1. Pin the supported extractor and PSK/Blender importer versions and document the
-   exact source packages, object names and commands for exporting the KF2 hand rig
-   and stock reload/weapon inputs from the builder's own supported Steam game/SDK.
-   Generate outputs locally; do not commit extracted game packages or caches.
-2. Inspect the current `KF2VR-Horzine-Hands.blend` scene and its linked/packed source
-   textures for personal metadata, external paths and provenance. Publish only
-   reviewed authored inputs whose distribution is permitted, or supply an authored
-   replacement and regeneration recipe. The current stock-hand cutter does not
-   recreate the authored scene. No such scene/textures are included today.
-3. Document the hand/watch/export staging sequence and revision parameters,
-   followed by reload mesh generation, SDK import and `build-hand-assets.ps1`.
-   Generated mesh hashes/build receipts should come from each local build rather
-   than copied private machine records. RAVEN-7 rig/grip generation needs this skin.
-4. Document legitimate local Portal/Source/Engineer source requirements and
-   extraction/import commands, or decouple optional packages from the default
-   script compile. Launching with optional gameplay OFF currently leaves compile
-   dependencies in place. Review custom installation-path support separately.
-5. Build from a clean public checkout using only the documented supported tools
-   and locally owned game/SDK inputs, then run the existing CPU/launcher/package
-   gate. Record remaining gaps here; retain headset and real online acceptance.
-   Publish future playable changes as a new release without replacing old ZIPs
-   or moving their tags.
+Future work is to remove the mandatory Portal 2 prerequisite by separating its
+optional compile-time content, and to provide reviewed authored inputs or a
+public procedural recipe for the first alpha's exact later hand-art revision.
+Headset and real online sessions remain the acceptance checks for source-built
+candidates.

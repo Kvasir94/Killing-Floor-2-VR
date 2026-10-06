@@ -1,3 +1,4 @@
+#include "include/kf2vr/adapter/GameBuild.h"
 #include "StereoViews.h"
 #include "kf2vr/Basis.h"
 
@@ -315,18 +316,18 @@ bool StereoViews::SubmitStereoPair(void* familyPointer, const xr::FrameState& fr
     if (!BuildStereoMatrices(view.viewMatrix, view.projectionMatrix, candidateReference, frame, matrices, error,
                              appliedAim ? appliedAim->cameraRotation : Quat{}, worldViewOffset))
         return false;
-    if (baseAddress > (std::numeric_limits<std::uintptr_t>::max)() - pinned::kSceneViewCopyConstructRva ||
-        !Executable(baseAddress + pinned::kSceneViewCopyConstructRva) ||
-        !Executable(baseAddress + pinned::kSceneViewDestructRva) ||
-        !Executable(baseAddress + pinned::kSceneViewInitializeRva)) {
+    if (baseAddress > (std::numeric_limits<std::uintptr_t>::max)() - build::Rva(pinned::kSceneViewCopyConstructRva) ||
+        !Executable(baseAddress+build::Rva(pinned::kSceneViewCopyConstructRva)) ||
+        !Executable(baseAddress+build::Rva(pinned::kSceneViewDestructRva)) ||
+        !Executable(baseAddress+build::Rva(pinned::kSceneViewInitializeRva))) {
         error = "Pinned view functions are not executable";
         return false;
     }
     const StereoAtlas atlas=singleViewDiagnostic_ ? StereoAtlas{{x,y,width,height},{x,y,width,height}} :
         StereoAtlas{{x, y, width / 2, height}, {x + width / 2, y, width - width / 2, height}};
-    auto copy = reinterpret_cast<CopyView>(baseAddress + pinned::kSceneViewCopyConstructRva);
-    auto destroy = reinterpret_cast<DestroyView>(baseAddress + pinned::kSceneViewDestructRva);
-    auto initialize = reinterpret_cast<InitializeView>(baseAddress + pinned::kSceneViewInitializeRva);
+    auto copy = reinterpret_cast<CopyView>(baseAddress+build::Rva(pinned::kSceneViewCopyConstructRva));
+    auto destroy = reinterpret_cast<DestroyView>(baseAddress+build::Rva(pinned::kSceneViewDestructRva));
+    auto initialize = reinterpret_cast<InitializeView>(baseAddress+build::Rva(pinned::kSceneViewInitializeRva));
     std::array<float, 2> random{};
     pinned::ReadField(bytes, 0x1a8, random);
     ViewCopy left(destroy), right(destroy);

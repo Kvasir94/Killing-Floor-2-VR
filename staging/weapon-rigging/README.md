@@ -1,9 +1,6 @@
-# Held weapon-rigging replay drafts
+# Optional weapon-rigging drafts
 
-UnrealScript prepared for the conventional rifle/SMG batch (SA80,
-P90). The combined builder only compiles `script/` and
-`project/*/Classes`, so these files are **not compiled or run**. They move into
-`script/KF2VR/Classes/` only as part of an explicitly scoped weapon-expansion
-implementation, together with profile, loadout and validation changes. There is
-no outstanding cross-task lock or automatic import queue. See
-open work and the [main workflow](../../AGENTS.md).
+These SA80/P90 UnrealScript drafts are outside the normal compiled `script/`
+and `project/*/Classes` inputs. They are retained for contributor reference.
+Integrating one requires its weapon profile, loadout and build changes; copying
+the draft alone does not add a playable weapon.

@@ -50,6 +50,11 @@ def hardware_context():
     return result
 
 
+def session_records(root):
+    folder = Path(root)/"sessions"
+    return sorted({*folder.glob("*/run.json"), *folder.glob("*/epic-session.json")})
+
+
 def summarize(root):
     manifest = json.loads((root / "release.json").read_text(encoding="utf-8"))
     report = {key: manifest.get(key) for key in ("build_id", "version", "protocol_version", "git_head", "public_release")}
@@ -58,12 +63,15 @@ def summarize(root):
                   hardware_at_collection=hardware_context(), sessions=[])
     # Do not copy arbitrary strings from session files: even exception messages
     # and server names can contain passwords, account IDs and personal paths.
-    for path in sorted((root / "sessions").glob("*/run.json"))[-5:]:
+    for path in session_records(root)[-5:]:
         raw = json.loads(path.read_text(encoding="utf-8"))
+        if raw.get("schema") == "kf2vr/epic-manual/1":
+            raw = {**raw, "vr": True, "host": False, "session_mode": "solo", "roles": [raw.get("role", {})]}
         entry = {key: raw.get(key) for key in ("vr", "host", "cleanup_complete", "user_config_preserved",
             "mod_handshake_observed", "inventory_focus", "multiplayer_grabs_host_requested")
             if isinstance(raw.get(key), (bool, type(None)))}
         entry["mode"] = raw.get("session_mode") if raw.get("session_mode") in ("solo", "host", "join") else "unknown"
+        entry["store"] = "epic" if raw.get("store") == "epic" else "steam"
         entry["roles"] = []
         for role in raw.get("roles", []):
             item = {"role": role.get("role") if role.get("role") in ("driver", "server", "teammate") else "unknown"}
@@ -282,12 +290,12 @@ def collect_logs(root, destination, sessions=3, limit=6_000_000):
     if settings.exists():
         secrets.add(json.loads(settings.read_text(encoding="utf-8")).get("host_password") or "")
     files = []
-    for number, run in enumerate(sorted((root / "sessions").glob("*/run.json"))[-sessions:], 1):
+    for number, run in enumerate(session_records(root)[-sessions:], 1):
         # Do not collect arbitrary JSON, configurations, deployment backups or crash dumps.
         paths = [p for p in sorted(run.parent.rglob("*"))
                  if p.is_file() and not p.is_symlink() and (p.suffix == ".log" or p == run)]
         for index, path in enumerate(paths, 1):
-            name = path.name if path.name in ("game.log", "native.log", "run.json") else "log" + path.suffix
+            name = path.name if path.name in ("game.log", "native.log", "run.json", "epic-session.json") else "log" + path.suffix
             files.append((path, f"sessions/session-{number}/{index:03}-{name}"))
     for index, path in enumerate(sorted((root / "logs").glob("*.txt"))[-5:], 1):
         files.append((path, f"launcher/{index:03}.txt"))

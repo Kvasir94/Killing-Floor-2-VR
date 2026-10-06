@@ -1,4 +1,19 @@
-# Play KF2-VR from main
+# Launch options and multiplayer
+
+The player window detects completed Steam and Epic installations and displays
+the available stores. Auto selects a sole installation or the last valid folder
+used in this extracted release; with multiple installations and no valid saved
+folder, choose Steam or Epic explicitly. A manually located exact build remains
+usable without a store manifest. Missing saved folders fall back to discovery;
+an explicit store choice never falls back to another store. Exact executable
+hashes are checked before any native deployment. Use `-Store Auto|Steam|Epic`
+and `-GameRoot` for the same selection on the command line.
+
+Epic offers experimental Solo VR through manually pasted session Launch Options
+in the official Epic launcher. Host, Join, Desktop, motion recording and highlight
+logging are unavailable. Steam offers Solo/Host/Join in VR or Desktop. Epic's
+current menu-first route still needs headset feedback; earlier partial gameplay
+checks do not establish overall acceptance.
 
 From the repository root on **main**, Double-click **Play-KF2VR.cmd** to open the launcher window.
 Pick VR or desktop, map, difficulty, match length, mods and optional VR graphics/scale,
@@ -31,9 +46,7 @@ for a console session or a machine without a desktop.
 
 Its artwork is the player's own installed game, read at run time and never
 copied into this repository or a release package: the Wallpaper folder, the
-official logo from the local Steam library cache, and the HUD's scanlined plate
-and blood splash from `extract/hud-art` when an earlier asset inspection left
-them there. Each is optional and the window draws its own equivalent when a
+official logo from the local Steam library cache, and optional locally extracted HUD artwork. Each is optional and the window draws its own equivalent when a
 file is missing.
 
 For the test map, double-click **[Play-KF2VR-TestMap.cmd](Play-KF2VR-TestMap.cmd)**.
@@ -142,6 +155,8 @@ PowerShell's standard common parameters are also available.
 | `-PrepareOnly` | Off | Verify and prepare isolated configs; no game/server processes or DLL deployment. Remilly must be cached; other Workshop content can be imported from existing Steam downloads. Missing downloads fail before launch. | `./Play-KF2VR.cmd -PrepareOnly` |
 | `-AllowStale` | Off | Allow the selected package to differ from current repo source, with a visible warning. Still verifies the manifest and every packaged file; does not rebuild, select a different release, or permit damaged packages. Works with Menu, TestMap and PrepareOnly. | `./Play-KF2VR.cmd -AllowStale -Menu` |
 | `-GameRoot` | `D:\SteamLibrary\steamapps\common\killingfloor2` | Matching, fingerprinted KF2 installation. | `./Play-KF2VR.cmd -GameRoot 'E:\SteamLibrary\steamapps\common\killingfloor2'` |
+| `-FrameTimings` | Off | VR performance log in the session native.log; same as packaged `--frame-timings`. | `./Play-KF2VR.cmd -Vr -FrameTimings` |
+| `-LocalTestControl` | Off, this launch only | Solo VR developer controls; makes the session unranked, never saved; rejects Host/Desktop. | `./Play-KF2VR.cmd -Solo -Vr -LocalTestControl` |
 | `-Help` | Off | Print usage without requiring an installed/selected build. | `./Play-KF2VR.cmd -Help` |
 
 Host server: **build/multiplayer/server** (install using tools/install-multiplayer-server.ps1).
@@ -180,13 +195,8 @@ Every in-headset preference persists in
 **%LOCALAPPDATA%/KF2VR/Profile/KFGame.ini**, including ones with no shipped
 default, such as aim fit, hand calibration and selector favourites. Diagnostic,
 probe, replay and capture flags are deliberately not preferences and never cross
-into the profile or back out of it. The Solo/Host/Join player client therefore
-launches without `-NOINI`: that switch marks KF2's standard Engine, Game, Input,
-Editor, UI and Benchmarking INIs NoSave, which silently discarded every in-game
-change before 2026-09-27. The player writes only its session copies (explicit
-`-*INI=` paths under **sessions/**); after it exits the launcher copies the VR
-sections into the profile. Original KF2 user config is still hash-checked and
-untouched. The host's dedicated server and the replay teammate keep `-NOINI`.
+into the profile or back out of it. Player changes are written to session copies and the VR sections are saved
+back into the profile after exit. The original stock KF2 config stays intact.
 Profiles carry `[KF2VR.Profile] Revision=2`. A profile written before that could
 never hold an in-game choice, so its stale `MovementHand=1` is reset once to the
 shipped left hand; a later right-hand choice is saved normally.
@@ -212,23 +222,18 @@ desktop effect switches. The opt-in headset bundles start Quest 2/3/3S at
 PC workload starting points, with no measured device guarantee. They change
 neither runtime refresh nor Quest streaming resolution/bitrate. The default
 remains saved graphics, initially `performance` / 75%; the bundle name is not
-remembered, so later in-headset changes are retained. See VR presets.
+remembered, so later in-headset changes are retained. Adjust these starting points to your headset and PC.
 
 ## Test map
 
 `-TestMap` selects **KF-Remilly_Test_Map**, Workshop item **1337395223**.
-At the September 19, 2026 lookup its **24,867 subscriptions** were the most among
-the established test maps compared: Remilly, SomeTestMap v2/v3 and TestingMapRedux.
 The map itself has no custom game/mutator requirement. The author's optional
 six-player HP command uses Controlled Difficulty Legacy and DamageDisplay.
 [Workshop source](https://steamcommunity.com/sharedfiles/filedetails/?id=1337395223).
 
-The old SomeTestMap v3 URL selected STM.SomeTestMap and STM3.STM3, bypassing the
-VR game/controller. Existing maps/cache are preserved. Hidden SteamCMD downloads
+Hidden SteamCMD downloads
 Remilly into the cache; the launcher checks its Unreal package header, supplies
 explicit client/server content paths, and hashes it into the session receipt.
-Download/preparation does not prove in-game loading; the smoke's test-map variant
-checks the server's advertised map at runtime.
 
 With UKFP selected, Remilly receives `?FakePlayers=6` by default, while ordinary
 maps receive `?FakePlayers=0`. UKFP fakes the player count for health and other
@@ -321,6 +326,10 @@ All public packaged CLI switches:
 
 | Switch | Default | Purpose and constraints |
 | --- | --- | --- |
+| `--solo` | Off | Standalone Survival with VR mutators; no server download. Rejects hosted/test-map/mod-only choices. |
+| `--multiplayer-grabs` / `--no-multiplayer-grabs` | Saved; initially Off | Host setting followed by all VR players; ordinary Solo retains its separate grab preference. |
+| `--breacher` / `--no-breacher` | Saved; initially Off | Requires a matching package that includes the optional Breacher content. |
+| `--local-test-control` | Off, this launch only | Solo VR developer controls; unranked, never saved; rejects Host/Desktop. |
 | `--host` | Off (join) | Start local dedicated server and join 127.0.0.1. |
 | `--menu` | Off | Interactive host menu; requires host and rejects replay/preview modes. |
 | `--map` | Saved; initially KF-BurningParis | Installed map name; requires host. KF-Remilly_Test_Map also selects the managed Workshop download. |
@@ -365,244 +374,26 @@ without launching; this mode cannot be combined with Solo, VR, Gui, Menu or Test
 Examples: `--host --vr --test-map`, `--host --vr --eye-render-percent 75`,
 `--host --vr --inventory-focus`,
 `--host --replay-teammate --replay-match`, `--host --avatar-preview`.
-F8 toggles third-person inspection in normal VR play. See
-avatar preview for its separate camera mode.
+F8 toggles third-person inspection in normal VR play.
 
 LAN friends use the host's LAN address; WAN hosting may need existing port
 forwarding or a gaming VPN. The launcher does not change firewall/router rules.
 It verifies a password-protected, VAC-off KF2 server before connecting. Local
 multi-instance tests do not validate a second Steam account or WAN conditions.
 
-## Automated handoff: small by default
+## Portable package and recovery
 
-The user requested reduced automation on September 19. Do not run broad suites
-after routine changes. Prepare the short smoke, run it once when GPU is idle,
-and use authored emulated headset/controller scenarios plus observer captures for required behavior verification. Physical headset feel is optional feedback; applicable real-account/WAN checks remain required.
+Download a playable ZIP from [Releases](https://github.com/Kvasir94/Killing-Floor-2-VR/releases)
+and extract it into a new folder. Open **Start KF2-VR**; the ZIP includes its Python
+runtime and mod packages. Solo needs no dedicated-server download. Host uses the
+separate free server; Join needs the host's complete password-bearing code and the
+same ZIP. Share the code privately. Internet hosts forward UDP 7777/27015 and allow
+KFServer through Windows Firewall; joiners need neither port forwarding nor a server.
 
-```powershell
-# Prepare only: no game processes
-./tools/test-online-play.ps1
-# Another agent can run this when GPU is idle
-./tools/test-online-play.ps1 -Run
-# Same short smoke on Remilly
-./tools/test-online-play.ps1 -Run -TestMap
-# Broader existing diagnostics: only when explicitly needed/requested
-./tools/test-online-play.ps1 -Run -Suite online
-```
-
-| Switch | Default | Purpose |
-| --- | --- | --- |
-| `-Run` | Off | Execute hidden sequential server/client processes; otherwise prepare configs/receipts only. |
-| `-Suite` | smoke | smoke: one two-client 1858/9mm session. online: smoke plus existing dual-owner, lifecycle, controls/room movement and recovery scenarios. |
-| `-TestMap` | Off | Remilly for smoke; broader lifecycle cases retain their known map/travel route. |
-| `-GameRoot` | Main launcher default | Audited client installation. |
-| `-ServerRoot` | Repo build/multiplayer/server | Audited dedicated server. |
-| `-UserConfigRoot` | Windows Documents/My Games/KillingFloor2/KFGame/Config | Initialized stock config to copy, never edit. |
-
-The runner pins one release manifest and uses that release's scripts, DLLs and
-fixture code. Preparation cannot pass runtime acceptance. Missing evidence,
-assertion/process failure, mismatched artifacts, changed user config or cleanup
-errors fail the run. It stops at the first failure without retries. Receipts and
-full logs are under **build/multiplayer/acceptance**.
-
-Smoke checks the normal server DLL entry point and private server query, real
-VR-owner/desktop-observer transport, 1858/9mm conversion and attached meshes,
-independent shots, shared-reserve reload, stock restoration, nonzero settings,
-comfort signal mapping, chest anchor, and cleanup. Headset visuals and other
-pistol families remain outside this small automated gate.
-
-The opt-in online cases retain simultaneous VR owners, server damage/observer
-health, remote guns, drop/continued fire, death/respawn, trader purchase/sale,
-travel/resumed combat, controller/room movement, pose-upload interruption,
-spectator reconnect and disconnect cleanup. Legacy single-current-weapon
-recovery evidence does not substitute for modern dual-hand emulated runtime and observer evidence.
-
-Authored emulated inputs and observer captures verify effect appearance, grenade size/reach/throw,
-turning, render-scale changes and persistence. Physical headset review is optional feedback.
-Real-player checks retain LAN/WAN authentication/latency,
-active-player rejoin, skins/upgrades and real match lifecycle. Pair conversion
-rejects incompatible skin/perk metadata rather than dropping ammunition;
-verify the actual loadout. See [controls](docs/VR_CONTROLS.md),
-playtest, handoff, open work.
-
-Emulated network fixtures use an isolated viewport input filter: physical mouse,
-keyboard and character events are consumed inside the game process; authored
-synthetic gamepad input still reaches gameplay. **F10** intentionally aborts the
-fixture. Ordinary launches and other Windows apps retain normal input. Native
-fixtures inject controlled mouse/keyboard events through the actual viewport
-routing and require the filter counters and unchanged stock input axes to pass.
-
-`tools/multiplayer/session.py` separates `--client-startup-timeout` (120 seconds
-per client by default) from `--startup-timeout` (120 seconds per server readiness,
-post-startup handshake and transport phase). Logs print Steam/startup, join and
-transport milestones. `--motion-fixture --native-replay` enables isolated synthetic
-clip recording, save, playback, pause/camera/speed/loop and stop checks. This is
-synthetic capture/playback evidence; it never claims a physically tracked clip.
-`--lan-no-voice` avoids optional Vivox startup in disposable loopback LAN client
-configs and rejects `--online-server`; Steam authentication remains required.
-
-Prepare or run one immutable candidate without changing the selected player build:
-
-```powershell
-./tools/test-emulated-motion.ps1 -ReleaseRoot D:/path/to/KF2VR-Multiplayer-CANDIDATE
-./tools/test-emulated-motion.ps1 -ReleaseRoot D:/path/to/KF2VR-Multiplayer-CANDIDATE -Run
-# Summarize recorded artifact hashes, actual routing counts and observer evidence:
-# Use the candidate's bundled Python with tools/multiplayer/motion_fixture_evidence.py RUN_JSON
-```
-
-`tools/multiplayer/abort_fixture.py` separately checks F10 against the window owned
-by its own bounded test process, verifies the window PID before sending a message,
-and requires a graceful game exit and restored config. It never blocks OS input
-or sends keys to another app. A normal motion pass and a separate abort pass are
-both required for the complete harness reliability claim.
-
-## Private-alpha candidate behavior
-
-The ZIP's top level is only **Start KF2-VR.cmd**, **READ ME FIRST.txt** and `app/`.
-Start KF2-VR opens a window (Tkinter in the bundled Python, no console) with VR/Desktop,
-Join a friend, Host a game, Play Solo, Settings, Send logs, Fix a stuck session and Help.
-READ ME FIRST.txt is the player guide and needs no repository, SDK or system Python. The current checkout already has true standalone
-Solo; this revision preserves that architecture (no local dedicated-server download
-for Solo). Both repository `-Solo` and packaged `--solo` use the selected package's
-stock Survival plus VRBootstrap/VRDemo. Normal-launcher runtime acceptance remains
-required through emulated inputs and observer captures; prepare-only does not establish it.
-
-Solo `bZedGrabEnabled` stays True by default and retains explicit False choices.
-The ordinary solo toggle is in the headset game menus and portable Settings.
-Multiplayer grabbing is one host setting, saved and initially OFF, that every VR
-player follows with no per-player opt-in: use `-MultiplayerGrabs` with On / Off, or
-packaged `--multiplayer-grabs` / `--no-multiplayer-grabs`. It requires `--host`;
-localhost and one-player hosts remain multiplayer. The headset's Experimental page
-shows the host's choice read-only. Living/corpse/gib holds and body damage share that
-policy. Physical punches, charged fists and firearm/melee contact remain core in
-both modes, with unchanged charge controls/timing/cooldown. Protocol 2 is required.
-VR teammates can fist bump (two clenched fists) or high five (two open hands):
-bring the hands together with some speed and everyone sees the stock comic-book
-headshot pop at the contact (a high five adds confetti), hears it, and both players
-feel a pulse in that hand. Both hands must be empty; a hand holding or supporting
-a weapon never counts, and a bump never deals punch damage. Always on, multiplayer
-only, no switch.
-
-New profiles have no optional mods and neutral aim. Saved choices are preserved;
-`--mods legacy` (development `-Mods legacy`) selects the previous UKFP preset.
-Settings offers the named Relaxed-wrist (Arizona Sunshine 2, -20.6 degree) and
-Legacy Quest 2 -8.6 degree aim fits; advanced in-headset
-calibration remains available. Body slots and interactive reloads default OFF. The experimental Portal Gun is
-for sale at the Solo trader only when **Portal gun for sale at the trader** is
-ticked (`-PortalGun On` / `--portal-gun`, saved, initially off); hosted and joined
-games never offer it because portals are rendered locally. The see-through view
-needs the default one-thread renderer; `-ThreadedRender` leaves the flat fill.
-Physical reloads are selectable through **VR SETTINGS > INTERACTION > INTERACTIVE
-RELOADS** in Solo, Host and Join; no hidden unlock is required. **MANUAL PUMP**
-is a separate toggle available while reloads are ON. The current reload test set
-is 9mm, M1911, Desert Eagle, HMTech-101, AK-12 and SA80; see
-physical reloads for scope and remaining acceptance.
-
-The portable launcher verifies package/game hashes and reports runtime prerequisites.
-The ZIP includes Python and its runtime DLLs; the native adapter and OpenXR loader
-use static C++ runtimes, so no separate Python, Visual Studio or VC++ 2015 runtime
-installation is required by KF2-VR. Steam still supplies ordinary KF2 prerequisites,
-and VR players need their headset software's active OpenXR runtime.
-The window always passes `--vr` or `--desktop` explicitly. Host uses
-a separate dedicated-server installation; the first download needs substantial
-additional disk space. Matching packages and VAC-off admission remain mandatory.
-On the first game launch, KF2 may also spend several minutes copying existing
-Steam Workshop subscriptions into the new cache, including when Mods is none.
-Keep the launcher open; subsequent launches reuse those cached files.
-
-For friends, send the selected release ZIP and the code in the host's
-`JOIN-SERVER.txt` (created after Host ready). They extract the ZIP, open
-**Start KF2-VR**, choose VR/desktop, click **Join a friend** and paste the code.
-The host's window shows the code with a Copy button once the game is up.
-The code contains the session password; share it privately. It fills connection
-and content settings and rejects a different build. Manual address/password
-entry still works. If public IP detection fails, host with `--share-address`.
-Internet hosting requires router forwarding of UDP 7777 and 27015 (or the
-chosen ports) to the host PC, plus Windows Firewall permission for KFServer.
-Reserve the host's LAN IP in DHCP. Joining clients need no server download or
-port forwards. Code generation/local testing does not establish WAN reachability;
-verify with a player outside the host's network.
-Recovery uses durable deployment journals and verified backups; unknown/changed
-files are preserved. Deployment temporarily touches native game-folder files.
-**Save logs for a bug report** sanitizes copies of the last three sessions' logs
-and run metadata, recent launcher/installer output and an allowlisted summary
-before writing a ZIP beside Start KF2-VR. Personal paths, known usernames/player
-names, account identifiers, IPs and recognized hostnames/email addresses get
-report-local aliases; session passwords, recognized tokens and join codes are removed.
-Archive member names are generic. Arbitrary JSON, configs, backups and crash dumps
-are excluded, and original files remain unchanged. Review the ZIP before sharing:
-free-form text can contain personal details outside the recognized patterns. It then
-copies the ZIP to the clipboard and highlights it in Explorer for pasting into Discord.
-Nothing is uploaded automatically. The server and Workshop cache default to
-`KF2VR-Server`/`KF2VR-Cache` beside the extracted folder, so later releases reuse them. All modes use the same gameplay preferences; effective host
-denial is never exported as a solo preference.
-
-Examples from an extracted ZIP:
-
-```cmd
-app\runtime\python.exe app\tools\multiplayer\friends.py --solo --vr
-app\runtime\python.exe app\tools\multiplayer\friends.py --host --desktop --no-multiplayer-grabs
-app\runtime\python.exe app\tools\multiplayer\friends.py --host --vr --multiplayer-grabs --mods legacy
-app\runtime\python.exe app\tools\multiplayer\friends.py --vr --address HOSTNAME
-```
-
-`python tools/multiplayer/package.py --public-release` requires a clean tree and
-matching successful native/script receipts; dirty development builds remain allowed.
-This private alpha includes the existing hand asset and permits identified dirty
-development builds. Do not clean/stash unrelated changes to bypass the optional gate.
-Build IDs include commit/protocol and a development suffix and are recorded in
-manifest, session logs, diagnostics and draft release notes.
-
-## Keeping this reference current
-
-Update this page's switches, defaults, constraints and examples together with
-tools/multiplayer/test_playable_contract.py whenever launcher behavior changes.
-AGENTS.md carries this rule for future agents. Keep shared defaults in
-vr-defaults.json and record exact release identity with results. Distinguish
-prepared, automated passed and headset accepted; historical passes do not
-certify new packages.
-
-## Breacher experimental branch
-
-This isolated branch adds a **Breacher (experimental)** checkbox to Solo and Host
-for both Desktop and VR. It is OFF by default. Console-menu B or `--breacher`
-enables it; `--no-breacher` overrides the saved choice. Optional/core scripts compile, but normal selection, spawning and purchase have not been observed in game. Enabled registration adds Breacher to the normal perk list and trader perk-filter row. Its starting loadout and purchasable weapon are Deadbolt, using stock nailgun presentation/reload/bash. Progression, palm-free mounting, corpse pinning and ArcFence remain unfinished.
-
-An enabled launch requires the experimental core release and its separately
-compiled `optional/breacher/KF2Breacher.u` plus `manifest.json` containing protocol
-1 and that package's uppercase SHA256, plus `Localization/INT/KF2Breacher.int`. Packaging checks the localization source hash. Missing or changed content stops preparation
-with an error; it is never downloaded automatically. Both desktop and VR clients
-need the same package. Send the host's complete join code: it carries the Breacher
-contract, which overrides a remembered host selection. Explicit `--no-breacher`
-rejects a code requiring Breacher. Manual-address Breacher joins are unsupported.
-The updated host source rejects contract mismatches before login. This is a
-compatibility check, not an anti-cheat guarantee; connection and map travel still
-need controlled mixed-player verification.
-
-After a coordinated compile window, `tools/build-breacher-scripts.ps1` builds only
-the optional package. Compile updated core/network packages separately through the
-existing build workflow. `python tools/multiplayer/package.py --breacher` includes
-the matching optional package; omitting that packaging flag excludes it. Neither
-command selects the current release. Do not run the build helper while KF2,
-KFServer or KFEditor is running. No build, install or launch is required to leave
-Breacher OFF and preserve the ordinary session.
-
-Example flags for a matching experimental portable package:
-`--solo --desktop --breacher`, `--host --vr --breacher`, and
-`--solo --vr --no-breacher`. Use the launcher's Join screen with the complete host
-code for mixed desktop/VR sessions; a normal older release cannot load this mod.
-
-### Combined optional content and replay tools
-
-The combined private candidate includes Breacher, OFF until selected. Solo VR
-controls require explicit `--local-test-control`, are not saved, and do not yet
-support hosted LAN. Both options can share one Solo mutator chain; Deadbolt is
-then included in the authored control catalog. Live effects remain unverified.
-
-The package includes `tools/test-emulated-motion.ps1`,
-`tools/test-saved-network-motion.ps1`, `tools/create-motion-contact-sheet.ps1`
-and saved-motion, timeline and owned-abort Python helpers. Pass the package's
-`app` folder as `-ReleaseRoot`; saved-file review also takes an existing `.kfm`
-with `-Clip`. Preparation remains default; `-Run` starts a bounded session only
-in an authorized engine window. Existing UPKs and native client/server adapters
-supply presentation assets. No clip is bundled or recorded automatically.
+Keep the launcher open until cleanup completes. After interruption, quit KF2 and
+use **Fix a stuck session** before deleting the folder or changing releases. Recovery
+preserves unknown/changed files. Never mix DLLs or bypass package/game hash checks.
+**Save logs for a bug report** creates sanitized local copies; nothing uploads
+automatically. Review the ZIP before sharing and keep raw logs/configs/dumps private.
+See [controls and troubleshooting](docs/VR_CONTROLS.md),
+[feedback](CONTRIBUTING.md) and [optional Breacher](docs/public-alpha/BREACHER.md).

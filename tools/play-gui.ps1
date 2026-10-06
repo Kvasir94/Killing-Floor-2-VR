@@ -20,7 +20,7 @@ param(
     [Parameter(Mandatory)][string]$Repo,
     [Parameter(Mandatory)][string]$Package,
     [Parameter(Mandatory)][string]$ServerRoot,
-    [Parameter(Mandatory)][string]$GameRoot,
+    [Parameter(Mandatory)][AllowEmptyString()][string]$GameRoot,
     [string]$Release,
     [switch]$Stale,
     [switch]$TestMap,
@@ -67,7 +67,7 @@ foreach ($entry in @(@('Map','map'), @('Difficulty','difficulty'), @('GameLength
         $s.($entry[1]) = if ($entry[0] -eq 'Map') { [string]$InitialSelections[$entry[0]] } else { ([string]$InitialSelections[$entry[0]]).ToLowerInvariant() }
     }
 }
-foreach ($entry in @(@('InventoryFocus','inventory_focus'), @('MultiplayerGrabs','multiplayer_grabs'), @('DamagePopups','damage_popups'), @('PortalGun','portal_gun'), @('ThreadedRender','threaded_render'))) {
+foreach ($entry in @(@('InventoryFocus','inventory_focus'), @('MultiplayerGrabs','multiplayer_grabs'), @('DamagePopups','damage_popups'), @('PortalGun','portal_gun'), @('Breacher','breacher'), @('ThreadedRender','threaded_render'))) {
     if ($InitialSelections.ContainsKey($entry[0])) { $s.($entry[1]) = $InitialSelections[$entry[0]] -eq 'On' }
 }
 if ($InitialSelections.ContainsKey('TestMapPlayers')) { $s.test_map_players = [int]$InitialSelections.TestMapPlayers }
@@ -672,7 +672,8 @@ New-Rule $mods $modsBottom 'Patch options'
 $popupToggle = New-Toggle $mods 0 ($modsBottom + 26) $cardW 46 'Damage popups' ([bool]$s.damage_popups) $fontBody
 $scalingToggle = New-Toggle $mods ($cardW + 20) ($modsBottom + 26) $cardW 46 'Remilly: 6-player waves' ([int]$s.test_map_players -eq 6) $fontBody
 $portalToggle = New-Toggle $mods 0 ($modsBottom + 84) $cw 46 'Portal gun for sale at the trader (Solo only, experimental; portals are local)' ([bool]$s.portal_gun) $fontBody
-$modsNote = New-Caption $mods 0 ($modsBottom + 136) $cw 40 '' $fontSmall $mute 'TopLeft'
+$breacherToggle = New-Toggle $mods 0 ($modsBottom + 136) $cw 46 'Breacher (experimental; matching local package required for every player)' ([bool]$s.breacher) $fontBody
+$modsNote = New-Caption $mods 0 ($modsBottom + 190) $cw 40 '' $fontSmall $mute 'TopLeft'
 
 # Explicit test control is never read from or saved to the launcher profile.
 $testPage = $pages['TEST CONTROL']
@@ -817,6 +818,7 @@ $result = @{
     InventoryFocus = $(if ($focusToggle.Tag.Checked) { 'On' } else { 'Off' })
     MultiplayerGrabs = $(if ($grabToggle.Tag.Checked) { 'On' } else { 'Off' })
     PortalGun      = $(if ($portalToggle.Tag.Checked) { 'On' } else { 'Off' })
+    Breacher       = $(if ($breacherToggle.Tag.Checked) { 'On' } else { 'Off' })
     TestMapPlayers = $(if ($scalingToggle.Tag.Checked) { 6 } else { 0 })
     PrepareOnly    = ($script:choice -eq 'prepare')
     AllowStale     = [bool]($staleToggle -and $staleToggle.Tag.Checked)

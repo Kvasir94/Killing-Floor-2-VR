@@ -1,4 +1,6 @@
 KF2-VR CONTROLS - QUICK CARD (Touch labels)
+Steam: Solo/Host/Join VR or Desktop. Epic: experimental Solo VR only.
+Epic requires manual session Launch Options in the official Epic launcher.
 =========================================
 Full guide and tips: app\docs\VR_CONTROLS.md. Saved settings override defaults.
 Touch: X/Y left, A/B right. Index: A/B on each hand; use the menu chord.

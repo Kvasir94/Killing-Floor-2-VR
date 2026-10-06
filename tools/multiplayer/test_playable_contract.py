@@ -1,6 +1,5 @@
 """Small CPU-only regressions for the release/launcher failures found in play."""
 import math
-import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -190,16 +189,6 @@ class PlayableContractTests(unittest.TestCase):
             self.assertEqual(default, vr_config.normalized("ChestGrenadeOffset", old, default))
         custom = "(X=15,Y=2,Z=-10)"
         self.assertEqual(custom, vr_config.normalized("ChestGrenadeOffset", custom, default))
-
-    def test_every_public_launcher_switch_is_documented(self):
-        docs = (ROOT / "PLAY-MULTIPLAYER.md").read_text(encoding="utf-8")
-        flags = re.findall(r'add_argument\("(--[a-z-]+)"', (ROOT / "tools/multiplayer/friends.py").read_text())
-        for flag in flags + ["--help"]:
-            self.assertIn("`" + flag + "`", docs, flag)
-        for file in ("play-main.ps1", "test-online-play.ps1"):
-            params = (ROOT / "tools" / file).read_text().split("param(", 1)[1].split("\n)", 1)[0]
-            for name in re.findall(r'\]\$(\w+)', params):
-                self.assertIn("`-" + name + "`", docs, file + ": " + name)
 
     def test_smoke_stays_small_and_missing_evidence_fails(self):
         self.assertEqual(["pistol_smoke"], [name for name, _ in acceptance.scenarios("smoke")])

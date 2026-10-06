@@ -13,6 +13,7 @@ import tempfile
 import urllib.request
 import zipfile
 import breacher
+import game_install
 
 from native_fixture import verify_native
 from session import ROOT, digest, source_hashes
@@ -25,12 +26,26 @@ LAUNCHER_MODULES = (
     "watchdog.py", "vr_config.py", "desktop_settings.py", "workshop_map.py", "workshop_loadout.py",
     "release_state.py", "acceptance.py", "launch_menu.py", "launch_state.py", "launcher_gui.py",
     "recovery.py", "diagnostics.py", "dependencies.py", "join_code.py", "local_test_control.py", "breacher.py",
+    "promo_session.py", "promo_events.py", "motion_session.py",
+    "game_install.py", "epic_manual.py", "epic_launch.py", "epic_launch_options.py",
+    "epic_broker.py", "epic_session.py", "epic_recovery.py",
 )
 # The ZIP's only top-level entries; everything else lives in app/.
 START_FILE = "Start KF2-VR.cmd"
 START_SCRIPT = ('@echo off\r\nstart "" "%~dp0app\\runtime\\pythonw.exe" '
                 '"%~dp0app\\tools\\multiplayer\\launcher_gui.py"\r\n')
 README_FILE = "READ ME FIRST.txt"
+
+
+def player_document_root(root, *, public=False):
+    """Use reviewed public overlays in private checkouts; exports are already clean."""
+    root = Path(root)
+    overlay = root / "docs/public-source"
+    return overlay if public and overlay.is_dir() else root
+
+
+def release_audience(public):
+    return "public-alpha" if public else "private-alpha"
 
 
 def add_tkinter(runtime):
@@ -215,24 +230,26 @@ def main(argv=None):
     add_tkinter(runtime)
     # Players see only the start file and READ ME FIRST (added to the ZIP);
     # Only player guides ship; source/developer references remain in the checkout.
-    readme = ROOT / "docs/public-alpha/READ-ME-FIRST.txt"
+    documents = player_document_root(ROOT, public=args.public_release)
+    readme = documents / "docs/public-alpha/READ-ME-FIRST.txt"
     (output / "docs").mkdir(exist_ok=True)
     shutil.copy2(readme, output / "docs")
-    shutil.copy2(ROOT / "docs/public-alpha/RELEASE-NOTES-DRAFT.md", output / "docs")
-    controls = (ROOT / "docs/VR_CONTROLS.md").read_text(encoding="utf-8")
+    shutil.copy2(documents / "docs/public-alpha/RELEASE-NOTES-DRAFT.md", output / "docs")
+    controls = (documents / "docs/VR_CONTROLS.md").read_text(encoding="utf-8")
     # Preserve the full controls guide, but do not ship broken links to
     # developer references which are deliberately absent from a player ZIP.
     player_controls = re.sub(r"\[([^]\n]+)\]\((?!#)[^)]+\)", r"\1", controls)
     (output / "docs/VR_CONTROLS.md").write_text(player_controls, encoding="utf-8")
-    shutil.copy2(ROOT / "docs/public-alpha/BREACHER.md", output / "docs")
-    shutil.copy2(ROOT / "docs/public-alpha/FEEDBACK-QUESTIONS.md", output / "docs")
-    shutil.copy2(ROOT / "docs/public-alpha/CONTROLS-CARD.txt", output / "docs")
+    shutil.copy2(documents / "docs/public-alpha/BREACHER.md", output / "docs")
+    shutil.copy2(documents / "docs/public-alpha/FEEDBACK-QUESTIONS.md", output / "docs")
+    shutil.copy2(documents / "docs/public-alpha/CONTROLS-CARD.txt", output / "docs")
     notices = output / "notices"
     notices.mkdir()
     shutil.copy2(ROOT / "third_party/openxr-sdk/LICENSE", notices / "OpenXR-LICENSE.txt")
     shutil.copy2(ROOT / "third_party/minhook/LICENSE.txt", notices / "MinHook-LICENSE.txt")
     shutil.copytree(ROOT / "third_party/openxr-sdk/LICENSES", notices / "OpenXR-LICENSES")
-    shutil.copy2(ROOT / "docs/public-alpha/THIRD-PARTY-NOTICES.txt", notices)
+    shutil.copy2(documents / "docs/public-alpha/THIRD-PARTY-NOTICES.txt", notices)
+    shutil.copy2(documents / "LICENSE", notices / "KF2VR-LICENSE.txt")
     if frozen:
         copy_frozen_runtime_extras(frozen, output)
     install = json.loads((ROOT / "docs/intake/install_manifest.json").read_text(encoding="utf-8-sig"))
@@ -245,7 +262,11 @@ def main(argv=None):
         return {key: value for key, value in receipt.items() if key.endswith("sha256") or key in ("success", "includes_vr_client", "schema", "started_utc", "finished_utc")}
     manifest = {"build_id": build_id, "version": "0.1.0-alpha", "protocol_version": protocol,
         "breacher_protocol": 1,
-        "public_release": args.public_release, "audience": "private-alpha", "schema": "kf2vr/friend-release/1", "created_utc": datetime.now(timezone.utc).isoformat(),
+        "player_launcher_protocol": 1,
+        "store_launcher_protocol": 1,
+        "supported_game_sha256": [game_install.STEAM_SHA256, game_install.EPIC_SHA256],
+        "store_support": {"steam": "solo-host-join", "epic": "experimental-solo-menu-first-unaccepted"},
+        "public_release": args.public_release, "audience": release_audience(args.public_release), "schema": "kf2vr/friend-release/1", "created_utc": datetime.now(timezone.utc).isoformat(),
         "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "git_status": subprocess.check_output(["git", "status", "--short"], cwd=ROOT, text=True).splitlines(),
         "workspace_sources_sha256": workspace_sources(ROOT),

@@ -1,6 +1,6 @@
 <# Build and select the authoritative multiplayer/VR package from this checkout. #>
 [CmdletBinding()]
-param([string]$Python = 'python')
+param([string]$Python = 'python', [switch]$NoSelect, [switch]$Breacher)
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 Push-Location $repo
@@ -13,7 +13,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Script build failed.' }
     & $Python -m unittest discover -s tools/multiplayer -p 'test_*.py' -q
     if ($LASTEXITCODE -ne 0) { throw 'Offline multiplayer tests failed.' }
-    & $Python tools/multiplayer/package.py
+    $packageArgs = @('tools/multiplayer/package.py')
+    if ($NoSelect) { $packageArgs += '--no-select' }
+    if ($Breacher) { $packageArgs += '--breacher' }
+    & $Python @packageArgs
     if ($LASTEXITCODE -ne 0) { throw 'Packaging failed; previous main package remains selected.' }
-    Write-Host 'Main package selected. Launch Play-KF2VR.cmd.'
+    if ($NoSelect) { Write-Host 'Candidate staged; main package selection preserved.' }
+    else { Write-Host 'Main package selected. Launch Play-KF2VR.cmd.' }
 } finally { Pop-Location }

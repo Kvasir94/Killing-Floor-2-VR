@@ -6,11 +6,24 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from package import check_portable_launchers, copy_launcher_tools, select_candidate, frozen_inputs, copy_frozen_runtime_extras
+from package import check_portable_launchers, copy_launcher_tools, select_candidate, frozen_inputs, copy_frozen_runtime_extras, player_document_root, release_audience
 from release_state import digest
 
 
 class PortablePackageTests(unittest.TestCase):
+    def test_public_documents_and_audience_use_reviewed_overlays_without_changing_private_docs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(root, player_document_root(root, public=True))
+            overlay = root/'docs/public-source'
+            overlay.mkdir(parents=True)
+            (root/'README.md').write_text('private original')
+            (overlay/'README.md').write_text('public guide')
+            self.assertEqual('public guide', (player_document_root(root, public=True)/'README.md').read_text())
+            self.assertEqual('private original', (player_document_root(root)/'README.md').read_text())
+            self.assertEqual('public-alpha', release_audience(True))
+            self.assertEqual('private-alpha', release_audience(False))
+
     def frozen_release(self, root):
         release = root / "frozen"
         files = {}

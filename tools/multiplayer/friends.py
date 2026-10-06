@@ -19,8 +19,11 @@ from native_fixture import NativeDeployment
 from vr_config import import_preferences, export_preferences
 import desktop_settings
 import local_test_control
+import promo_session
+import motion_session
 import join_code
 import breacher
+import game_install
 from workshop_map import MAP_NAME, ensure_map, add_map_path, receipt as map_receipt
 from launch_menu import (DIFFICULTIES, LENGTHS, host_url, installed_maps,
                          installed_solo_maps, resolve_solo_map, choose_options)
@@ -222,6 +225,8 @@ def role_environment(environment, role):
                 or type(percent) is not int or not 50 <= percent <= 100):
             raise ValueError("Eye resolution is valid only for the live VR driver, from 50 to 100 percent")
         result["KF2VR_EYE_RENDER_PERCENT"] = str(percent)
+    result.update(promo_session.environment(role))
+    result.update(motion_session.environment(role))
     return result
 
 
@@ -486,6 +491,10 @@ def parse_options(argv=None):
                         help="Override saved VR eye resolution (50-100, first-run default 100); requires --vr")
     parser.add_argument("--frame-timings", action="store_true",
                         help="Log CPU stage and GPU frame times to native.log every 5 s (low overhead); requires --vr")
+    parser.add_argument("--promo-events", action=argparse.BooleanOptionalAction, default=False,
+                        help="This live VR session: log highlight hit/kill events and F9 video sync marks; initially OFF")
+    parser.add_argument("--record-motion", action=argparse.BooleanOptionalAction, default=False,
+                        help="This live VR session: record player headset/controllers/input and presentation locally; initially OFF")
     parser.add_argument("--threaded-render", action=argparse.BooleanOptionalAction, default=None,
                         help="Experimental: render on UE3's render thread instead of -onethread (saved, initially off). "
                              "The portal gun's see-through view works only with this off; requires --vr")
@@ -501,6 +510,9 @@ def parse_options(argv=None):
     parser.add_argument("--share-address", help="Host-only address for the join code; defaults to the public IP reported by the server")
     parser.add_argument("--password")
     parser.add_argument("--game-root", type=Path)
+    parser.add_argument("--store", choices=("auto", "steam", "epic"), default="auto",
+                        help="Select the installed store; Auto uses one installation or the last used folder")
+    parser.add_argument("--recover-epic", action="store_true", help="Restore a verified owned Epic deployment after KF2 exits")
     parser.add_argument("--server-root", type=Path, default=SHARED / "KF2VR-Server")
     parser.add_argument("--cache-root", type=Path, default=SHARED / "KF2VR-Cache")
     parser.add_argument("--port", type=int, default=7777)
@@ -590,6 +602,8 @@ def parse_options(argv=None):
 
 def validate_play_mode(args):
     local_test_control.validate_options(args)
+    if (args.promo_events or args.record_motion) and (not args.vr or args.replay_teammate or args.avatar_preview or args.locomotion_preview):
+        raise RuntimeError("Motion recording and highlight events require live VR play; omit desktop and replay/preview options.")
     # Profile and menu choices resolve after parsing. An explicit VR override
     # must not silently disappear when the resolved play mode is Desktop.
     if not args.vr and (getattr(args, "headset_preset", None) is not None
@@ -631,12 +645,14 @@ def main():
             raise RuntimeError(f"Package file changed or missing: {name}. Extract a fresh copy.")
     saved_path = ROOT / "settings.json"
     saved = json.loads(saved_path.read_text(encoding="utf-8")) if saved_path.exists() else {}
-    game = args.game_root or (Path(saved["game_root"]) if saved.get("game_root") else find_game())
-    if not game:
-        game = Path(input("KF2 installation folder: ").strip().strip('"'))
-    exe = game / "Binaries/Win64/KFGame.exe"
-    if not exe.exists() or digest(exe) != manifest["game_sha256"]:
-        raise RuntimeError("KF2 version differs from this prototype. A matching build is required.")
+    install = game_install.select_for_launch(store=args.store, root=args.game_root, saved_root=saved.get("game_root"))
+    game_install.validate_native(install, manifest.get("supported_game_sha256", [manifest["game_sha256"]]))
+    game, exe = install.root, install.executable
+    if install.store == "epic":
+        from epic_manual import run_session
+        return run_session(args, manifest, install)
+    if args.recover_epic:
+        raise RuntimeError("Epic recovery requires --store epic and the Epic installation.")
     if (exe.parent / "dinput8.dll").exists():
         raise RuntimeError("Another VR/mod session has a native proxy installed. Close it and let its launcher clean up first.")
     load_preferences(args)
@@ -681,7 +697,7 @@ def main():
     breacher.prepare(args, ROOT, manifest)
     if args.breacher:
         print("Breacher ON: experimental Deadbolt/Cascade; all players require matching local content. No automatic download.", flush=True)
-    saved.update(game_root=str(game), address=args.address)
+    saved.update(game_root=str(game), address=args.address, store="steam")
     saved_path.write_text(json.dumps(saved, indent=2), encoding="utf-8")
     # Use the Windows known-folder API through the standard registry for moved
     # Documents folders (including OneDrive), rather than assuming USERPROFILE.
@@ -701,6 +717,8 @@ def main():
     if args.replay_teammate:
         names.append("teammate")
     roles = [configure_role(run, name, user, game, args) for name in names]
+    promo_id = promo_session.configure(roles, args.promo_events)
+    capture = motion_session.configure(roles, args.record_motion)
     player_role = next(role for role in roles if role["role"] == "driver")
     # Host and Solo share common choices; save_preferences retains the hosted
     # loadout when Solo's effective content selection is empty.
@@ -730,7 +748,15 @@ def main():
               "vr_quality_requested": args.vr_quality_requested,
               "eye_render_percent": player_role.get("eye_render_percent"),
               "eye_render_percent_requested": args.eye_render_percent,
-              "frame_timings": args.frame_timings, "threaded_render": args.threaded_render}
+              "frame_timings": args.frame_timings, "threaded_render": args.threaded_render,
+              "promo_events": args.promo_events, "promo_session_id": promo_id,
+              "capture": capture, "record_motion": args.record_motion}
+    if capture:
+        print(f"Capture session: {capture['capture_session_id']} UTC {capture['capture_session_started_utc']}", flush=True)
+        if args.record_motion:
+            print(f"Replay recording output: {capture['motion_session_dir']}", flush=True)
+        if args.promo_events:
+            print("Highlight event output: " + ", ".join(role['promo_log'] for role in roles if role.get('promo_log')), flush=True)
     if args.avatar_preview:
         record["capture_search_started_unix"] = time.time()
     output = run / "run.json"

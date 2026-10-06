@@ -54,7 +54,8 @@ inline bool IsAdmittedNetworkClient(const LocalWorldSnapshot& world, bool reques
 // or an anti-cheat approval. Recheck after travel; never cache a true result.
 template<class Reader>
 bool CheckStandaloneWorld(std::uintptr_t gameBase, std::uintptr_t localPlayer,
-                          Reader&& reader, LocalWorldSnapshot& out) {
+                          Reader&& reader, LocalWorldSnapshot& out,
+                          std::uintptr_t worldPointerRva=kWorldPointerRva) {
     LocalWorldSnapshot value;
     auto read = [&](std::uintptr_t object, std::size_t offset, auto& target) {
         using T = std::remove_reference_t<decltype(target)>;
@@ -71,7 +72,7 @@ bool CheckStandaloneWorld(std::uintptr_t gameBase, std::uintptr_t localPlayer,
     };
     std::uintptr_t actors = 0, controllerWorld = 0;
     std::int32_t count = 0, capacity = 0;
-    if (!read(gameBase, kWorldPointerRva, value.world) ||
+    if (!read(gameBase, worldPointerRva, value.world) ||
         !read(value.world, kWorldPersistentLevel, value.level) ||
         !read(value.level, kLevelActorData, actors) ||
         !read(value.level, kLevelActorCount, count) ||

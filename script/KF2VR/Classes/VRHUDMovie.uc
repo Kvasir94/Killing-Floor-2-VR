@@ -112,8 +112,61 @@ function bool CaptureCurrentWavePriority()
     return SpatialHUD.CaptureWavePriorityMessage(Title, Detail, LifeTime);
 }
 
+// Only stock Use messages share the VR interaction binding. Heal, bash and
+// inventory hints keep their own text/binding. Scaleform normally splits the
+// localized hold delimiter; the spatial Canvas never runs that substitution.
+function FormatUseInteraction(int MessageIndex, out string Text, out string Button,
+    out string HoldText, out string HoldButton)
+{
+    local int HoldAt;
+    local bool bDualHand, bDoor;
+    switch (MessageIndex)
+    {
+        case IMT_UseDoor:
+        case IMT_UseDoorWelded:
+        case IMT_RepairDoor:
+            bDoor = true;
+            break;
+        case IMT_UseTrader:
+        case IMT_AcceptObjective:
+        case IMT_ReceiveAmmo:
+        case IMT_ReceiveGrenades:
+        case IMT_UseMinigame:
+        case IMT_UseMinigameGenerator:
+        case IMT_DoshActivate:
+        case IMT_UsePowerUp:
+            break;
+        default:
+            return;
+    }
+    bDualHand = SpatialHUD.Bridge != None && SpatialHUD.Bridge.HandInventory != None
+        && SpatialHUD.Bridge.HandInventory.Input != None
+        && SpatialHUD.Bridge.HandInventory.Input.bInitialized;
+    Button = bDualHand ? "EMPTY-HAND TRIGGER" : "LEFT TRIGGER";
+    HoldAt = InStr(Caps(Text), Caps(HoldCommandDelimiter));
+    if (HoldAt >= 0)
+    {
+        HoldText = Mid(Text, HoldAt + Len(HoldCommandDelimiter));
+        Text = Left(Text, HoldAt);
+        HoldButton = bDualHand ? "HOLD SAME TRIGGER" : "HOLD LEFT TRIGGER";
+        // VRDoorWelding draws the right-hand welder from the non-movement
+        // stick click. Movement handedness changes that click, not the tool.
+        if (bDoor && bDualHand)
+            HoldButton = SpatialHUD.Bridge.MovementHand == 1 ? "LEFT STICK CLICK" : "RIGHT STICK CLICK";
+    }
+    if (Text != "") Text = "TAP:" @ Text;
+    else
+    {
+        Text = HoldText;
+        Button = HoldButton;
+        HoldText = "";
+        HoldButton = "";
+    }
+}
+
 function DisplayInteractionMessage(string MessageString, int MessageIndex, optional string ButtonName="", optional float Duration)
 {
+    local string SpatialText, SpatialButton, HoldText, HoldButton;
     if (MessageString == "")
     {
         HideInteractionMessage();
@@ -126,7 +179,11 @@ function DisplayInteractionMessage(string MessageString, int MessageIndex, optio
         if (Duration > 0)
             KFPC.SetTimer(Duration, false, nameOf(HideInteractionMessage), self);
     }
-    if (SpatialHUD != None && SpatialHUD.CaptureInteractionMessage(MessageString, ButtonName, Duration))
+    SpatialText = MessageString;
+    SpatialButton = ButtonName;
+    if (SpatialHUD != None)
+        FormatUseInteraction(MessageIndex, SpatialText, SpatialButton, HoldText, HoldButton);
+    if (SpatialHUD != None && SpatialHUD.CaptureInteractionMessage(SpatialText, SpatialButton, Duration, HoldText, HoldButton))
     {
         if (InteractionMessageContainer != None) InteractionMessageContainer.SetVisible(false);
         return;

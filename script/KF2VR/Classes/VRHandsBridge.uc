@@ -334,6 +334,10 @@ var int NativeBackBlastReady;
 var VRHeldInventory HeldInventory;
 var config bool bIndependentHands, bToggleGrip;
 var config bool bHoldSupportGrip, bBodySlotsEnabled;
+// Physical-stock option: the primary controller alone aims/anchors firearms.
+// Support ownership, sighted handling and braced recoil remain grip-driven.
+// False also preserves the existing alignment for profiles missing this key.
+var config bool bDisableSupportHandAim;
 // Hold-to-grab for empty hands: grip a real physics body on an ordinary zed
 // or a corpse. Prototype gate; see docs/ZED_PHYSICS_GRAB_ROADMAP.md.
 // Solo only; multiplayer follows the host's session setting.
@@ -2702,7 +2706,14 @@ simulated function PlaceWeapon()
     }
     // A pistol's support hand wraps the firing hand. Its short wrist baseline
     // cannot define a stable aim axis; primary orientation still owns the bore.
-    if (!WeaponProfiles[ActiveProfile].bPistolBrace
+    if (bDisableSupportHandAim && WeaponProfiles[ActiveProfile].bFirearm)
+    {
+        // Apply the saved choice immediately, including a pending release
+        // blend. Do not release the support role or discard braced recoil.
+        bWasTwoHandedAim = false;
+        bTwoHandReleaseSmoothing = false;
+    }
+    else if (!WeaponProfiles[ActiveProfile].bPistolBrace
         && Hands[SupportHand].SupportOwner == WeaponHand && !IsWeaponReadying(W) && !bReadyPoseSettling)
     {
         Forward = Normal(Hands[SupportHand].Position - Hands[WeaponHand].Position);

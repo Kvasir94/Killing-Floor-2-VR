@@ -10,6 +10,7 @@ near-black scanlined plates, blood-red hairlines, condensed uppercase headings
 and an art rail made from the player's own installed KF2 wallpaper and logo.
 """
 from datetime import datetime
+import argparse
 import ctypes
 import json
 import os
@@ -18,6 +19,7 @@ import re
 import subprocess
 import sys
 import threading
+import game_install
 import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 
@@ -27,7 +29,7 @@ ROOT = HERE.parents[1]
 OUTER = ROOT.parent if ROOT.name.lower() == "app" else ROOT
 LOGS = ROOT / "logs"
 REPORT_BUTTON = "Save logs for a bug report"
-REPORT_WHERE = "Post bug reports in Discord"
+REPORT_WHERE = "Post public bug reports in GitHub Issues"
 NO_WINDOW = 0x08000000
 PYTHON = Path(sys.executable).with_name("python.exe")
 
@@ -45,6 +47,7 @@ SCALES = ["Keep my last setting"] + [f"{n}%" for n in range(100, 49, -5)]
 
 # Progress lines printed by friends.py and the server installer, in plain words.
 STATUS = (
+    ("Epic game connected", "Epic connected. Choose Play Solo Offline, your map and perk, then Ready. Keep this window open."),
     ("Build:", "Checking your game and files..."),
     ("Join code accepted", "Code accepted. Getting ready..."),
     ("Preparing the free dedicated server", "Setting up the game server..."),
@@ -126,18 +129,53 @@ def friendly(message):
     return next((text for key, text in FRIENDLY_ERRORS if key in message), message or "Something went wrong.")
 
 
-def game_folder():
+def game_folder(store="auto"):
     settings = ROOT / "settings.json"
-    if settings.exists():
-        saved = json.loads(settings.read_text(encoding="utf-8")).get("game_root")
-        if saved and (Path(saved) / "Binaries/Win64/KFGame.exe").exists():
-            return Path(saved)
-    import friends
-    return friends.find_game()
+    try:
+        saved = json.loads(settings.read_text(encoding="utf-8")).get("game_root") if settings.exists() else None
+    except (OSError, ValueError, AttributeError):
+        saved = None
+    try:
+        return game_install.select_for_launch(store=store, saved_root=saved).root
+    except (ValueError, OSError):
+        return None
+
+
+def parse_context(argv=None):
+    parser = argparse.ArgumentParser(description="KF2-VR player window")
+    parser.add_argument("--self-check", action="store_true")
+    parser.add_argument("--workspace", type=Path)
+    parser.add_argument("--initial-arguments", type=json.loads, default=[])
+    parser.add_argument("--allow-stale", action="store_true")
+    parser.add_argument("--stale", action="store_true")
+    context = parser.parse_args(argv)
+    if not isinstance(context.initial_arguments, list) or any(not isinstance(item, str) for item in context.initial_arguments):
+        parser.error("--initial-arguments must be a JSON list of launch arguments")
+    if context.initial_arguments and not context.workspace:
+        parser.error("--initial-arguments requires --workspace")
+    return context
+
+
+def contextual_arguments(arguments, saved, context):
+    """Only repository dependency locations differ from an ordinary portable launch."""
+    result = list(arguments)
+    if not context.workspace:
+        return result
+    result += ["--cache-root", str(saved.cache_root)]
+    if "--host" in result:
+        result += ["--server-root", str(saved.server_root)]
+    if saved.prepare_only:
+        result.append("--prepare-only")
+    for flag in ("--damage-popups", "--no-damage-popups"):
+        if flag in context.initial_arguments and "--host" in result:
+            result.append(flag)
+    if "--test-map-players" in context.initial_arguments and "--host" in result:
+        result += ["--test-map-players", str(saved.test_map_players)]
+    return result
 
 
 class Launcher(tk.Tk):
-    def __init__(self, art=True):
+    def __init__(self, art=True, context=None):
         super().__init__()
         release = ROOT / "release.json"
         manifest = json.loads(release.read_text(encoding="utf-8")) if release.exists() else {}
@@ -151,10 +189,24 @@ class Launcher(tk.Tk):
         self.theme()
         import friends
         from workshop_loadout import load_preferences
-        self.saved = friends.parse_options(["--host"])
+        self.context = context or argparse.Namespace(workspace=None, initial_arguments=[], allow_stale=False, stale=False)
+        self.saved = friends.parse_options(self.context.initial_arguments or ["--host"])
         load_preferences(self.saved)
+        self.store = tk.StringVar(value=self.saved.store)
+        try:
+            chosen = game_install.select_for_launch(store=self.saved.store, root=self.saved.game_root,
+                                                    saved_root=game_folder(self.saved.store))
+            self.store.set(chosen.store)
+        except (ValueError, OSError):
+            pass
         self.vr = tk.BooleanVar(value=bool(self.saved.vr))
-        self.frame_timings = tk.BooleanVar(value=False)
+        self.frame_timings = tk.BooleanVar(value=bool(self.saved.frame_timings))
+        self.record_motion = tk.BooleanVar(value=bool(self.saved.record_motion))
+        self.highlight_events = tk.BooleanVar(value=bool(self.saved.promo_events))
+        if self.store.get() == "epic":
+            self.vr.set(True)
+            self.record_motion.set(False)
+            self.highlight_events.set(False)
         self.process = None
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.rail = tk.Canvas(self, width=self.rail_width, bg=PLATE, highlightthickness=0)
@@ -369,21 +421,63 @@ class Launcher(tk.Tk):
     # ----- home -----------------------------------------------------------
     def home(self):
         frame = self.screen("Play", "Pick how you're playing, then what you want to do.")
+        stores = {"auto": "Auto detect", "steam": "Steam", "epic": "Epic Games - experimental Solo VR"}
+        grid, fields = self.form(frame), {}
+        self.combo(grid, fields, "Game store", stores, self.store.get())
+        def change_store(event):
+            self.store.set(self.pick(fields, "Game store"))
+            self.saved.game_root = None
+            if self.store.get() == "auto":
+                try:
+                    chosen = game_install.select_for_launch(saved_root=game_folder())
+                    self.store.set(chosen.store)
+                except (ValueError, OSError):
+                    pass
+            if self.store.get() == "epic":
+                self.vr.set(True)
+                self.record_motion.set(False)
+                self.highlight_events.set(False)
+            self.home()
+        fields["Game store"][0].bind("<<ComboboxSelected>>", change_store)
+        installed = sorted({i.store for i in game_install.discover()})
+        names = {"steam": "Steam", "epic": "Epic Games"}
+        status = "Detected: " + ", ".join(names[i] for i in installed) if installed else "No completed Steam or Epic installation detected. Choose Play solo to locate your game folder."
+        if self.store.get() == "auto" and installed:
+            status += ". Choose the store you want to play."
+        self.label(frame, status, "small", DIM, wraplength=self.px(640)).pack(anchor="w", pady=self.px(4))
+        epic = self.store.get() == "epic"
         modes = tk.Frame(frame, bg=INK)
         modes.pack(fill="x", pady=(self.px(6), self.px(16)))
         chips = []
         def choose(value):
             self.vr.set(value)
+            for control in capture_controls:
+                control.configure(state="normal" if value else "disabled")
             for chip in chips:
                 chip.paint()
-        for text, value in (("VR headset", True), ("Desktop - no headset", False)):
+        for text, value in (("VR headset", True),) if epic else (("VR headset", True), ("Desktop - no headset", False)):
             chips.append(self.chip(modes, text, lambda value=value: self.vr.get() == value, lambda value=value: choose(value)))
             chips[-1].pack(side="left", padx=(0, self.px(10)))
-        for title, text, command in (
+        cards = (
                 ("Join a friend", "Paste the code your friend sent you.", self.join),
                 ("Host a game", "Start a game and get a code to send your friends.", lambda: self.options("host")),
-                ("Play solo", "Practice on your own. No server, no download.", lambda: self.options("solo"))):
+                ("Play solo", "Practice on your own. No server, no download.", lambda: self.options("solo")))
+        for title, text, command in cards[2:] if epic else cards:
             self.card(frame, title, text, command).pack(fill="x", pady=self.px(6))
+        if epic:
+            self.label(frame, "Epic uses your official launcher: copy one session line into Launch Options, then click Launch there. "
+                       "Solo is experimental and awaiting acceptance; Host, Join, Desktop and recording are unavailable.",
+                       "small", AMBER, wraplength=self.px(640)).pack(anchor="w", pady=self.px(6))
+        self.section(frame, "Recording for this session")
+        capture_controls = []
+        for text, variable in (("Replay recording - player motion and input", self.record_motion),
+                               ("Highlight event logging - hits, kills and F9 video sync", self.highlight_events)):
+            control = ttk.Checkbutton(frame, text=text, variable=variable,
+                                      state="normal" if self.vr.get() and not epic else "disabled")
+            control.pack(anchor="w")
+            capture_controls.append(control)
+        self.label(frame, "VR only. Local files; no video, audio or automatic sharing. Both start OFF on a fresh launch.",
+                   "small", DIM, wraplength=self.px(640)).pack(anchor="w", pady=(self.px(4), 0))
         tools = tk.Frame(frame, bg=INK)
         tools.pack(side="bottom", fill="x")
         for text, command in (("Settings", self.settings), (REPORT_BUTTON, self.send_logs),
@@ -398,15 +492,32 @@ class Launcher(tk.Tk):
 
     # ----- solo / host ----------------------------------------------------
     def need_game(self):
-        game = game_folder()
+        try:
+            install = game_install.select_for_launch(store=self.store.get(), root=self.saved.game_root,
+                                                     saved_root=game_folder(self.store.get()))
+            self.store.set(install.store)
+            self.saved.game_root = install.root
+            return install.root
+        except (ValueError, OSError) as error:
+            if "Choose a Killing Floor" in str(error):
+                messagebox.showinfo("Choose a store", "Both stores or multiple installations were found. Choose Steam or Epic above, "
+                                   "or pass --game-root for the installation you want.")
+                return None
+        game = None
         while not game:
             if not messagebox.askokcancel("Find Killing Floor 2",
                     "KF2-VR couldn't find Killing Floor 2.\n\nPress OK, then pick the 'killingfloor2' folder "
-                    "(usually Steam\\steamapps\\common\\killingfloor2)."):
+                    "inside your Steam or Epic library."):
                 return None
             picked = filedialog.askdirectory(title="Pick the killingfloor2 folder")
             if picked and (Path(picked) / "Binaries/Win64/KFGame.exe").exists():
-                game = Path(picked)
+                try:
+                    install = game_install.select_for_launch(store=self.store.get(), root=Path(picked))
+                    self.store.set(install.store)
+                    self.saved.game_root = install.root
+                    game = install.root
+                except (ValueError, OSError) as error:
+                    messagebox.showwarning("Game selection", str(error))
             elif picked:
                 messagebox.showwarning("Not that folder", "That folder doesn't contain Killing Floor 2. Try again.")
         return game
@@ -419,6 +530,9 @@ class Launcher(tk.Tk):
         if not game:
             return
         solo = kind == "solo"
+        if self.store.get() == "epic" and (not solo or not self.vr.get()):
+            messagebox.showinfo("Epic Solo VR", "Epic currently supports experimental Solo VR only.")
+            return
         maps = installed_solo_maps(game) if solo else installed_maps(game, self.saved.server_root)
         if not maps:
             messagebox.showerror("No maps", "No Killing Floor 2 maps were found in your game folder.")
@@ -427,6 +541,10 @@ class Launcher(tk.Tk):
             ("Practice on your own. No download needed." if solo else
              "The first time you host, KF2-VR downloads the free KF2 game server (about 32 GB). "
              "Your friends don't need it.") + ("  Playing in VR." if self.vr.get() else "  Playing on desktop."))
+        if self.store.get() == "epic":
+            self.label(frame, "Epic opens the stock menu. Choose map, difficulty and length there. These selections also "
+                       "populate the headset's LOCAL MATCH menu. Startup still needs headset retesting.",
+                       "small", AMBER, wraplength=self.px(640)).pack(anchor="w")
         self.section(frame, "Match")
         grid = self.form(frame)
         names = {m: m.removeprefix("KF-").replace("_", " ") + ("  (test map)" if m == MAP_NAME else "") for m in maps}
@@ -439,7 +557,8 @@ class Launcher(tk.Tk):
             self.section(frame, "Headset")
             grid = self.form(frame)
             self.combo(grid, fields, "Graphics", QUALITY_LABELS, self.saved.vr_quality)
-            self.combo(grid, fields, "Render scale", {s: s for s in SCALES}, SCALES[0])
+            scale = f"{self.saved.eye_render_percent}%" if self.saved.eye_render_percent is not None else SCALES[0]
+            self.combo(grid, fields, "Render scale", {s: s for s in [*SCALES, scale]}, scale)
             self.label(frame, "Shared with Settings and in-game VR Controls > Graphics.",
                        "small", DIM, wraplength=self.px(600)).pack(anchor="w")
         extras = {}
@@ -475,10 +594,11 @@ class Launcher(tk.Tk):
                         variable=extras["breacher"]).pack(anchor="w", pady=(self.px(6), 0))
 
         # This opt-in belongs to one Solo VR launch and is never loaded/saved.
-        extras["local_test_control"] = tk.BooleanVar(value=False)
+        extras["local_test_control"] = tk.BooleanVar(value=bool(self.saved.local_test_control and solo and self.vr.get()
+                                                               and self.store.get() != "epic"))
         ttk.Checkbutton(frame, text="Local agent test control (Solo VR only; this launch)",
                         variable=extras["local_test_control"],
-                        state="normal" if solo and self.vr.get() else "disabled").pack(
+                        state="normal" if solo and self.vr.get() and self.store.get() != "epic" else "disabled").pack(
                             anchor="w", pady=(self.px(6), 0))
         self.label(frame, "UNRANKED test session; not saved. Hosted/Join control is unavailable.",
                    "small", DIM).pack(anchor="w")
@@ -512,8 +632,15 @@ class Launcher(tk.Tk):
 
     # ----- join -----------------------------------------------------------
     def join(self):
+        if self.store.get() == "epic":
+            messagebox.showinfo("Epic Join unavailable", "Epic multiplayer joining has not been verified in this alpha.")
+            return
         game = self.need_game()
         if not game:
+            return
+        if self.store.get() == "epic":
+            messagebox.showinfo("Epic Join unavailable", "Epic supports experimental Solo VR only. Select Play solo.")
+            self.home()
             return
         frame = self.screen("Join a friend",
             "Your friend gets a code when they host. It starts with KF2VR1: - copy the whole thing and paste it here.")
@@ -565,7 +692,33 @@ class Launcher(tk.Tk):
         self.footer(frame, start=start, start_text="Join")
 
     # ----- running session ------------------------------------------------
+    def allow_workspace_launch(self):
+        if not self.context.workspace:
+            return True
+        from release_state import selected_release, verify_workspace
+        try:
+            package, manifest = selected_release(self.context.workspace)
+            if package != ROOT.resolve():
+                raise RuntimeError("The selected package changed while this window was open. Reopen Play-KF2VR.cmd.")
+        except Exception as error:
+            messagebox.showerror("Selected package changed", str(error))
+            return False
+        try:
+            verify_workspace(self.context.workspace, manifest)
+        except RuntimeError as error:
+            if not self.context.allow_stale and not messagebox.askyesno("Play this older build?",
+                    "The selected package is older than the current source. Its files are intact. "
+                    "Play this older build anyway?\n\n" + str(error)):
+                return False
+        return True
+
     def run(self, arguments, title):
+        if not self.allow_workspace_launch():
+            return
+        arguments = contextual_arguments(arguments, self.saved, self.context)
+        arguments += ["--store", self.store.get()]
+        arguments.append("--record-motion" if self.vr.get() and self.record_motion.get() else "--no-record-motion")
+        arguments.append("--promo-events" if self.vr.get() and self.highlight_events.get() else "--no-promo-events")
         if self.vr.get() and self.frame_timings.get():
             arguments.append("--frame-timings")
         LOGS.mkdir(exist_ok=True)
@@ -577,6 +730,7 @@ class Launcher(tk.Tk):
                 stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
         self.download_log = None
         self.join_code = None
+        self.epic_options = None
         frame = self.screen(title, "VR headset" if self.vr.get() else "Desktop")
         self.status = self.label(frame, "Starting...", "status", WHITE, wraplength=self.px(640))
         self.status.pack(anchor="w", pady=(self.px(10), 0))
@@ -618,6 +772,10 @@ class Launcher(tk.Tk):
         self.show_download()
         if "Host ready" in text and not self.join_code:
             self.show_join_code()
+        options = re.findall(r"^Epic Launch Options: (.+)$", text, re.M)
+        if options and not self.epic_options and self.process.poll() is None:
+            self.epic_options = options[-1]
+            self.show_epic_options()
         if self.process.poll() is None:
             self.after(400, self.poll)
             return
@@ -628,7 +786,9 @@ class Launcher(tk.Tk):
             child.destroy()
         errors = re.findall(r"Could not start/finish KF2-VR: (.*)", text)
         if self.process.returncode == 0:
-            self.status.configure(text="All done. Killing Floor 2 is back to normal.\nYou can close this window.")
+            self.status.configure(text=("Native files restored. In Epic, remove the KF2-VR Launch Options and restore your previous "
+                                        "text/switch setting before normal play." if self.epic_options else
+                                        "All done. Killing Floor 2 is back to normal.\nYou can close this window."))
         else:
             self.progress.pack_forget()
             self.status.configure(fg=RED_HOT, text="Something went wrong")
@@ -638,6 +798,23 @@ class Launcher(tk.Tk):
             self.button(self.actions, REPORT_BUTTON, self.send_logs, primary=True).pack(side="right")
         self.process = None
         self.button(self.actions, "Back to start", self.home).pack(side="left")
+
+    def show_epic_options(self):
+        self.status.configure(text="Copy the line below into Epic > Library > KF2 > Manage > Launch Options. "
+                              "Save your previous text locally; replace the field, switch ON, and click Launch in Epic within five minutes.")
+        box = self.code_box
+        line = tk.Text(box, height=4, wrap="word", bg=PLATE, fg=FG, font=("Consolas", 9))
+        line.insert("1.0", self.epic_options)
+        line.configure(state="disabled")
+        line.pack(fill="x", pady=self.px(8))
+        def copy():
+            self.clipboard_clear()
+            self.clipboard_append(self.epic_options)
+            self.update()
+        self.button(box, "Copy Epic Launch Options", copy, primary=True, small=True).pack(anchor="w")
+        self.label(box, "Keep this window open. In the game, choose Play Solo Offline, then map, perk and Ready. "
+                   "After quitting, restore your previous Epic Launch Options. This startup awaits headset acceptance.",
+                   "small", AMBER, wraplength=self.px(640)).pack(anchor="w", pady=self.px(8))
 
     def show_download(self):
         if not self.download_log or not self.download_log.exists() or not self.process or self.process.poll() is not None:
@@ -672,7 +849,7 @@ class Launcher(tk.Tk):
         def copy():
             self.clipboard_clear()
             self.clipboard_append(self.join_code)
-            copied.configure(text="Copied! Paste it to your friends in Discord.")
+            copied.configure(text="Copied! Send it to your friends in a private message.")
         self.button(row, "Copy code", copy, primary=True, small=True).pack(side="left")
         copied.pack(side="left", padx=self.px(12))
         self.label(box, "Friends on the internet also need UDP ports 7777 and 27015 forwarded to this PC "
@@ -704,6 +881,8 @@ class Launcher(tk.Tk):
         self.combo(grid, fields, "Gun aim angle", aims, hands.get("ActiveControllerFitProfile", "Neutral"))
         self.combo(grid, fields, "Walk with", sides, hands.get("MovementHand", "0"))
         self.combo(grid, fields, "Main gun hand", sides, hands.get("PreferredWeaponHand", "1"))
+        self.combo(grid, fields, "Support-hand aim", {"False": "Align with both hands", "True": "Physical stock - gun hand aims"},
+                   hands.get("bDisableSupportHandAim", "False").capitalize())
         self.section(frame, "Comfort and graphics")
         grid = self.form(frame)
         self.combo(grid, fields, "Turning", {"True": "Snap turn", "False": "Smooth turn"},
@@ -726,6 +905,7 @@ class Launcher(tk.Tk):
                 "ActiveControllerFitProfile": pick("Gun aim angle"), "FirearmAimPitchDegrees": pitch,
                 "FirearmAimYawDegrees": "0.0", "FirearmAimRollDegrees": "0.0",
                 "MovementHand": pick("Walk with"), "PreferredWeaponHand": pick("Main gun hand"),
+                "bDisableSupportHandAim": pick("Support-hand aim"),
                 "bZedGrabEnabled": "True" if grab.get() else "False"})
             updated = set_ini(updated, "KF2VR.VRSessionUI", {
                 "bSnapTurn": pick("Turning"), "EyeRenderPercent": pick("Render scale")})
@@ -764,6 +944,11 @@ class Launcher(tk.Tk):
         if self.process and self.process.poll() is None:
             messagebox.showinfo("Still running", "Wait for the current game to close first.")
             return
+        if self.store.get() == "epic":
+            game = self.need_game()
+            if game:
+                self.run(["--store", "epic", "--recover-epic", "--game-root", str(game)], "Epic recovery")
+            return
         output = io.StringIO()
         try:
             with contextlib.redirect_stdout(output):
@@ -780,21 +965,21 @@ class Launcher(tk.Tk):
 
 
 def main(argv=None):
-    argv = sys.argv[1:] if argv is None else argv
+    context = parse_context(argv)
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except (AttributeError, OSError):
         pass
-    if "--self-check" in argv:
+    if context.self_check:
         # Packaging check: build every screen without launching anything.
-        window = Launcher(art=False)
+        window = Launcher(art=False, context=context)
         window.withdraw()
         window.settings()
         window.home()
         window.update_idletasks()
         window.destroy()
         return 0
-    Launcher().mainloop()
+    Launcher(context=context).mainloop()
     return 0
 
 

@@ -37,6 +37,8 @@
 #include "HandWrist.h"
 #include "PresentHandoff.h"
 #include "GameScript.h"
+#include "EpicSession.h"
+#include "include/kf2vr/adapter/GameBuild.h"
 #include "ScriptField.h"
 #include "ScriptWriteBatch.h"
 #include "FrameTiming.h"
@@ -51,6 +53,8 @@
 #include "WeaponHandling.h"
 #include "PerkContext.h"
 #include "DamagePopupScore.h"
+#include "PromoEventLog.h"
+#include "PromoSyncMarker.h"
 #include "ReloadMeshPop.h"
 #include "WeaponRuntimeDispatch.h"
 #include "VmCallbackFilter.h"
@@ -76,8 +80,7 @@ namespace {
 // Passive mode only records evidence. Explicit local stereo mode temporarily
 // replaces the validated scene-family view list and publishes a virtual pad.
 // Function ABIs and RVAs come from docs/re/01-render-integration-map.md and
-// are enabled only after independently hashing this exact executable.
-constexpr char kHash[]="77ab9c2cf43aeaa3038274fff3822064815a3ea02a1b3c81870cdc12a885c994";
+// are enabled only after independently hashing a supported executable.
 FILE* logFile=nullptr;
 SRWLOCK logLock=SRWLOCK_INIT;
 uintptr_t gameBase=0;
@@ -236,6 +239,8 @@ bool handReplayRequested=false;
 bool inputReplayRequested=false;
 adapter::ReplayInput replayInput;
 static adapter::motion::Runtime motionRuntime;
+using ProcessExit=void(WINAPI*)(UINT);
+ProcessExit originalProcessExit=nullptr;
 static kf2vr::localtest::Bridge localTestControl;
 bool portalRequested=false;
 bool singleViewDiagnostic=false;
@@ -264,6 +269,8 @@ unsigned selectorRegistrations=0,selectorClears=0,selectorDraws=0;
 using Draw=void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*,UINT,UINT);
 Draw originalDraw=nullptr;
 void Log(const char* format,...);
+kf2vr::adapter::promo::Log promoLog;
+kf2vr::adapter::promo::SyncMarker promoMarker;
 void TraceSelectorTarget(ID3D11DeviceContext* context,ID3D11RenderTargetView* view,
     const char* phase,bool corrected,const FLOAT* clear=nullptr) {
     if(!view) return;
@@ -331,6 +338,14 @@ void Log(const char* format,...) {
     std::fputc('\n',logFile); std::fflush(logFile);
     ReleaseSRWLockExclusive(&logLock);
 }
+void WINAPI HookProcessExit(UINT code) {
+    // Drain before ExitProcess starts DLL teardown, on the producer thread.
+    // This callback never runs from this adapter's DllMain.
+    const auto gameThread=worldDrawThread.load(std::memory_order_acquire);
+    if (!gameThread || GetCurrentThreadId()==gameThread) motionRuntime.Shutdown();
+    else Log("MotionSession orderly_flush=0 reason=non_game_thread_exit");
+    originalProcessExit(code);
+}
 bool HashFile(const wchar_t* path,std::string& result) {
     HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
     if (file==INVALID_HANDLE_VALUE) return false;
@@ -387,7 +402,7 @@ void* HookCalc(void* player,void* family,void* location,void* rotation,void* vie
     adapter::timing::Scope timing(adapter::timing::ViewSetup);
     void* result=originalCalc(player,family,location,rotation,viewport,drawer);
     const auto count=++views;
-    if (result && reinterpret_cast<uintptr_t>(_ReturnAddress())-gameBase==0x676cca) {
+    if (result && reinterpret_cast<uintptr_t>(_ReturnAddress())-gameBase==adapter::build::Rva(0x676cca)) {
         lastLocalFamily=family;
         lastLocalPlayer=player;
         lastLocalViewport=viewport;
@@ -410,7 +425,7 @@ void* HookCalc(void* player,void* family,void* location,void* rotation,void* vie
                 [](uintptr_t source,void* target,size_t bytes) {
                     if (!Readable(reinterpret_cast<void*>(source),bytes)) return false;
                     std::memcpy(target,reinterpret_cast<void*>(source),bytes); return true;
-                },world);
+                },world,adapter::build::Rva(pinned::kWorldPointerRva));
             Log("LocalWorld standalone=%d status=%d mode=%u world=%p controller=%p netDriver=%p",standalone,
                 static_cast<int>(world.status),world.netMode,reinterpret_cast<void*>(world.world),
                 reinterpret_cast<void*>(world.controller),reinterpret_cast<void*>(world.netDriver));
@@ -442,7 +457,7 @@ bool LocalWorld(void* localPlayer,pinned::LocalWorldSnapshot& out) {
         [](uintptr_t source,void* target,size_t bytes) {
             if (!Readable(reinterpret_cast<void*>(source),bytes)) return false;
             std::memcpy(target,reinterpret_cast<void*>(source),bytes); return true;
-        },out);
+        },out,adapter::build::Rva(pinned::kWorldPointerRva));
     if (standalone) return true;
     // Explicit network launch plus the current owning controller's completed
     // package handshake. The memory walk still proves local-player/world identity.
@@ -838,6 +853,7 @@ void HookProcessInternal(void* object,void* stack,void* result) {
         function=adapter::GameScript::At<void*>(stack,0x14);
         name=adapter::GameScript::ObjectName(function);
     }
+    adapter::promo::Log::PhysicalScope promoPhysical(promoLog,script,object,name);
     static thread_local const auto commandoHudName=script.Intern(L"DrawSpecialPerkHUD");
     if (stereoRequested && name==commandoHudName &&
         adapter::SuppressCommandoHud(script,object,function,demo->handsBridge,demo->controlledController)) return;
@@ -870,7 +886,7 @@ void HookProcessInternal(void* object,void* stack,void* result) {
         ForwardProcessInternal(object,stack,result);return;
     }
 
-    const auto positionName=*reinterpret_cast<const std::uint64_t*>(gameBase+0x22340d8);
+    const auto positionName=*reinterpret_cast<const std::uint64_t*>(gameBase+adapter::build::Rva(0x22340d8));
     using Vm=adapter::VmCallbackFilter;
     using Callback=Vm::Callback;
     static thread_local Vm callbackFilter;
@@ -886,6 +902,9 @@ void HookProcessInternal(void* object,void* stack,void* result) {
     if (portalRequested && callback==Callback::HitWall && portalHitscan.ProjectileWall(object,stack)) return;
     const auto groups=Vm::Groups(callback);
     auto* locals=adapter::GameScript::At<void*>(stack,0x2c);
+    adapter::promo::Log::DamageScope promoDamage(promoLog,script,
+        callback==Callback::TakeDamage?object:nullptr,function);
+    if (callback==Callback::NativeHandsUpdate) promoLog.LocalPlayer(script,demo->controlledController);
     if (callback==Callback::NativeMagazineFeedEvent &&
         adapter::RouteMagazineFeedEvent(script,demo->handsBridge,demo->controlledPawn,object,function,locals,result)) return;
     if (callback==Callback::RenderDisplay && demo->handsBridge) {
@@ -1085,7 +1104,7 @@ void HookProcessInternal(void* object,void* stack,void* result) {
         if (ReadRotation(object,destination) &&
             demo->headAim.WorldUpTransition(reinterpret_cast<uintptr_t>(object),destination,level)) {
             demo->renderPairLease={};
-            const auto setRotation=reinterpret_cast<pinned::ActorSetRotationFn>(gameBase+pinned::kActorSetRotationRva);
+            const auto setRotation=reinterpret_cast<pinned::ActorSetRotationFn>(gameBase+adapter::build::Rva(pinned::kActorSetRotationRva));
             if (!setRotation(object,&level) || !ReadRotation(object,actual) ||
                 actual.pitch!=level.pitch || actual.yaw!=level.yaw || actual.roll!=level.roll) {
                 demo->headAim.Suspend(); demo->failed=true; demo->gamepad.Cancel();
@@ -1093,6 +1112,8 @@ void HookProcessInternal(void* object,void* stack,void* result) {
             }
         }
     }
+    if (callback==Callback::ScoreDamage)
+        promoLog.Score(script,object,function,locals,demo->controlledController);
     if (callback==Callback::ScoreDamage)
         adapter::ForwardSoloDamagePopup(script,demo->handsBridge,demo->controlledController,
             demo->controlledPawn,object,function,locals);
@@ -1221,7 +1242,7 @@ void EnsureEyeResolution() {
     // FWindowsViewport's RHI helper also resizes shared scene targets, without
     // the desktop work-area clamp in its outer window-resize function.
     using ResizeRhi=void(*)(void*,unsigned,unsigned,std::int32_t,std::int32_t,std::int32_t);
-    const auto resize=reinterpret_cast<ResizeRhi>(gameBase+0xd1ef30);
+    const auto resize=reinterpret_cast<ResizeRhi>(gameBase+adapter::build::Rva(0xd1ef30));
     resize(static_cast<std::byte*>(viewport)-8,width,height,0,0,0);
     DXGI_SWAP_CHAIN_DESC actual{};
     auto* swapchain=demo->ownerSwapchain.load(std::memory_order_acquire);
@@ -1364,7 +1385,7 @@ void PumpNativeInput(float delta,bool neutral=false) {
     unsigned accepted=0;
     for (unsigned i=0;i<6 && (!demo->menuVisible || neutral);++i) {
         std::uint64_t name=0;
-        std::memcpy(&name,reinterpret_cast<void*>(gameBase+0x2219338+i*8),sizeof(name));
+        std::memcpy(&name,reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x2219338)+i*8),sizeof(name));
         accepted+=axis(client,lastLocalViewport,0,name,values[i],delta,1)!=0;
     }
     if (networkRequested && handReplayRequested && accepted && std::abs(values[1])>.1f)
@@ -1379,7 +1400,7 @@ void PumpNativeInput(float delta,bool neutral=false) {
         const bool down=i<9 ? (pad.wButtons&masks[i])!=0 : (i==9?pad.bLeftTrigger:pad.bRightTrigger)>30;
         if (down!=demo->nativeKeys[i]) {
             std::uint64_t name=0;
-            std::memcpy(&name,reinterpret_cast<void*>(gameBase+keyRvas[i]),sizeof(name));
+            std::memcpy(&name,reinterpret_cast<void*>(gameBase+adapter::build::Rva(keyRvas[i])),sizeof(name));
             key(client,lastLocalViewport,0,name,down?0:1,1.f,1);
             demo->nativeKeys[i]=down;
         }
@@ -1474,14 +1495,14 @@ struct GameMenuSink final : adapter::MenuInputSink {
         key=adapter::GameScript::At<menuNative::InputKeyFn>(table,menuNative::GfxInputKeySlot);
         axis=adapter::GameScript::At<menuNative::InputAxisFn>(table,menuNative::GfxInputAxisSlot);
         const auto focus=adapter::GameScript::At<menuNative::FocusMovieFn>(table,menuNative::GfxGetFocusMovieSlot);
-        if (reinterpret_cast<uintptr_t>(key)!=gameBase+menuNative::GfxInputKeyRva ||
-            reinterpret_cast<uintptr_t>(axis)!=gameBase+menuNative::GfxInputAxisRva ||
-            reinterpret_cast<uintptr_t>(focus)!=gameBase+menuNative::GfxGetFocusMovieRva) return Refuse("gfx-interface");
+        if (reinterpret_cast<uintptr_t>(key)!=gameBase+adapter::build::Rva(menuNative::GfxInputKeyRva) ||
+            reinterpret_cast<uintptr_t>(axis)!=gameBase+adapter::build::Rva(menuNative::GfxInputAxisRva) ||
+            reinterpret_cast<uintptr_t>(focus)!=gameBase+adapter::build::Rva(menuNative::GfxGetFocusMovieRva)) return Refuse("gfx-interface");
         auto* movie=script.Read<void*>(demo->controlledController,L"MyGFxManager");
         if (demo->session && script.Read<int>(demo->session,L"NativeScoreboardActive"))
             movie=script.Read<void*>(script.Read<void*>(demo->controlledController,L"MyGFxHUD"),L"GfxScoreBoardPlayer");
         if (!movie || focus(interaction,0)!=movie) return Refuse("gfx-focus-movie");
-        engine=adapter::GameScript::At<void*>(reinterpret_cast<void*>(gameBase+menuNative::GfxEngineGlobalRva),0);
+        engine=adapter::GameScript::At<void*>(reinterpret_cast<void*>(gameBase+adapter::build::Rva(menuNative::GfxEngineGlobalRva)),0);
         if (!Readable(engine,menuNative::EngineMousePosition+sizeof(menuNative::Point))) return Refuse("gfx-engine");
         viewport=adapter::GameScript::At<void*>(engine,menuNative::EngineViewport);
         DXGI_SWAP_CHAIN_DESC desc{};
@@ -1747,6 +1768,7 @@ void UpdateSession(void* session) {
     if (!PrepareOwnerAfterMovie()) return;
     if (script.Read<int>(session,L"NativeTravelPending")) {
         if (!demo->travelling.exchange(true,std::memory_order_acq_rel)) {
+            promoLog.BeginTravel();
             CancelMenuPointer(); demo->gamepad.Cancel(); demo->sessionMenuInput.Reset(); demo->snapTurn.Reset();
             demo->menu.Reset(); demo->headAim.Reset(); demo->renderPairLease={};
             demo->handsBridge=nullptr; demo->heldWeapon=nullptr; demo->handsValid=false;
@@ -1878,7 +1900,7 @@ std::int32_t HookControllerTick(void* controller,float delta,std::int32_t tickTy
                 if (demo->headAim.Suspend()) Log("HeadAim suspended staleSample=1 referencePreserved=1");
                 demo->gamepad.Cancel();
             } else {
-                const auto setRotation=reinterpret_cast<pinned::ActorSetRotationFn>(gameBase+pinned::kActorSetRotationRva);
+                const auto setRotation=reinterpret_cast<pinned::ActorSetRotationFn>(gameBase+adapter::build::Rva(pinned::kActorSetRotationRva));
                 const bool explicitRecenter=(MenuOwner() && demo->script.Read<int>(MenuOwner(),L"NativeRecenterRequested")) ||
                     (demo->handsBridge && demo->script.Read<int>(demo->handsBridge,L"NativeRecenterRequested"));
                 if ((demo->headAim.SpaceChanged(demo->frame) || explicitRecenter) &&
@@ -1952,7 +1974,7 @@ std::int32_t HookControllerTick(void* controller,float delta,std::int32_t tickTy
         pinned::NativeRotator current{};
         if (turn && ReadRotation(controller,current)) {
             current.yaw+=turn;
-            reinterpret_cast<pinned::ActorSetRotationFn>(gameBase+pinned::kActorSetRotationRva)(controller,&current);
+            reinterpret_cast<pinned::ActorSetRotationFn>(gameBase+adapter::build::Rva(pinned::kActorSetRotationRva))(controller,&current);
         }
     }
     // Preserve the original simulation, input, recoil and camera update path.
@@ -2045,7 +2067,7 @@ void HookSubmit(void* canvas,void* family) {
     // below use the same coherent XR frame as the anchored menu and beam.
     if (GameOwnsXr() && demo->menuFrame && demo->eyePass<0) {
         if (MenuOwner() && demo->script.Read<int>(MenuOwner(),L"NativeMenuRenderStage")==2 &&
-            reinterpret_cast<uintptr_t>(_ReturnAddress())-gameBase==0x677831) {
+            reinterpret_cast<uintptr_t>(_ReturnAddress())-gameBase==adapter::build::Rva(0x677831)) {
             demo->atlasReady=false;
             Log("SpatialMenu image refused unexpected world submission");
             return;
@@ -2053,7 +2075,7 @@ void HookSubmit(void* canvas,void* family) {
         originalSubmit(canvas,family); return;
     }
     const bool localScene=demo && lastLocalFamily==family &&
-        reinterpret_cast<uintptr_t>(_ReturnAddress())-gameBase==0x677831;
+        reinterpret_cast<uintptr_t>(_ReturnAddress())-gameBase==adapter::build::Rva(0x677831);
     bool presentationFinalized=false;
     // reuseLeft: the right eye of an accepted pair keeps the left eye's
     // placement. Nothing ticks between the eyes and FinishRenderPair has
@@ -2089,7 +2111,7 @@ void HookSubmit(void* canvas,void* family) {
         keepWorldDepth(demo->script.Read<int>(demo->handsBridge,L"NativeKeepWorldDepth")!=0);
     };
     if (stereoRequested && demo && lastLocalFamily==family &&
-        reinterpret_cast<uintptr_t>(_ReturnAddress())-gameBase==0x677831) {
+        reinterpret_cast<uintptr_t>(_ReturnAddress())-gameBase==adapter::build::Rva(0x677831)) {
         lastLocalFamily=nullptr;
         const DWORD owner=demo->ownerThread.load(std::memory_order_acquire);
         if (owner && !GameOwnsXr()) {
@@ -2529,6 +2551,7 @@ DWORD WINAPI HookGetPadCaps(DWORD index,DWORD flags,XINPUT_CAPABILITIES* caps) {
 }
 // Gameplay half of a stop: menus, HUD, head aim and held stock input.
 void StopGameSide() {
+    motionRuntime.Shutdown();
     demo->gamepad.Cancel();
     CancelMenuPointer(); demo->menu.Reset(); demo->menuVisible=false; demo->menuFrame=false;
     demo->hud.Reset();
@@ -2837,6 +2860,8 @@ HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* swapchain,UINT interval,UI
         }
     }
     HRESULT presentResult;
+    if (demo && !(flags&DXGI_PRESENT_TEST) && swapchain==demo->ownerSwapchain.load(std::memory_order_acquire))
+        promoMarker.Present(promoLog,swapchain,demo->render.packet.frame.poseSampleId);
     {
         adapter::timing::Scope timing(adapter::timing::DesktopPresent);
         presentResult=originalPresent(swapchain,interval,flags);
@@ -3085,8 +3110,8 @@ bool InstallHooks(HINSTANCE module) {
         void** contextTable=*reinterpret_cast<void***>(context.Get());
         struct Hook { void* target; void* detour; void** trampoline; };
         std::vector<Hook> hooks{
-            {reinterpret_cast<void*>(gameBase+0x6746a0),reinterpret_cast<void*>(&HookCalc),reinterpret_cast<void**>(&originalCalc)},
-            {reinterpret_cast<void*>(gameBase+0x903380),reinterpret_cast<void*>(&HookSubmit),reinterpret_cast<void**>(&originalSubmit)},
+            {reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x6746a0)),reinterpret_cast<void*>(&HookCalc),reinterpret_cast<void**>(&originalCalc)},
+            {reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x903380)),reinterpret_cast<void*>(&HookSubmit),reinterpret_cast<void**>(&originalSubmit)},
             {table[8],reinterpret_cast<void*>(&HookPresent),reinterpret_cast<void**>(&originalPresent)},
             {table[13],reinterpret_cast<void*>(&HookResize),reinterpret_cast<void**>(&originalResize)},
             {contextTable[53],reinterpret_cast<void*>(&HookClearDepth),reinterpret_cast<void**>(&originalClearDepth)},
@@ -3095,25 +3120,30 @@ bool InstallHooks(HINSTANCE module) {
             {contextTable[12],reinterpret_cast<void*>(&HookDrawIndexed),reinterpret_cast<void**>(&originalDrawIndexed)}};
         hooks.push_back({contextTable[13],
             reinterpret_cast<void*>(&HookDraw),reinterpret_cast<void**>(&originalDraw)});
+        if (motionRuntime.CaptureConfigured()) {
+            const auto kernel=GetModuleHandleW(L"kernel32.dll");
+            hooks.push_back({reinterpret_cast<void*>(GetProcAddress(kernel,"ExitProcess")),
+                reinterpret_cast<void*>(&HookProcessExit),reinterpret_cast<void**>(&originalProcessExit)});
+        }
         if (portalRequested) {
             using Capture=kf2vr::portal::PortalCapture;
-            hooks.push_back({reinterpret_cast<void*>(gameBase+Capture::RenderRva),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(Capture::RenderRva)),
                 reinterpret_cast<void*>(&HookPortalRender),reinterpret_cast<void**>(&portalCapture.originalRender)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+Capture::ClipRva),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(Capture::ClipRva)),
                 reinterpret_cast<void*>(&HookPortalClip),reinterpret_cast<void**>(&portalCapture.originalClip)});
         }
-        if (stereoRequested) hooks.push_back({reinterpret_cast<void*>(gameBase+menuNative::GetMousePositionRva),
+        if (stereoRequested) hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(menuNative::GetMousePositionRva)),
             reinterpret_cast<void*>(&HookGetMousePosition),reinterpret_cast<void**>(&originalGetMousePosition)});
         if (stereoRequested || handReplayRequested) {
-            hooks.push_back({reinterpret_cast<void*>(gameBase+pinned::kViewportDrawRva),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(pinned::kViewportDrawRva)),
                 reinterpret_cast<void*>(&HookViewportDraw),reinterpret_cast<void**>(&originalViewportDraw)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+pinned::kPlayerControllerTickRva),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(pinned::kPlayerControllerTickRva)),
                 reinterpret_cast<void*>(&HookControllerTick),reinterpret_cast<void**>(&originalControllerTick)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0xd350a0),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0xd350a0)),
                 reinterpret_cast<void*>(&HookTraceStart),reinterpret_cast<void**>(&originalTraceStart)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0x47e3c0),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x47e3c0)),
                 reinterpret_cast<void*>(&HookPhysicalStart),reinterpret_cast<void**>(&originalPhysicalStart)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::kWeaponViewRotationRva),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(adapter::kWeaponViewRotationRva)),
                 reinterpret_cast<void*>(&HookWeaponViewRotation),reinterpret_cast<void**>(&originalWeaponViewRotation)});
             HMODULE input=LoadLibraryExW(L"xinput1_3.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
             if (!input) { Log("XInput unavailable"); DestroyWindow(window); UnregisterClassW(className,module); return false; }
@@ -3121,7 +3151,7 @@ bool InstallHooks(HINSTANCE module) {
             hooks.push_back({reinterpret_cast<void*>(GetProcAddress(input,"XInputGetCapabilities")),reinterpret_cast<void*>(&HookGetPadCaps),reinterpret_cast<void**>(&originalGetPadCaps)});
         }
         if (stereoRequested || handReplayRequested)
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0x7aed0),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x7aed0)),
                 reinterpret_cast<void*>(&HookProcessInternal),reinterpret_cast<void**>(&originalProcessInternal)});
         if (MH_Initialize()==MH_OK) {
             success=true;
@@ -3134,8 +3164,8 @@ bool InstallHooks(HINSTANCE module) {
             }
             if (success) {
                 for (const auto& hook:hooks) if (MH_QueueEnableHook(hook.target)!=MH_OK) success=false;
-                if (stereoRequested && (MH_QueueEnableHook(reinterpret_cast<void*>(gameBase+adapter::focus::WorldTickRva))!=MH_OK ||
-                    MH_QueueEnableHook(reinterpret_cast<void*>(gameBase+adapter::focus::SimulationDeltaRva))!=MH_OK)) success=false;
+                if (stereoRequested && (MH_QueueEnableHook(reinterpret_cast<void*>(gameBase+adapter::build::Rva(adapter::focus::WorldTickRva)))!=MH_OK ||
+                    MH_QueueEnableHook(reinterpret_cast<void*>(gameBase+adapter::build::Rva(adapter::focus::SimulationDeltaRva)))!=MH_OK)) success=false;
                 if (success && MH_ApplyQueued()!=MH_OK) success=false;
             }
             if (!success) { MH_DisableHook(MH_ALL_HOOKS); MH_Uninitialize(); }
@@ -3150,6 +3180,17 @@ DWORD WINAPI AdapterMain(void* parameter) {
     const HINSTANCE module=static_cast<HINSTANCE>(parameter);
     wchar_t modulePath[32768]{},gamePath[32768]{};
     if (!GetModuleFileNameW(module,modulePath,32768) || !GetModuleFileNameW(nullptr,gamePath,32768)) return 1;
+    // An Epic-managed child cannot inherit the already-running launcher's
+    // environment. Authenticate its local session broker only after this exact
+    // executable passes the build gate; never consume arbitrary file config.
+    adapter::epic::Marker epicMarker;
+    const auto epicRequest=adapter::epic::Parse(GetCommandLineW(),epicMarker);
+    if (epicRequest!=adapter::epic::Result::NotRequested) {
+        std::string epicDigest;
+        if (epicRequest!=adapter::epic::Result::Accepted || !HashFile(gamePath,epicDigest) ||
+            !adapter::build::Select(epicDigest) || adapter::build::selected!=adapter::build::Store::Epic ||
+            adapter::epic::Consume(GetCommandLineW())!=adapter::epic::Result::Accepted) return 4;
+    }
     // Launcher sets an explicit workspace path. No default write in the game
     // installation or user profile, and no public IPC endpoint.
     wchar_t logPath[32768]{};
@@ -3212,7 +3253,7 @@ DWORD WINAPI AdapterMain(void* parameter) {
     Log("ThreadedRender revision=1 requested=%d",threadedRender);
     Log("KF2VR_ADAPTER revision=2 mode=%s pid=%lu",stereoRequested?"local-stereo-experiment":handReplayRequested?"local-hand-replay":"passive",GetCurrentProcessId());
     std::string digest;
-    if (!HashFile(gamePath,digest) || digest!=kHash) { Log("Build gate refused sha256=%s",digest.c_str()); return 4; }
+    if (!HashFile(gamePath,digest) || !adapter::build::Select(digest)) { Log("Build gate refused sha256=%s",digest.c_str()); return 4; }
     // Avoid a trailing -benchmark token: UE3 can parse that suffix as its
     // engine benchmark switch, advancing simulation with a fixed timestep.
     if (wcsstr(GetCommandLineW(),L"-kf2vr-perf-capture")) {
@@ -3258,7 +3299,12 @@ DWORD WINAPI AdapterMain(void* parameter) {
     }
     Log("Build verified sha256=%s base=%p",digest.c_str(),reinterpret_cast<void*>(gameBase));
     presentationCapture.Initialize(handReplayRequested,captureRootPath);
-    if (!InstallHooks(module)) { Log("Hook setup failed; original game continues"); return 5; }
+    promoLog.Start();
+    motionRuntime.Configure(stereoRequested,handReplayRequested,&Log);
+    if (!InstallHooks(module)) {
+        motionRuntime.Shutdown();
+        Log("Hook setup failed; original game continues"); return 5;
+    }
     Log("Hooks enabled together; mode=%s portals=%d",stereoRequested?"local stereo experiment":handReplayRequested?"local hand replay; stock renderer; no XR session":portalRequested?"local portal gameplay; stock renderer; no XR session":"passive; no engine fields mutated; no XR session",portalRequested);
     return 0;
 }
