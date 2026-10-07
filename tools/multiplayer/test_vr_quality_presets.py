@@ -37,9 +37,11 @@ class VrQualityPresetTests(unittest.TestCase):
             (configs / "KFGame.ini").write_text("[KFGame.KFGameEngine]\n", encoding="utf-16")
             role = {"role": "driver", "args": ["join"], "log": str(root / "game.log"),
                     "config_root": str(configs), "native_adapter": False}
+            options = self.options(quality, frame_timings, threaded_render)
+            options.profile_root = root / "profile"
             with patch.object(friends, "role_config", return_value=role):
                 result = friends.configure_role(root, "driver", root, root,
-                                                self.options(quality, frame_timings, threaded_render))
+                                                options)
             engine = friends.read_ini(configs / "KFEngine.ini")
             settings = friends.read_ini(configs / "KFSystemSettings.ini")
             return result, engine, settings

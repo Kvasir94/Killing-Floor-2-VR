@@ -355,6 +355,22 @@ simulated function SyncTracking()
     EnsurePhysicalCombat();
 }
 
+// Stock users intentionally aim firearms with the primary controller. Retain
+// an acquired foregrip only while its physical grip and valid tracking remain.
+// Melee, support-only carries, ordinary two-hand aim and toggle release keep
+// their existing policies.
+simulated function bool RetainPhysicalStockSupport()
+{
+    return RootBridge != None && RootBridge.bDisableSupportHandAim
+        && ActiveProfile >= 0 && ActiveProfile < WeaponProfiles.Length
+        && WeaponProfiles[ActiveProfile].bFirearm
+        && PresentedItem != None && PresentedItem.PrimaryHand >= 0
+        && PresentedItem.SupportHand >= 0 && PresentedItem.SupportHand < 2
+        && HasValidSupportTracking()
+        && Hands[PresentedItem.SupportHand].bGrip
+        && (RootBridge.NativeGripMask & (1 << PresentedItem.SupportHand)) != 0;
+}
+
 simulated function bool SupportIsEngaged()
 {
     return PresentedItem != None && PresentedItem.PrimaryHand >= 0 && PresentedItem.SupportHand >= 0
@@ -362,7 +378,7 @@ simulated function bool SupportIsEngaged()
         && (NativeValidMask & (1 << PresentedItem.SupportHand)) != 0
         && (NativeGripActiveMask & (1 << PresentedItem.SupportHand)) != 0
         && AttachedHands[PresentedItem.SupportHand] != None
-        && SupportContactWithinReleaseRange()
+        && (RetainPhysicalStockSupport() || SupportContactWithinReleaseRange())
         && (!RootBridge.bHoldSupportGrip || (Hands[PresentedItem.SupportHand].bGrip
             && (RootBridge.NativeGripMask & (1 << PresentedItem.SupportHand)) != 0));
 }

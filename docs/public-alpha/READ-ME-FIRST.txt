@@ -141,3 +141,6 @@ configs or crash dumps publicly; they have not been anonymized.
 Each player needs their own Killing Floor 2 copy. Multiplayer is Steam-only in this alpha.
 This is an early alpha test build. KF2-VR is a fan project and is not
 affiliated with Tripwire Interactive.
+
+OCTOBER 7 UPDATE
+Normal startup does not request cheats or restore Godmode; isolated session copies disable saved Admin Auto Login automatic cheats. The pre-play warning separates VAC status from XP eligibility. Secure injected VR is unsupported; ordinary perk progression is not promised. Explicit later Practice remains available with its warning. Experimental DLSS starts Off, requires NVIDIA RTX hardware and awaits headset acceptance. Read RELEASE-NOTES-DRAFT.md and DLSS.md for exact handling coverage, exceptions and publication limits.

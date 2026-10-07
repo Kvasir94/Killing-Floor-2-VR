@@ -499,6 +499,15 @@ function ApplyProfileDefaultFit()
 
 function string Subtitle(VRHandSelector S, int H, int Row)
 {
+    if (S.MenuPage == 9)
+    {
+        if (Row == 0) return H == 0 ? "LOWER 1 CM" : "RAISE 1 CM";
+        if (Row == 1) return H == 0 ? "STOCK PAWN EYE" : "HOLD SEATED POSTURE";
+        if (Row == 2) return H == 0 ? "HOLD STANDING POSTURE" : "ORIENTATION";
+        if (Row == 3) return "SAVED SEATED OFFSET (CM)";
+        if (Row == 4) return "CAPTURED PHYSICAL HEIGHT (CM)";
+        return H == 0 ? "CLOSE (AUTO-SAVED)" : "NAVIGATION";
+    }
     if (S.MenuPage == 8)
     {
         if (Row <= 2) return H == 0 ? "NUDGE -0.5" : "NUDGE +0.5";
@@ -530,7 +539,7 @@ function string Subtitle(VRHandSelector S, int H, int Row)
     if (S.MenuPage == 2)
     {
         if (Row == 0) return "HMD BASELINE";
-        if (Row == 1) return "ORIENTATION";
+        if (Row == 1) return H == 0 ? "ORIENTATION" : "SEATED VIEW HEIGHT";
         if (Row == 2) return H == 0 ? "DROP " $ int((Bridge.NativeStandingHeight - Bridge.NativeHeadHeight)*100)
             $ " / BASE " $ int(Bridge.NativeStandingHeight * 100) : "DEBUG VIEW";
         if (Row == 3) return H == 0 ? "PAWN STATE" : "HANDS AT HIPS";
@@ -609,11 +618,23 @@ function string Label(VRHandSelector S, int H, int Row)
         switch (Row)
         {
         case 0: return H == 0 ? "CAPTURE STANDING" : "CAPTURE SEATED";
-        case 1: return "RECENTER";
+        case 1: return H == 0 ? "RECENTER" : "SEATED HEIGHT";
         case 2: return H == 0 ? "HAND FIT" : (Bridge.bAlignmentMarkers ? "ALIGN MARKERS: ON" : "ALIGN MARKERS: OFF");
         case 3: return H == 0 ? "PAWN CROUCH: " $ (Bridge.Human.bIsCrouched ? "YES" : "NO") : "HOLSTER FIT";
         case 4: return H == 0 ? "CHEST ZONE HERE" : WristTileLabel();
         default: return H == 0 ? "CLOSE" : "BACK TO FIT";
+        }
+    }
+    if (S.MenuPage == 9)
+    {
+        switch (Row)
+        {
+        case 0: return (H == 0 ? "LOWER " : "RAISE ") $ int(Bridge.SeatedEyeOffset) $ "cm";
+        case 1: return H == 0 ? "RESET HEIGHT" : "CAPTURE SEATED";
+        case 2: return H == 0 ? "CAPTURE STANDING" : "RECENTER";
+        case 3: return "MODE: " $ (Bridge.bSeatedPlay ? "SEATED" : "STANDING");
+        case 4: return "BASE " $ int(Bridge.NativeStandingHeight * 100) $ "cm";
+        default: return H == 0 ? "CLOSE (AUTO-SAVED)" : "BACK (AUTO-SAVED)";
         }
     }
     if (S.MenuPage == 3)
@@ -789,7 +810,12 @@ function bool Activate(VRHandSelector S, int H, int Row)
         // posture held and in bSeatedPlay: standing in a STAGE space puts the
         // real floor on the pawn's floor, seated keeps the fixed pawn eye.
         if (Row == 0) { RequestBaselineCapture(H == 1, false); return false; }
-        if (Row == 1) { RequestBaselineCapture(false, true); return false; }
+        if (Row == 1)
+        {
+            if (H == 1) S.MenuPage = 9;
+            else RequestBaselineCapture(false, true);
+            return false;
+        }
         if (Row == 2 && H == 0) { S.MenuPage = 8; Bridge.bAlignmentMarkers = true; return false; }
         if (Row == 2 && H == 1) { Bridge.bAlignmentMarkers = !Bridge.bAlignmentMarkers; return false; }
         if (Row == 3 && H == 1) { StartHolsterFit(S); return true; }
@@ -800,7 +826,7 @@ function bool Activate(VRHandSelector S, int H, int Row)
             {
                 Grenade = Bridge.HandInventory.Input.Grenade;
                 Bridge.ChestGrenadeOffset = (Grenade.GrabPoint(S.Hand) - Grenade.ChestOrigin()
-                    - (Grenade.MeshCenter(Grenade.ChestGrenadeClass()) >> Grenade.Torso)) << Grenade.Torso;
+                    - (Grenade.DisplayCenter() >> Grenade.Torso)) << Grenade.Torso;
                 Bridge.SaveConfig();
                 Bridge.PC.ClientMessage("Chest grenade zone saved from the " $ (S.Hand == 0 ? "left" : "right") $ " hand.");
             }
@@ -817,6 +843,35 @@ function bool Activate(VRHandSelector S, int H, int Row)
             S.MenuPage = 1;
             return false;
         }
+    }
+    else if (S.MenuPage == 9)
+    {
+        if (Row == 0)
+        {
+            if (!Bridge.bSeatedPlay)
+            {
+                if (Bridge.PC != None) Bridge.PC.ClientMessage("Capture seated before adjusting seated view height.");
+                return false;
+            }
+            Bridge.SeatedEyeOffset = FClamp(Bridge.SeatedEyeOffset + Step, -40.0, 12.0);
+            Bridge.RefreshEyeBase();
+            Bridge.SaveConfig();
+            return false;
+        }
+        if (Row == 1)
+        {
+            if (H == 1) RequestBaselineCapture(true, false);
+            else { Bridge.SeatedEyeOffset = 0; Bridge.RefreshEyeBase(); Bridge.SaveConfig(); }
+            return false;
+        }
+        if (Row == 2) { RequestBaselineCapture(false, H == 1); return false; }
+        if (Row == 5)
+        {
+            DisarmTriggers();
+            if (H == 0) { S.MenuPage = 0; S.bUtilities = false; return true; }
+            S.MenuPage = 2;
+        }
+        return false;
     }
     else if (S.MenuPage == 3)
     {

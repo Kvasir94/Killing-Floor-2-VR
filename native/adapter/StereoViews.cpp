@@ -1,5 +1,6 @@
 #include "include/kf2vr/adapter/GameBuild.h"
 #include "StereoViews.h"
+#include "Dlss.h"
 #include "kf2vr/Basis.h"
 
 #include <windows.h>
@@ -274,6 +275,7 @@ bool StereoViews::SubmitStereoPair(void* familyPointer, const xr::FrameState& fr
                                   pinned::SubmitSceneFamilyFn originalSubmit,
                                   void* canvas, std::uintptr_t baseAddress, std::string& error,
                                   const AppliedHeadAim* appliedAim, const Vec3& worldViewOffset) {
+    lastSubmittedValid_ = false;
     error.clear();
     if (!baseAddress || !originalSubmit || !canvas ||
         !Accessible(familyPointer, pinned::family::kStaticPrefixSize, true)) {
@@ -335,8 +337,16 @@ bool StereoViews::SubmitStereoPair(void* familyPointer, const xr::FrameState& fr
     // Sequential stereo submits one selected eye here. Do not copy or
     // initialize an unused second view, including its engine-global effects.
     if (!singleViewDiagnostic_) right.Construct(copy, source);
-    ConfigureEye(left, matrices[singleViewDiagnostic_?singleEye_:0], atlas.left, random, initialize);
-    if (!singleViewDiagnostic_) ConfigureEye(right, matrices[1], atlas.right, random, initialize);
+    lastSubmitted_ = matrices[singleViewDiagnostic_?singleEye_:0];
+    // DLSS: the engine draws with the jittered projection; the recorded pair
+    // stays unjittered so motion vectors exclude the jitter.
+    std::array<EyeMatrices, 2> drawn = matrices;
+    if (jitterX_ != 0.0f || jitterY_ != 0.0f) {
+        ApplyDlssJitter(drawn[0].projection, {jitterX_, jitterY_}, atlas.left.width, atlas.left.height);
+        ApplyDlssJitter(drawn[1].projection, {jitterX_, jitterY_}, atlas.right.width, atlas.right.height);
+    }
+    ConfigureEye(left, drawn[singleViewDiagnostic_?singleEye_:0], atlas.left, random, initialize);
+    if (!singleViewDiagnostic_) ConfigureEye(right, drawn[1], atlas.right, random, initialize);
     void* eyes[]{left.Data(), singleViewDiagnostic_?nullptr:right.Data()};
     // Declared after the copies: on every C++ unwind, restore family ownership
     // before destructing any copied view or its inner engine allocations.
@@ -347,6 +357,7 @@ bool StereoViews::SubmitStereoPair(void* familyPointer, const xr::FrameState& fr
     initialHead_ = candidateReference;
     referenceReady_ = true;
     lastAtlas_ = atlas;
+    lastSubmittedValid_ = singleViewDiagnostic_;
     return true;
 }
 
@@ -354,5 +365,6 @@ void StereoViews::ResetReference() noexcept {
     initialHead_ = {};
     referenceReady_ = false;
     lastAtlas_ = {};
+    lastSubmittedValid_ = false;
 }
 } // namespace kf2vr::adapter

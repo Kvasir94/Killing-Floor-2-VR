@@ -94,9 +94,11 @@ public:
     // STAGE space only: put the real floor on the pawn's floor by pinning the
     // reference height to the pawn's standing eye (metres above its floor),
     // so the view stands at the player's real eye height. Zero restores the
-    // fixed eye (LOCAL space, seated play). The shift is clamped so a tall
+    // fixed eye (LOCAL space, seated play), plus its explicit eye offset. The
+    // offset is in metres, positive raises both view and hands. Floor matching
+    // takes precedence over that seated offset. The shift is clamped so a tall
     // player's eye stays inside the capsule and a short one is not sunk.
-    void SetFloorEye(float pawnEyeMetres) noexcept;
+    void SetFloorEye(float pawnEyeMetres, float fixedEyeOffsetMetres = 0) noexcept;
     // Head height captured at the last recenter, before any floor shift.
     float StandingHeight() const noexcept { return standingHeight_; }
     float FloorShift() const noexcept { return floorShift_; }

@@ -1,5 +1,7 @@
 """Offline real player form and repository context checks; no game or server."""
 import json
+import contextlib
+import io
 from pathlib import Path
 import tempfile
 import unittest
@@ -12,6 +14,144 @@ import workshop_loadout
 
 
 class PlayerLauncherTests(unittest.TestCase):
+    def test_prelaunch_pages_show_progression_and_unavailable_vac_without_saving_it(self):
+        for store in ('steam', 'epic'):
+            with self.subTest(store=store), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                context = gui.parse_context(['--workspace', 'checkout', '--initial-arguments',
+                                             json.dumps(['--solo', '--vr', '--store', store])])
+                with patch.object(workshop_loadout, 'profile_root', return_value=root/'profile'), \
+                        patch.object(gui, 'LOGS', root/'logs'), \
+                        patch.object(gui.game_install, 'select_for_launch', side_effect=ValueError('no install')), \
+                        patch.object(gui.game_install, 'discover', return_value=[]):
+                    window = gui.Launcher(art=False, context=context)
+                    window.withdraw()
+                    try:
+                        pages = [window.home, lambda: window.options('solo'), window.settings]
+                        if store == 'steam':
+                            pages += [lambda: window.options('host'), window.join]
+                        def visit(widget):
+                            yield widget
+                            for child in widget.winfo_children():
+                                yield from visit(child)
+                        with patch.object(window, 'need_game', return_value=root/'game'), \
+                                patch('launch_menu.installed_solo_maps', return_value=['KF-Outpost']), \
+                                patch('launch_menu.installed_maps', return_value=['KF-Outpost']):
+                            for page in pages:
+                                page()
+                                window.update_idletasks()
+                                widgets = list(visit(window.body))
+                                labels = [w.cget('text') for w in widgets if isinstance(w, gui.tk.Label)]
+                                for notice in friends.launch_notices(store):
+                                    self.assertIn(notice, labels)
+                                controls = [w for w in widgets if isinstance(w, gui.ttk.Checkbutton)
+                                            and w.cget('text') == 'Enable VAC (unavailable for KF2-VR)']
+                                self.assertEqual(0 if store == 'epic' else 1, len(controls))
+                                for control in controls:
+                                    self.assertTrue(control.instate(['disabled', '!selected']))
+                                    control.invoke()
+                                    self.assertFalse(control._vac_off.get())
+                        self.assertFalse(hasattr(window.saved, 'vac'))
+                        self.assertFalse((root/'profile'/'KFEngine.ini').exists())
+                    finally:
+                        window.update_idletasks()
+                        window.destroy()
+
+    def test_console_warning_precedes_steam_preflight_and_epic_session(self):
+        for store in ('steam', 'epic'):
+            with self.subTest(store=store), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                manifest = {'files_sha256': {}, 'game_sha256': 'fixture'}
+                (root/'release.json').write_text(json.dumps(manifest))
+                install = gui.game_install.Installation(store, root/'game')
+                output = io.StringIO()
+                with patch.object(friends, 'ROOT', root), \
+                        patch.object(friends.sys, 'argv', ['friends.py', '--solo', '--vr', '--store', store, '--dlss', 'off']), \
+                        patch.object(friends.game_install, 'select_for_launch', return_value=install), \
+                        patch.object(friends.game_install, 'validate_native'), \
+                        patch.object(friends, 'load_preferences'), \
+                        patch.object(friends, 'installed_solo_maps', return_value=['KF-BurningParis']), \
+                        patch.object(friends, 'preflight', side_effect=RuntimeError('preflight boundary')), \
+                        patch('epic_manual.run_session', return_value=0) as epic, \
+                        contextlib.redirect_stdout(output):
+                    if store == 'epic':
+                        self.assertEqual(0, friends.main())
+                        epic.assert_called_once()
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'preflight boundary'):
+                            friends.main()
+                        epic.assert_not_called()
+                self.assertEqual(list(friends.launch_notices(store)), output.getvalue().splitlines())
+                self.assertFalse((root/'settings.json').exists())
+
+    def test_graphics_form_keeps_saved_edits_unless_a_preset_is_chosen(self):
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                game = root / 'game'
+                maps = game / 'KFGame/BrewedPC/Maps/test'
+                maps.mkdir(parents=True)
+                (maps / 'KF-Outpost.kfm').write_bytes(b'parser fixture')
+                initial = ['--solo', '--vr'] + (['--vr-quality', 'balanced'] if explicit else [])
+                context = gui.parse_context(['--workspace', 'checkout', '--initial-arguments', json.dumps(initial)])
+                with patch.object(workshop_loadout, 'profile_root', return_value=root/'profile'), patch.object(gui, 'LOGS', root/'logs'):
+                    window = gui.Launcher(art=False, context=context)
+                    window.withdraw()
+                    try:
+                        launched, start, fields = [], [], {}
+                        original_combo = window.combo
+                        def combo(frame, controls, name, labels, selected):
+                            result = original_combo(frame, controls, name, labels, selected)
+                            fields[name] = controls[name]
+                            return result
+                        with patch.object(window, 'need_game', return_value=game), \
+                                patch.object(window, 'combo', side_effect=combo), \
+                                patch.object(window, 'footer', side_effect=lambda frame, **kw: start.append(kw['start'])), \
+                                patch.object(window, 'run', side_effect=lambda args, title: launched.append(args)):
+                            window.options('solo')
+                            start[0]()
+                            self.assertEqual('balanced' if explicit else None, friends.parse_options(launched[-1]).vr_quality_requested)
+                            variable, labels = fields['Graphics']
+                            variable.set(gui.QUALITY_LABELS['performance'])
+                            start[0]()
+                            self.assertEqual('performance', friends.parse_options(launched[-1]).vr_quality_requested)
+                            variable.set(gui.QUALITY_LABELS['keep'])
+                            start[0]()
+                            self.assertIsNone(friends.parse_options(launched[-1]).vr_quality_requested)
+                    finally:
+                        window.destroy()
+
+    def test_long_page_scrolls_with_footer_outside_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            with patch.object(workshop_loadout, 'profile_root', return_value=root), patch.object(gui, 'LOGS', root/'logs'):
+                window=gui.Launcher(art=False);window.withdraw()
+                try:
+                    page=window.screen("Long settings", scrollable=True)
+                    for i in range(40):window.label(page, f"Setting {i}").pack()
+                    footer=window.footer(page)
+                    window.update_idletasks()
+                    self.assertIs(footer.master,page._scroll_shell)
+                    canvas=page.master
+                    self.assertGreater(canvas.bbox("all")[3],canvas.winfo_height())
+                    canvas.yview_moveto(1)
+                    self.assertGreater(canvas.yview()[0],0)
+                finally:window.destroy()
+
+    def test_window_growth_is_bounded_and_never_shrinks(self):
+        window = MagicMock()
+        window.px.side_effect = lambda value: value
+        window.winfo_screenheight.return_value = 1080
+        window.winfo_width.return_value = 900
+        window.winfo_height.return_value = 700
+        window.winfo_reqheight.return_value = 1500
+        gui.Launcher.fit_window(window)
+        window.geometry.assert_called_once_with("900x1000")
+        window.geometry.reset_mock()
+        window.winfo_height.return_value = 1050
+        gui.Launcher.fit_window(window)
+        window.geometry.assert_not_called()
+
     def test_single_store_detection_limits_home_options_and_survives_saved_package_choice(self):
         import game_install
         for store in ('steam', 'epic'):

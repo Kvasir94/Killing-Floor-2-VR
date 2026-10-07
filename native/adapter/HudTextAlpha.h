@@ -58,7 +58,7 @@ public:
         Ptr<ID3D11Resource> resource;target->GetResource(&resource);
         Ptr<ID3D11Texture2D> texture;if(FAILED(resource.As(&texture))) return;
         D3D11_TEXTURE2D_DESC d{};texture->GetDesc(&d);
-        if ((d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM_SRGB && d.Format!=DXGI_FORMAT_R8G8B8A8_TYPELESS)
+        if ((d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM_SRGB && d.Format!=DXGI_FORMAT_R8G8B8A8_TYPELESS && d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM)
             || d.SampleDesc.Count!=1) return;
         bool known=d.Width==768 && d.Height==768;
         for(unsigned i=0;i<PanelCount;++i) known|=d.Width==PanelWidth[i] && d.Height==PanelHeight[i];
@@ -80,7 +80,8 @@ public:
     }
     void Targets(ID3D11DeviceContext* context,UINT count,ID3D11RenderTargetView* const* targets) {
         bound_.Reset();boundContext_=nullptr;
-        if(count!=1 || !targets || !targets[0]) return;
+        if(count<1 || !targets || !targets[0]) return;
+        for(UINT i=1;i<count;++i) if(targets[i]) return;
         Ptr<ID3D11Resource> resource;targets[0]->GetResource(&resource);
         for(const auto& panel:targets_) if(panel && panel.Get()==resource.Get()) {
             bound_=resource;boundContext_=context;break;

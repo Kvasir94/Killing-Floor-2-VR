@@ -101,7 +101,11 @@ hand, panel placement and recenter. **HUD AND READOUTS** adjusts ammo/top-HUD
 placement, watch/readouts, damage popups, laser pointer and reload hints. **GRAPHICS**
 adjusts render scale and supported quality/lighting; locked VR effects are status
 rows. Capture your actual posture; recentering and seated play do not turn on
-teleport. **RESET PROFILE FIT** uses the selected Neutral/Relaxed-wrist/Legacy fit.
+teleport. **SEATED HEIGHT**, beside RECENTER, adjusts the seated view in 1 cm
+steps from -40 to +12 cm; head and hands move together. RESET HEIGHT restores
+zero, recapture preserves the adjustment, and standing capture ignores it.
+**CHEST ZONE HERE** uses the same scaled grenade center as its grab zone.
+**RESET PROFILE FIT** uses the selected Neutral/Relaxed-wrist/Legacy fit.
 
 **PRACTICE AND TOOLS** opens calibration, practice, its armory and healing patient.
 Solo armory can add/equip registered items; network armory equips owned items.
@@ -1058,3 +1062,20 @@ conflicting inventory, carry, reload and grab interactions disable that strike.
 Fast cylindrical-shell approaches may acquire when their valid tracked path crosses
 the guide mouth, rather than requiring a frame exactly at the mouth. Tomahawk
 generic air whooshes are suppressed; contact and throw/recall cues remain.
+
+Physical-stock mode retains an acquired firearm support grip while the physical grip is held and tracking is valid, even if controller distance drifts. Normal two-hand aim keeps distance release.
+
+### Supported primary-hand lever cycling
+
+With interactive reloads and manual pump enabled, Winchester/SPX lever actions
+accept a fresh primary-hand grip squeeze near the lever while the other hand
+supports the same rifle. The support hand anchors the gun while the primary
+hand opens and closes the lever. During empty reloads, use the off hand to load
+the round, reattach support, then close with the primary hand. The off-hand
+lever route remains available. Tracking or support loss cancels the grip;
+release and squeeze again to resume the pending stage. Headset acceptance is
+pending, including both handedness choices and normal/elite reloads.
+
+## Updated physical handling
+
+Calibration includes bounded seated view-height adjustment. The chest reference follows the scaled grenade display centre. MG3 physical reload now separates box insertion and belt seating; Stoner/Bastion remain unchanged. Supported Winchester/SPX primary-hand lever strokes use the support hand as the anchor. See the [release notes](public-alpha/RELEASE-NOTES-DRAFT.md) for exact retained-chamber support/exceptions, speedloader/action-path fixes and pending headset checks. Button reloads remain available.

@@ -16,6 +16,8 @@ var array<float> PathS;
 var name Bones[3];
 var int BoneCount;
 var vector GripLocal, GrabOffset;
+var quat GripQ;
+var float GripTime;
 var float Amount, Length, OpenTime, StartTime;
 
 var KFSkeletalMeshComponent Ref;
@@ -123,7 +125,15 @@ function bool Sample(name Hand)
         PoseRef(T);
         RefRelative(Bones[0], P, Q);
         RefRelative(Hand, HandP, HandQ);
-        if (VSize(HandP - P) < GripD) { GripD = VSize(HandP - P); Best = QuatRotateVector(QuatInvert(Q), HandP - P); }
+        if (VSize(HandP - P) < GripD)
+        {
+            GripD = VSize(HandP - P);
+            Best = QuatRotateVector(QuatInvert(Q), HandP - P);
+            // Keep the wrist orientation and finger pose from the same
+            // stock contact that supplies the action's motion path.
+            GripQ = QuatProduct(QuatInvert(Q), HandQ);
+            GripTime = T;
+        }
     }
     GripLocal = GripD < 30 ? Best : vect(0,0,0);
     Total = 0;

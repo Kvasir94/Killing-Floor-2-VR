@@ -16,5 +16,9 @@ int main() {
  std::uint64_t number=0;check(!Number(L"18446744073709551616",number));
  check(!Number(L"-1",number));check(!Number(L"0",number));
  std::wstring path;check(!Root("relative/path",path));check(!Root("C:\\missing\nfolder",path));
+ check(GraphicsOptions("off","0","1"));check(GraphicsOptions("quality","100","0"));
+ check(!GraphicsOptions("quality\nEVIL=1","0","1"));check(!GraphicsOptions("other","0","1"));
+ check(!GraphicsOptions("dlaa","101","1"));check(!GraphicsOptions("dlaa","-1","1"));
+ check(!GraphicsOptions("dlaa","0","true"));check(!GraphicsOptions("off","","0"));
  std::cout<<"Epic session checks failed: "<<failures<<'\n';return failures?1:0;
 }

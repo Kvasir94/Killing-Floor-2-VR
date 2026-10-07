@@ -205,3 +205,5 @@ def export_preferences(config_root, root=None, *, network=True):
     temporary = target.with_suffix(".ini.tmp")
     temporary.write_text(result, encoding="utf-16")
     temporary.replace(target)
+    import vr_graphics
+    vr_graphics.export(config_root, root=root)

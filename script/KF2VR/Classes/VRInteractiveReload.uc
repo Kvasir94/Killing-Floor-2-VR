@@ -185,6 +185,11 @@ var VRActionPath LeverPath;
 var array<SkelControlSingleBone> LeverControls;
 var byte LeverHold;
 var bool bLeverEngaged;
+var int LeverActionHand, LeverActionRevision;
+var bool bLeverPrimaryGripWasDown;
+var vector LeverSupportRootOffset;
+var quat LeverSupportRootRotation;
+var VRReloadMotionGuard LeverMotion;
 var StaticMesh AmmoEmptyMesh;
 // The spent prop's body is in the full prop's second section (VRAmmoEmpty1_).
 var bool bEmptyMeshSection1;
@@ -278,6 +283,8 @@ function Initialize(VRDualHandInput I)
     RackMotion = new(self) class'VRReloadMotionGuard';
     // Match the manual pump: a deliberate fast rack is not tracking loss.
     RackMotion.SpeedLimit = 1500;
+    LeverMotion = new(self) class'VRReloadMotionGuard';
+    LeverMotion.SpeedLimit = 1500;
     CarryMotion = new(self) class'VRReloadMotionGuard';
     // Carry checks use the insertion guide's generous discontinuity envelope;
     // they only reject spurious release events, never advance insertion.
@@ -305,7 +312,7 @@ function Initialize(VRDualHandInput I)
 function bool BlocksFire(KFWeapon W, optional bool bSecondary)
 {
     if (!Enabled()) return false;
-    if (!bSecondary && MagazineFeedBlocks(W)) return true;
+    if ((!bSecondary || (W != None && W.GetAmmoType(1) == 0)) && MagazineFeedBlocks(W)) return true;
     return (Pump != None && Pump.BlocksFire(W)) || (ManualAction != None && ManualAction.BlocksFire(W))
         || (BreakAction != None && BreakAction.BlocksFire(W))
         || (!bSecondary && SlideLockBlocks(W));
@@ -329,7 +336,7 @@ function bool MagazineFeedBlocks(KFWeapon W)
 function PrepareMagazineOutFire(KFWeapon W, int Mode)
 {
     local VRWeaponRuntime R;
-    if (!Enabled() || W == None || Mode != 0) return;
+    if (!Enabled() || W == None || Mode < 0 || Mode > 1 || W.GetAmmoType(byte(Mode)) != 0) return;
     R = InputOwner.Inventory.Registry.FindItem(W);
     if (R == None || !R.MagazineOut()) return;
     R.MagazineFeedEvent(0);
@@ -578,6 +585,8 @@ function int OffHand() { return 1 - GunHand; }
 // support grip keeps holding the fore-end while it works, and releases it.
 function bool OwnsHand(int Hand)
 {
+    if (bActive && bLeverEngaged && LeverActionHand == GunHand && Hand == GunHand
+        && PrimaryLeverReady()) return true;
     if (Pump != None && Pump.OwnsHand(Hand)) return true;
     if (ManualAction != None && ManualAction.OwnsHand(Hand)) return true;
     if (BreakAction != None && BreakAction.OwnsHand(Hand)) return true;
@@ -590,7 +599,10 @@ function bool OwnsHand(int Hand)
 // Ordinary hold/toggle input still owns deliberate release.
 function bool LatchesSupport(VRWeaponRuntime R, int Hand)
 {
+    if (bActive && bLeverEngaged && LeverActionHand == GunHand && R == Runtime
+        && Hand == OffHand() && PrimaryLeverReady()) return true;
     if (Pump != None && Pump.LatchesSupport(R, Hand)) return true;
+    if (ManualAction != None && ManualAction.LatchesSupport(R, Hand)) return true;
     return Enabled() && InputOwner.ContextValid() && bActive && Gun != None
         && R != None && R == Runtime && Hand == OffHand() && R.SupportHand == Hand
         && RackUsesSupport();
@@ -684,8 +696,12 @@ function float AlongBore(vector P)
 
 function vector RackLocalPosition(vector P)
 {
-    return QuatRotateVector(QuatInvert(Gun.MySkelMesh.GetBoneQuaternion(RootBone)),
-        P - Gun.MySkelMesh.GetBoneLocation(RootBone));
+    local vector RootAt;
+    local quat RootQ;
+    RootAt = Gun.MySkelMesh.GetBoneLocation(RootBone);
+    RootQ = Gun.MySkelMesh.GetBoneQuaternion(RootBone);
+    PrimaryLeverRoot(Gun, RootAt, RootQ);
+    return QuatRotateVector(QuatInvert(RootQ), P - RootAt);
 }
 
 // The bore, from the gun's root bone: +X forward on every shipped 1P rig. The
@@ -706,13 +722,21 @@ function float ScaleOf(KFWeapon W)
 
 function vector RootLocation(vector InRoot)
 {
-    return Gun.MySkelMesh.GetBoneLocation(RootBone)
-        + QuatRotateVector(Gun.MySkelMesh.GetBoneQuaternion(RootBone), InRoot * GunScale());
+    local vector RootAt;
+    local quat RootQ;
+    RootAt = Gun.MySkelMesh.GetBoneLocation(RootBone);
+    RootQ = Gun.MySkelMesh.GetBoneQuaternion(RootBone);
+    PrimaryLeverRoot(Gun, RootAt, RootQ);
+    return RootAt + QuatRotateVector(RootQ, InRoot * GunScale());
 }
 
 function quat RootQuat(quat InRoot)
 {
-    return QuatProduct(Gun.MySkelMesh.GetBoneQuaternion(RootBone), InRoot);
+    local vector RootAt;
+    local quat RootQ;
+    RootQ = Gun.MySkelMesh.GetBoneQuaternion(RootBone);
+    PrimaryLeverRoot(Gun, RootAt, RootQ);
+    return QuatProduct(RootQ, InRoot);
 }
 
 // Home: the sampled seat; expanded magazines finish at the exact idle seat.
@@ -999,7 +1023,9 @@ function int StockInsertHand()
 {
     local int I;
     if (class'VRBreakCatalog'.static.CylinderReload(Gun)) return CylinderInsertHand;
-    if (MagazineProfileIndex >= 0 || Gun == None) return 0;
+    if (MagazineProfileIndex >= 0)
+        return class'VRReloadCatalog'.default.Profiles[MagazineProfileIndex].InsertHand;
+    if (Gun == None) return 0;
     I = class'VRPumpCatalog'.static.FindClass(Gun.Class);
     if (I < 0) return 0;
     return class'VRPumpCatalog'.default.Profiles[I].InsertHand;
@@ -1010,10 +1036,10 @@ function bool SampleInsert(name Anim)
     local AnimNodeSequence Seq;
     local vector HandLocal, Offset, CarryLocal;
     local quat HandLocalQ, InvHand, OffsetQ, Basis, FrameQ, CarryLocalQ;
-    local vector FrameP;
+    local vector FrameP, PlateauSeat, PlateauPoint;
     local float T;
-    local int I;
-    local bool bSampled;
+    local int I, PlateauSteps;
+    local bool bSampled, bBarrelSeat;
     local InsertPose Point;
     InsertAnim = Anim;
     AmmoCarryTime = 0;
@@ -1038,7 +1064,7 @@ function bool SampleInsert(name Anim)
         RigSample.bSeatAtNotify = MagazineProfileIndex >= 0
             && class'VRReloadCatalog'.default.Profiles[MagazineProfileIndex].bSeatAtNotify;
         if (MagazineProfileIndex >= 0)
-            bSampled = RigSample.Sample(RefMesh, Seq, Anim, RootBone, SpareBone, Bridge.HandBone(0), RackBone, EntryLead,
+            bSampled = RigSample.Sample(RefMesh, Seq, Anim, RootBone, SpareBone, Bridge.HandBone(StockInsertHand()), RackBone, EntryLead,
                 LoadedBone, FollowBone);
         else if (Gun.Class == class'KFWeap_LMG_MG3')
             bSampled = RigSample.SampleBoxInsert(RefMesh, Seq, Anim, RootBone, SpareBone, Bridge.HandBone(0));
@@ -1082,11 +1108,30 @@ function bool SampleInsert(name Anim)
         RefRelative(SpareBone, SeatLocal, SeatLocalQ);
         if (class'VRBreakAction'.static.Supported(Gun))
         {
-            for (I = 1; I <= 120 && T > 1.0 / 60.0; ++I)
+            PlateauSteps = 120;
+            PlateauSeat = SeatLocal;
+            bBarrelSeat = CylinderInsertFrame != ''
+                && (Gun.Class == class'KFWeap_Pistol_Flare' || Gun.Class == class'KFWeap_Pistol_HRGWinterbite');
+            if (bBarrelSeat)
+            {
+                // These cylinders stay seated while the barrel closes. Find
+                // seating in their moving frame across the complete clip,
+                // rather than mistaking the closing motion for insertion.
+                RefRelative(CylinderInsertFrame, FrameP, FrameQ);
+                PlateauSeat = QuatRotateVector(QuatInvert(FrameQ), SeatLocal - FrameP);
+                PlateauSteps = int(Seq.AnimSeq.SequenceLength * 60.0) + 1;
+            }
+            for (I = 1; I <= PlateauSteps && T > 1.0 / 60.0; ++I)
             {
                 PoseRef(Seq, T - 1.0 / 60.0);
                 RefRelative(SpareBone, Point.Position, Point.Rotation);
-                if (VSize(Point.Position - SeatLocal) > 0.2) break;
+                PlateauPoint = Point.Position;
+                if (bBarrelSeat)
+                {
+                    RefRelative(CylinderInsertFrame, FrameP, FrameQ);
+                    PlateauPoint = QuatRotateVector(QuatInvert(FrameQ), Point.Position - FrameP);
+                }
+                if (VSize(PlateauPoint - PlateauSeat) > 0.2) break;
                 T -= 1.0 / 60.0;
             }
             PoseRef(Seq, T);
@@ -1106,10 +1151,21 @@ function bool SampleInsert(name Anim)
         PoseRef(Seq, InsertTime);
         RefRelative(SpareBone, EntryLocal, EntryLocalQ);
         CylinderInsertHand = 0;
-        if (class'VRBreakCatalog'.static.CylinderReload(Gun)
-            && VSize(RefMesh.GetBoneLocation(Bridge.HandBone(1)) - RefMesh.GetBoneLocation(SpareBone))
+        if (class'VRBreakCatalog'.static.CylinderReload(Gun))
+        {
+            if (SpareBone == 'RW_Speedloader')
+            {
+                // The gun wrist can be nearer the loader's origin than the
+                // loading wrist (.500 and Rhino). Choose the authored finger
+                // contact so the carried loader stays in the loading hand.
+                if (RigSample.RackFingerContact(RefMesh, SpareBone, Bridge.HandBone(1))
+                    < RigSample.RackFingerContact(RefMesh, SpareBone, Bridge.HandBone(0)))
+                    CylinderInsertHand = 1;
+            }
+            else if (VSize(RefMesh.GetBoneLocation(Bridge.HandBone(1)) - RefMesh.GetBoneLocation(SpareBone))
                 < VSize(RefMesh.GetBoneLocation(Bridge.HandBone(0)) - RefMesh.GetBoneLocation(SpareBone)))
-            CylinderInsertHand = 1;
+                CylinderInsertHand = 1;
+        }
         RefRelative(Bridge.HandBone(StockInsertHand()), HandLocal, HandLocalQ);
         CarryLocal = EntryLocal; CarryLocalQ = EntryLocalQ; AmmoCarryTime = InsertTime;
         if (Gun.Class == class'KFWeap_GrenadeLauncher_HX25')
@@ -1192,8 +1248,12 @@ function bool BuildHandPose()
     }
     if (BreakAction != None && BreakAction.OwnsHand(OffHand()))
     {
-        StartTime = BreakAction.GripTime; EndTime = StartTime;
+        if (BreakAction.bBeltEngaged)
+        { PoseAnim = 'Reload_Empty'; StartTime = BreakAction.BeltPath.GripTime; }
+        else StartTime = BreakAction.GripTime;
+        EndTime = StartTime;
         Anchor = RootBone;
+        bAction = true;
     }
     else if (HandMode == 3)
     {
@@ -1534,7 +1594,7 @@ function ReleaseLever()
     LeverControls.Length = 0;
     LeverPath = None;
     LeverHold = 0;
-    bLeverEngaged = false;
+    CancelLeverGrip();
 }
 
 function ReleaseRack()
@@ -1591,7 +1651,9 @@ function Update(float Delta)
             {
                 // A credited magazine whose action was interrupted resumes
                 // only that action. No stock reload or second ammo credit.
-                if ((R.EmptyMagazineFlags & 3) == 2 && R.Item.IsInState('Active')
+                if (((R.EmptyMagazineFlags & 3) == 2
+                        || (R.MagazineNeedsRack() && !class'VRReloadCatalog'.static.SlideLocks(R.Item)))
+                    && R.Item.IsInState('Active')
                     && R.Item.AmmoCount[0] > 0
                     && InputOwner.Inventory.Registry.GetPrimary(1 - Hand) == None)
                 { Begin(R, Hand, false, true); if (bActive) break; }
@@ -1785,6 +1847,7 @@ function Begin(VRWeaponRuntime R, int Hand, optional bool bEmptyEject, optional 
     // A dry fire that started this reload is the first press of a repeat.
     if (TriggerDown(GunHand)) NoteDryFire();
     bGripWasDown = GripDown(OffHand());
+    bLeverPrimaryGripWasDown = GripDown(GunHand);
     SessionStart = Now();
     bSavedPauseAnims = M.bPauseAnims;
     RootBone = 'RW_Weapon';
@@ -1845,7 +1908,11 @@ function Begin(VRWeaponRuntime R, int Hand, optional bool bEmptyEject, optional 
     if (!BuildHandPose() && (MagazineProfileIndex >= 0 || class'VRPumpCatalog'.static.Covers(Gun)))
     { RejectSession("hand-pose"); return; }
     if (class'VRBreakAction'.static.Supported(Gun) && !BreakAction.BeginSession(R, Hand))
-    { Finish("break-action-bind-failed"); return; }
+    {
+        if (Gun.Class == class'KFWeap_LMG_MG3') RejectSession("mg3-belt-bind-failed");
+        else Finish("break-action-bind-failed");
+        return;
+    }
     bSlideLock = bEmptyStart && MagazineProfileIndex >= 0 && class'VRReloadCatalog'.static.SlideLocks(Gun);
     // An empty open-bolt gun's handle is forward; hold it there from the start
     // (the stock clip would cock it on its own clock) until a hand cocks it.
@@ -1878,7 +1945,9 @@ function Begin(VRWeaponRuntime R, int Hand, optional bool bEmptyEject, optional 
         if (!bEmptyEject)
         {
             R.MagazineFeedEvent(1);
-            if (AmmoAtStart == 0) R.EmptyMagazineEvent(0);
+            // Only the open-bolt policy also admits a loaded removal. It
+            // exposes no chamber and never changes the stock retained rounds.
+            R.EmptyMagazineEvent(0);
         }
         DropPosition = M.GetBoneLocation(LoadedBone);
         DropRotation = M.GetBoneQuaternion(LoadedBone);
@@ -2103,6 +2172,7 @@ function UpdateHand()
     local bool bGrip, bGripEdge, bHeld, bNearTarget, bSupport;
     local vector P, Palm, ZoneTarget;
     local float Pull, ZoneRadius, CarryDelta, ActionPull;
+    if (UpdatePrimaryLever()) return;
     Hand = OffHand();
     if (BreakAction.OwnsHand(Hand)) return;
     // This runs before ordinary hand input cancels invalid samples. Neither
@@ -2131,7 +2201,7 @@ function UpdateHand()
     if (bNearTarget && !bInZone) Pulse(1 << Hand, 0.1, 0.012);
     bInZone = bNearTarget;
 
-    if (LeverHold != 0 && (HandMode == 0 || bLeverEngaged)) { UpdateLever(P, bGrip, bGripEdge); return; }
+    if (LeverHold != 0 && (HandMode == 0 || bLeverEngaged)) { UpdateLever(Hand, P, bGrip, bGripEdge); return; }
     switch (HandMode)
     {
         case 0:
@@ -2375,6 +2445,21 @@ function Seat()
     // Only a carried or deliberately released insert may pay one stock step.
     if (HandMode != 1 && HandMode != 4) return;
     if (!ResumeMagazineReload()) return;
+    if (BreakAction.Gun == Gun && BreakAction.BeltPath != None)
+    {
+        if (BreakAction.bBoxSeated) return;
+        BreakAction.bBoxSeated = true;
+        BreakAction.bBeltGripWasDown = true;
+        HandMode = 2;
+        bGuidedInsert = false; GuideProgress = 0; InsertGuide.Reset();
+        SeatedAt = 0;
+        Gun.MySkelMesh.UnHideBoneByName('RW_Magazine');
+        // Restore only the pending-load visuals. The twelve controlled links
+        // remain loose on the box; no credit or stock ammo callback occurs.
+        Audio.SeatEffects();
+        Pulse(1 << OffHand(), 0.5, 0.1);
+        return;
+    }
     Audio.EmitCue(3, SeatLocation());
     ++Credits;
     HandMode = 2;
@@ -2418,6 +2503,22 @@ function Seat()
         @ "elapsed=" $ (Now() - SessionStart));
 }
 
+// Called only by the MG3's validated physical release at the feed tray.
+// Credits are tokens for the existing closed-cover timer gate, never ammo.
+function SeatBelt()
+{
+    if (!bActive || Gun == None || Gun.Class != class'KFWeap_LMG_MG3'
+        || BreakAction.Gun != Gun || BreakAction.BeltPath == None
+        || !BreakAction.bBoxSeated || !BreakAction.bBeltSeated
+        || BreakAction.SeatedShells >= BreakAction.RequiredShells) return;
+    Credits += BreakAction.RequiredShells;
+    BreakAction.SeatedShells = BreakAction.RequiredShells;
+    Audio.EmitCue(3, RootLocation(BreakAction.BeltPath.ContactAt(1)));
+    HandMode = 0;
+    bGripWasDown = true;
+    Pulse(1 << OffHand(), 0.5, 0.1);
+}
+
 // A seated magazine is loaded: credit the stock reload's rounds now rather
 // than at the animation's notify, so a fast reload is not held to the clip.
 // PerformReload is the stock credit (client-tracked ammunition, synced to the
@@ -2433,12 +2534,13 @@ function CreditMagazine()
     if (Runtime.MagazineFeedEvent(2) && !Runtime.MagazineHasChamber() && Gun.AmmoCount[0] > 0)
     {
         bEmptyStart = true;
-        bSlideLock = true;
+        // Preserve a notch the hand already parked before inserting (MP5/UMP).
+        bSlideLock = bSlideLock || class'VRReloadCatalog'.static.SlideLocks(Gun);
         bAwaitRack = true;
         PauseStock();
-        if (Gun.EmptyMagBlendNode != None) Gun.EmptyMagBlendNode.SetBlendTarget(1, 0);
+        if (bSlideLock && Gun.EmptyMagBlendNode != None) Gun.EmptyMagBlendNode.SetBlendTarget(1, 0);
         Gun.MySkelMesh.ForceSkelUpdate();
-        LockPull = MeasureLockPull();
+        LockPull = bSlideLock ? MeasureLockPull() : 0.0;
         if (BindRack()) { RackPull = LockPull; SetRackPull(LockPull); }
     }
     bAmmoStepPaid = true;
@@ -2463,7 +2565,11 @@ function Rack(optional bool bReleaseButton)
     // The stock lock pose must not outlive the slide going home.
     if (bSlideLock && Gun.EmptyMagBlendNode != None) Gun.EmptyMagBlendNode.SetBlendTarget(0, 0);
     Pump.ReloadCompleted(Gun);
-    if (Runtime != None) { Runtime.MagazineFeedEvent(3); Runtime.EmptyMagazineEvent(2); }
+    if (Runtime != None)
+    {
+        Runtime.bSlideLockPending = false;
+        Runtime.MagazineFeedEvent(3); Runtime.EmptyMagazineEvent(2);
+    }
     // The slide slams home under the gun hand's thumb: a sharp beat there,
     // and only a rack also works the off hand.
     if (bReleaseButton) Pulse(1 << GunHand, 1.0, 0.1);
@@ -2513,6 +2619,72 @@ function CockOpenBolt()
         @ "elapsed=" $ (Now() - SessionStart));
 }
 
+function quat LeverSupportQ()
+{
+    return QuatFromRotator(OffHand() == 0 ? Bridge.LeftRotation : Bridge.RightRotation);
+}
+
+// Opening/closing is a separate staged action. The primary hand is not an
+// ammunition hand and cannot interrupt a carried or settling round.
+function bool PrimaryLeverReady()
+{
+    return bActive && LeverPath != None && LeverHold != 0 && bTimersPaused
+        && (HandMode == 0 || HandMode == 2) && InputOwner.ContextValid() && StillValid()
+        && Runtime.SupportHand == OffHand()
+        && InputOwner.Inventory.Registry.GetSupport(OffHand()) == Runtime
+        && (Bridge.NativeValidMask & Bridge.NativeGripActiveMask & 3) == 3
+        && (!Bridge.bHoldSupportGrip || GripDown(OffHand()))
+        && !InputOwner.IsSelectorOpen(0) && !InputOwner.IsSelectorOpen(1)
+        && !InputOwner.Inventory.HasWorldGrab(0) && !InputOwner.Inventory.HasWorldGrab(1)
+        && (!bLeverEngaged || LeverActionHand != GunHand || Runtime.OwnershipRevision == LeverActionRevision);
+}
+
+// Same presentation hook as after-shot cycling, including late placement.
+// This only changes the root during an acquired, supported primary stroke.
+function bool PrimaryLeverRoot(KFWeapon W, out vector At, out quat Q)
+{
+    if (W != Gun || !bLeverEngaged || LeverActionHand != GunHand || !PrimaryLeverReady()) return false;
+    Q = LeverSupportQ();
+    At = Bridge.Hands[OffHand()].Position + QuatRotateVector(Q, LeverSupportRootOffset);
+    Q = QuatProduct(Q, LeverSupportRootRotation);
+    return true;
+}
+
+function CancelLeverGrip()
+{
+    bLeverEngaged = false;
+    LeverActionHand = -1;
+    if (LeverMotion != None) LeverMotion.Reset();
+    // Cancellation must see a real release before either hand can reacquire.
+    bLeverPrimaryGripWasDown = true;
+    bGripWasDown = true;
+}
+
+// Observe primary edges independently of off-hand ammo/lever input. Consume
+// the support's current grip sample while primary work owns this tick, so a
+// held support squeeze cannot become a new off-hand stroke afterwards.
+function bool UpdatePrimaryLever()
+{
+    local bool bGrip, bEdge;
+    local vector P;
+    bGrip = GripDown(GunHand);
+    bEdge = bGrip && !bLeverPrimaryGripWasDown;
+    bLeverPrimaryGripWasDown = bGrip;
+    if (bLeverEngaged && LeverActionHand == GunHand)
+    {
+        bGripWasDown = GripDown(OffHand());
+        if (!PrimaryLeverReady()) CancelLeverGrip();
+        else UpdateLever(GunHand, Bridge.Hands[GunHand].Position, bGrip, bEdge);
+        return true;
+    }
+    if (bLeverEngaged || !bEdge || !PrimaryLeverReady()) return false;
+    P = Bridge.Hands[GunHand].Position;
+    if (VSize(P - RootLocation(LeverPath.ContactLocal(LeverPath.Amount))) > RackReach()) return false;
+    bGripWasDown = GripDown(OffHand());
+    UpdateLever(GunHand, P, bGrip, bEdge);
+    return bLeverEngaged;
+}
+
 // The lever: sampled from the live open-and-load clip, bound closed.
 function bool BindLever()
 {
@@ -2523,7 +2695,9 @@ function bool BindLever()
         LeverPath.Bones[I] = class'VRPumpCatalog'.default.Profiles[class'VRPumpCatalog'.static.FindClass(Gun.Class)].LeverBones[I];
         if (LeverPath.Bones[I] != '') LeverPath.BoneCount = I + 1;
     }
-    if (!LeverPath.SampleClip(Bridge, Gun, RootBone, InsertAnim, Bridge.HandBone(0))) { LeverPath = None; return false; }
+    // Stock right wrist works the Winchester/SPX lever in normal and elite
+    // open-shell clips; the left wrist is the fore-end/ammunition hand.
+    if (!LeverPath.SampleClip(Bridge, Gun, RootBone, InsertAnim, Bridge.HandBone(1))) { LeverPath = None; return false; }
     RackTree = AnimTree(Gun.MySkelMesh.Animations);
     if (RackTree == None || RackTree == Gun.MySkelMesh.AnimTreeTemplate) { RackTree = None; LeverPath = None; return false; }
     bRackSavedPooling = RackTree.bEnablePooling;
@@ -2556,21 +2730,36 @@ function PlaceLever()
 
 // Grip the lever, swing it along its stock throw; full open lets the first
 // round in, full close lets the reload go on.
-function UpdateLever(vector P, bool bGrip, bool bGripEdge)
+function UpdateLever(int Hand, vector P, bool bGrip, bool bGripEdge)
 {
-    local int Hand;
     local vector HandLocal;
-    Hand = OffHand();
-    HandLocal = RackLocalPosition(P) / GunScale();
+    local quat InvSupport;
     if (!bLeverEngaged)
     {
         if (!bGripEdge || VSize(P - RootLocation(LeverPath.ContactLocal(LeverPath.Amount))) > RackReach()) return;
+        if (Hand == GunHand)
+        {
+            if (!PrimaryLeverReady()) return;
+            InvSupport = QuatInvert(LeverSupportQ());
+            LeverSupportRootOffset = QuatRotateVector(InvSupport,
+                Gun.MySkelMesh.GetBoneLocation(RootBone) - Bridge.Hands[OffHand()].Position);
+            LeverSupportRootRotation = QuatProduct(InvSupport, Gun.MySkelMesh.GetBoneQuaternion(RootBone));
+            LeverActionRevision = Runtime.OwnershipRevision;
+        }
+        LeverActionHand = Hand;
         bLeverEngaged = true;
+        HandLocal = RackLocalPosition(P) / GunScale();
+        if (!LeverMotion.Begin(RackLocalPosition(P), Now())) { CancelLeverGrip(); return; }
         LeverPath.GrabOffset = HandLocal - LeverPath.ContactLocal(LeverPath.Amount);
         Pulse(1 << Hand, 0.25, 0.02);
         return;
     }
-    if (!bGrip) { bLeverEngaged = false; return; }
+    // A tracking jump/gap or loss of the supporting role cannot complete a
+    // stroke. Keep LeverHold and Amount; timers and spent chamber stay held.
+    if (LeverActionHand != Hand || (Hand == GunHand && !PrimaryLeverReady())
+        || !LeverMotion.Check(RackLocalPosition(P), Now())) { CancelLeverGrip(); return; }
+    if (!bGrip) { CancelLeverGrip(); return; }
+    HandLocal = RackLocalPosition(P) / GunScale();
     LeverPath.Amount = LeverPath.Project(HandLocal - LeverPath.GrabOffset);
     PlaceLever();
     if (LeverHold == 1 && LeverPath.Amount >= 0.95)
@@ -2578,7 +2767,7 @@ function UpdateLever(vector P, bool bGrip, bool bGripEdge)
         LeverPath.Amount = 1; PlaceLever();
         Audio.EmitCue(4, P);
         Pulse(3, 1.0, 0.08);
-        LeverHold = 0; bLeverEngaged = false;
+        LeverHold = 0; CancelLeverGrip();
         ResumeStock();
     }
     else if (LeverHold == 2 && LeverPath.Amount <= 0.05)
@@ -2587,7 +2776,7 @@ function UpdateLever(vector P, bool bGrip, bool bGripEdge)
         Audio.EmitCue(5, P);
         if (ManualAction != None) ManualAction.ReloadCompleted(Gun);
         Pulse(3, 1.0, 0.1);
-        LeverHold = 0; bLeverEngaged = false;
+        LeverHold = 0; CancelLeverGrip();
         ResumeStock();
     }
 }
@@ -2623,6 +2812,7 @@ function CancelHand(int Hand)
     if (BreakAction != None) BreakAction.CancelHand(Hand);
     if (bActive && (Hand == OffHand() || Hand == GunHand))
     {
+        CancelLeverGrip();
         PendingPulseMask = 0;
         CarryMotion.Reset();
         ClearReleasedProps();
@@ -3103,7 +3293,7 @@ function UpdateHints()
                 && (bEmptyStart || Pump.RequiresPump(Gun)) && Gun.AmmoCount[0] > 0));
     else if (BreakAction.Gun == Gun)
         UpdateParts(Gun, false, BreakAction.bOpened && !BreakAction.bClosed
-            && BreakAction.SeatedShells < BreakAction.RequiredShells, false);
+            && !BreakAction.bBoxSeated && BreakAction.SeatedShells < BreakAction.RequiredShells, false);
     else UpdateParts(Gun, false, NeedsAmmo() && !bGuidedInsert && HandMode != 4, bAwaitRack);
 }
 
@@ -3703,8 +3893,8 @@ function PlaceVisuals()
     {
         At = BeltPosition();
         Q = PouchRotation();
-        // Reserve shells are already drawn independently of this reload step.
-        if (BeltShells != None && BeltShells.Covers(Gun)) PouchAmmo.SetHidden(true);
+        // Reserve props already drawn independently of this reload step.
+        if (BeltShells != None && BeltShells.HasProp(Gun)) PouchAmmo.SetHidden(true);
         else PlaceProp(PouchAmmo, At - QuatRotateVector(Q, PropCentre * Scale), Q, Scale);
         // AS2 has no pouch; KF2-VR's pouch ring accompanies the magwell glow.
         if (bGlow ? PartVisible(1) : HintVisible(1))
@@ -3762,7 +3952,9 @@ defaultproperties
     MagazineProfileIndex=-1
     LastReleasedProp=-1
     IdleGripMask=3
-    BeltOffset=(X=12,Y=-14,Z=-24)
+    // Forward of the neck even at a straight-down look. The previous centre
+    // remains within BeltRadius; the entry boundary moves with the pouch.
+    BeltOffset=(X=24,Y=-14,Z=-24)
     BeltRadius=14
     SnapRadius=8
     RackRadius=12

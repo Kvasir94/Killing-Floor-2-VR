@@ -27,7 +27,10 @@ var bool bSlideLockPending;
 // Native pure-state availability policy. Stock AmmoCount includes retained
 // magazine rounds; these flags never move or credit ammunition.
 var int MagazineFeedFlags, MagazineFeedLastAmmo;
-// Empty-only removal is independent of the pistol chamber ledger. It survives
+// Stock primary-ammo modes and the exact confirmed shot awaiting its stop RPC.
+var int MagazineFeedModeMask, MagazineFeedShotMode;
+// No-chamber removal (empty loads and explicit open bolts) is independent of
+// the retained-round ledger. It survives
 // stow, hand transfer and presenter rebuild, without storing magazine ammo.
 var int EmptyMagazineFlags;
 
@@ -41,8 +44,55 @@ var rotator AimBaseRotation;
 
 function bool TracksMagazineFeed()
 {
-    // Preserve the existing paired/dual reload contract and unaudited subclasses.
-    return Item != None && (Item.Class == class'KFWeap_Pistol_9mm' || Item.Class == class'KFWeap_Pistol_Deagle');
+    // Exact conventional closed-bolt, one-round feeds with an audited stock
+    // non-burst firing mode. Never infer support from a magazine or rack bone:
+    // FAMAS/93R burst-only feeds, AF2011, open bolts and paired/special loads are excluded.
+    return Item != None && (Item.Class == class'KFWeap_Pistol_9mm'
+        || Item.Class == class'KFWeap_Pistol_Deagle'
+        || Item.Class == class'KFWeap_Pistol_Colt1911'
+        || Item.Class == class'KFWeap_Pistol_Medic'
+        || Item.Class == class'KFWeap_AssaultRifle_AK12'
+        || Item.Class == class'KFWeap_AssaultRifle_Bullpup'
+        || Item.Class == class'KFWeap_Rifle_M14EBR'
+        || Item.Class == class'KFWeap_SMG_Medic'
+        || Item.Class == class'KFWeap_AssaultRifle_AR15'
+        || Item.Class == class'KFWeap_AssaultRifle_SCAR'
+        || Item.Class == class'KFWeap_SMG_MP7'
+        || Item.Class == class'KFWeap_SMG_Kriss'
+        || Item.Class == class'KFWeap_SMG_P90'
+        || Item.Class == class'KFWeap_AssaultRifle_G36C'
+        || Item.Class == class'KFWeap_SMG_HK_UMP'
+        || Item.Class == class'KFWeap_SMG_MP5RAS'
+        || Item.Class == class'KFWeap_Shotgun_Medic'
+        || Item.Class == class'KFWeap_AssaultRifle_Medic'
+        || Item.Class == class'KFWeap_Pistol_G18C'
+        || Item.Class == class'KFWeap_AssaultRifle_FNFal');
+}
+
+// A healing dart or underbarrel round must not borrow the main chamber gate.
+function bool UsesMagazineAmmo(byte Mode)
+{
+    return Item != None && Mode <= 1 && Item.GetAmmoType(Mode) == 0
+        && (Item.WeaponFireTypes[Mode] == EWFT_InstantHit || Item.WeaponFireTypes[Mode] == EWFT_Projectile);
+}
+
+function bool MagazineNeedsRack()
+{
+    return !MagazineOut() && ((MagazineFeedFlags & 8) != 0 || (EmptyMagazineFlags & 2) != 0);
+}
+
+// Burst ShouldRefire ignores PendingFire. For the single retained round use
+// an existing same-ammo non-burst mode, without changing SelectedMode or stock
+// mode preferences. Automatic modes are stopped immediately after the shot.
+function int ChamberFireMode(byte Requested)
+{
+    local byte Other;
+    if (Item.FiringStatesArray[Requested] == 'WeaponSingleFiring'
+        || Item.FiringStatesArray[Requested] == 'WeaponFiring') return Requested;
+    Other = 1 - Requested;
+    if (UsesMagazineAmmo(Other) && (Item.FiringStatesArray[Other] == 'WeaponSingleFiring'
+        || Item.FiringStatesArray[Other] == 'WeaponFiring')) return Other;
+    return -1;
 }
 
 // Native policy returns false until the matching adapter handles the callback.
@@ -87,6 +137,8 @@ function bool EmptyMagazineEvent(int EventCode)
 {
     local int Profile;
     if (!IsCurrent() || !TracksEmptyMagazine()) return false;
+    MagazineFeedModeMask = 1;
+    if (UsesMagazineAmmo(1)) MagazineFeedModeMask = MagazineFeedModeMask | 2;
     Profile = class'VRReloadCatalog'.static.FindClass(Item.Class);
     return NativeMagazineFeedEvent(8 + EventCode, Item.AmmoCount[0],
         class'VRReloadCatalog'.static.ActionKindOf(Profile));
@@ -94,12 +146,26 @@ function bool EmptyMagazineEvent(int EventCode)
 
 function bool MagazineFeedEvent(int EventCode)
 {
-    return TracksMagazineFeed() && IsCurrent() && NativeMagazineFeedEvent(EventCode, Item.AmmoCount[0]);
+    if (!TracksMagazineFeed() || !IsCurrent()) return false;
+    MagazineFeedModeMask = 1;
+    if (UsesMagazineAmmo(1)) MagazineFeedModeMask = MagazineFeedModeMask | 2;
+    if (!NativeMagazineFeedEvent(EventCode, Item.AmmoCount[0])) return false;
+    // A positive stock total after an interrupted empty reload is still not a
+    // chamber. Apply the actor's pending action even on first observation.
+    if (EventCode == 0 && bSlideLockPending) NativeMagazineFeedEvent(5, Item.AmmoCount[0]);
+    return true;
 }
 
 function bool MagazineOut() { return (MagazineFeedFlags & 3) == 3 || (EmptyMagazineFlags & 1) != 0; }
 function bool MagazineHasChamber() { return Item != None && Item.AmmoCount[0] > 0 && (MagazineFeedFlags & 5) == 5; }
-function int MagazineDisplayAmmo() { return MagazineOut() ? int(MagazineHasChamber()) : Max(Item.AmmoCount[0], 0); }
+function int MagazineDisplayAmmo()
+{
+    if (Item == None) return 0;
+    // Read stock before drawing: a consumption/correction can precede the
+    // reload tick. Observing it never credits ammo or infers a new out-of-mag shot.
+    if ((MagazineFeedFlags & 1) != 0) MagazineFeedEvent(0);
+    return MagazineOut() ? int(MagazineHasChamber()) : Max(Item.AmmoCount[0], 0);
+}
 
 // Stock ServerStartFire can arrive while its copy is still Reloading.
 // After the confirmed local shot, use that weapon's reliable channel in order:
@@ -109,11 +175,11 @@ function int MagazineDisplayAmmo() { return MagazineOut() ? int(MagazineHasChamb
 function FlushMagazineShot()
 {
     if (!IsCurrent() || (MagazineFeedFlags & 16) == 0) return;
-    if (Item.Role < ROLE_Authority)
-    {
-        Item.ServerStopFire(0);
-        Item.SyncCurrentAmmoCount(0, Item.AmmoCount[0]);
-    }
+    // Called by the native post-shot callback before another timer can refire.
+    // StopFire owns local pending fire and the reliable stock ServerStopFire.
+    Item.StopFire(byte(MagazineFeedShotMode));
+    if (Item.Role < ROLE_Authority && UsesMagazineAmmo(Item.CurrentFireMode))
+        Item.SyncCurrentAmmoCount(byte(MagazineFeedShotMode), Item.AmmoCount[0]);
     MagazineFeedEvent(7);
 }
 
@@ -122,11 +188,18 @@ function FlushMagazineShot()
 function StartAction(byte Mode)
 {
     local bool SavedEntry;
+    local int ChamberMode;
     if (!IsCurrent()) return;
     FlushMagazineShot();
     if ((MagazineFeedFlags & 1) != 0) MagazineFeedEvent(0);
-    if (Mode == 0 && (MagazineOut() || (MagazineFeedFlags & 8) != 0 || (EmptyMagazineFlags & 2) != 0)
+    if (UsesMagazineAmmo(Mode) && (MagazineOut() || (MagazineFeedFlags & 8) != 0 || (EmptyMagazineFlags & 2) != 0)
         && !MagazineHasChamber()) return;
+    if (MagazineOut() && UsesMagazineAmmo(Mode))
+    {
+        ChamberMode = ChamberFireMode(Mode);
+        if (ChamberMode < 0) return;
+        Mode = byte(ChamberMode);
+    }
     SavedEntry = Item.bGamepadFireEntry;
     Item.bGamepadFireEntry = true;
     // The Rail Gun refuses a direct ALTFIRE start; stock reaches MANUAL only

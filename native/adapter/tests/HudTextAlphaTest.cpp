@@ -142,5 +142,26 @@ float4 PS():SV_TARGET { return float4(1,0,0,0.5); }
     alpha.Clear(context.Get(),foreign.view.Get(),transparent);
     Test(!alpha.RegisterSelector(0,&newInputOwner,nullptr,768,768),"missing current input owner rejects stale callbacks");
     checkDraw(newLeft,70,"loss of input ownership removes the previous selector correction");
+    {
+        kf2vr::adapter::HudTextAlpha unorm;
+        D3D11_TEXTURE2D_DESC td{};td.Width=1024;td.Height=256;td.MipLevels=td.ArraySize=td.SampleDesc.Count=1;
+        td.Format=DXGI_FORMAT_R8G8B8A8_UNORM;td.BindFlags=D3D11_BIND_RENDER_TARGET;
+        Target banner;HR(device->CreateTexture2D(&td,nullptr,&banner.texture));
+        HR(device->CreateRenderTargetView(banner.texture.Get(),nullptr,&banner.view));
+        int owner=0;
+        unorm.Clear(context.Get(),banner.view.Get(),transparent);
+        Test(unorm.RegisterPanel(4,&owner,&owner,1024,256),"UNORM clear registers owned panel");
+        ID3D11RenderTargetView* slots[8]{banner.view.Get()};
+        context->OMSetRenderTargets(8,slots,nullptr);unorm.Targets(context.Get(),8,slots);
+        {
+            kf2vr::adapter::HudTextAlpha::DrawScope scope;unorm.BeforeDraw(context.Get(),scope);
+            Test(scope.context!=nullptr,"sparse eight-slot list repairs owned panel alpha");
+        }
+        slots[1]=foreign.view.Get();unorm.Targets(context.Get(),8,slots);
+        {
+            kf2vr::adapter::HudTextAlpha::DrawScope scope;unorm.BeforeDraw(context.Get(),scope);
+            Test(scope.context==nullptr,"multiple colour targets remain unchanged");
+        }
+    }
     context->ClearState();std::printf("HUD alpha checks=%d failures=%d\n",checks,failures);return failures?1:0;
 }

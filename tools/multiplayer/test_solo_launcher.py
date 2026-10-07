@@ -19,6 +19,28 @@ from workshop_map import MAP_NAME
 
 
 class SoloLauncherTests(unittest.TestCase):
+    def test_normal_launch_does_not_restore_practice_or_request_cheats(self):
+        user = self.root / "user"
+        user.mkdir()
+        (user / "KFEngine.ini").write_text("[Core.System]\nPaths=stock\nScriptPaths=stock\n"
+            "SeekFreePCPaths=stock\nBrewedPCPaths=stock\n")
+        (user / "KFGame.ini").write_text("[KF2VR.VRDemo]\nbNormalGame=False\nbRenderDiagnostic=True\n")
+        (self.profile / "KFGame.ini").write_text("[KF2VR.VRDemo]\nbNormalGame=False\nbRenderDiagnostic=True\n")
+        before = config_hashes(user)
+        for mode, name in (("--solo", "driver"), ("--host", "driver"), ("--host", "server")):
+            args = self.options(mode, "--vr", "--mods", "none")
+            role = friends.configure_role(self.root / (mode[2:] + name), name, user, self.root / "game", args)
+            command = " ".join(role["args"]).lower()
+            for forbidden in ("enablecheats", "-exec=", "-exec cmd", "vrnetdiagnostics=1", "vrnetautoready=1"):
+                self.assertNotIn(forbidden, command)
+            text = read_ini(Path(role["config_root"]) / "KFGame.ini")
+            controller = values(text, "KF2VRNet.KF2VRNetPlayerController")
+            self.assertEqual("false", controller["bDiagnosticSyntheticAutoStart"])
+            if mode == "--solo":
+                self.assertIn("vrnormalgame=1", command)
+                self.assertEqual({"bNormalGame": "True", "bRenderDiagnostic": "False"}, values(text, "KF2VR.VRDemo"))
+        self.assertEqual(before, config_hashes(user))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

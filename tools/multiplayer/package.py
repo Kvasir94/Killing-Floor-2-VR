@@ -23,7 +23,7 @@ from dependencies import extract_msi, extract_verified, PINS
 
 LAUNCHER_MODULES = (
     "friends.py", "session.py", "saved_motion.py", "motion_timeline.py", "motion_fixture_evidence.py", "abort_fixture.py", "native_fixture.py", "evidence.py", "avatar_evidence.py",
-    "watchdog.py", "vr_config.py", "desktop_settings.py", "workshop_map.py", "workshop_loadout.py",
+    "watchdog.py", "vr_config.py", "vr_graphics.py", "desktop_settings.py", "workshop_map.py", "workshop_loadout.py",
     "release_state.py", "acceptance.py", "launch_menu.py", "launch_state.py", "launcher_gui.py",
     "recovery.py", "diagnostics.py", "dependencies.py", "join_code.py", "local_test_control.py", "breacher.py",
     "promo_session.py", "promo_events.py", "motion_session.py",
@@ -172,6 +172,22 @@ def copy_frozen_runtime_extras(release, output):
             shutil.copy2(release / name, destination)
 
 
+def portable_receipt(receipt):
+    """Keep validated capability/dependency metadata while removing local paths."""
+    return {key: value for key, value in receipt.items()
+            if key.endswith("sha256") or key in ("success", "includes_vr_client", "schema",
+                "started_utc", "finished_utc", "dlss_enabled", "ngx_sdk")}
+
+
+def validate_native_inventory(root, native):
+    if set(native["artifacts_sha256"]) != ({"dinput8.dll", "openxr_loader.dll", "nvngx_dlss.dll"} if native.get("dlss_enabled") else {"dinput8.dll", "openxr_loader.dll"}) or set(native["server_artifacts_sha256"]) != {"dinput8.dll"}:
+        raise RuntimeError("Unexpected native distribution contents")
+    if native.get("dlss_enabled"):
+        pins = json.loads((Path(root) / "tools/ngx-pins.json").read_text(encoding="utf-8"))
+        if native.get("ngx_sdk") != pins or native["artifacts_sha256"]["nvngx_dlss.dll"] != pins["files_sha256"]["lib/Windows_x86_64/rel/nvngx_dlss.dll"]:
+            raise RuntimeError("NGX runtime or dependency receipt differs from official pin")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--public-release", action="store_true", help="Require clean source tree and matching successful build receipts")
@@ -197,8 +213,7 @@ def main(argv=None):
     allowed_packages = {"KF2VR.u", "KF2VRNet.u", "KF2VRNetClient.u", "KF2VRHands.upk", "KF2VRPortal.upk"}
     if set(receipt["packages_sha256"]) != allowed_packages:
         raise RuntimeError("Unexpected script/asset distribution contents")
-    if set(native["artifacts_sha256"]) != {"dinput8.dll", "openxr_loader.dll"} or set(native["server_artifacts_sha256"]) != {"dinput8.dll"}:
-        raise RuntimeError("Unexpected native distribution contents")
+    validate_native_inventory(ROOT, native)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     output = ROOT / "build/multiplayer/releases" / f"KF2VR-Multiplayer-{stamp}"
     output.mkdir(parents=True)
@@ -245,6 +260,10 @@ def main(argv=None):
     shutil.copy2(documents / "docs/public-alpha/CONTROLS-CARD.txt", output / "docs")
     notices = output / "notices"
     notices.mkdir()
+    if native.get("dlss_enabled"):
+        for name in ("NVIDIA-DLSS-LICENSE.txt", "AMD-CAS-LICENSE.txt"):
+            shutil.copy2(ROOT / "third_party" / name, notices / name)
+        shutil.copy2(ROOT / "docs/DLSS.md", output / "docs/DLSS.md")
     shutil.copy2(ROOT / "third_party/openxr-sdk/LICENSE", notices / "OpenXR-LICENSE.txt")
     shutil.copy2(ROOT / "third_party/minhook/LICENSE.txt", notices / "MinHook-LICENSE.txt")
     shutil.copytree(ROOT / "third_party/openxr-sdk/LICENSES", notices / "OpenXR-LICENSES")
@@ -258,8 +277,6 @@ def main(argv=None):
     build_id = f"0.1.0-alpha-{stamp}-{commit[:12]}-p{protocol}" + ("-dev" if status or not args.public_release else "")
     # Receipts remain traceable through source/artifact hashes; local log and SDK
     # paths do not belong in a distributable manifest.
-    def portable_receipt(receipt):
-        return {key: value for key, value in receipt.items() if key.endswith("sha256") or key in ("success", "includes_vr_client", "schema", "started_utc", "finished_utc")}
     manifest = {"build_id": build_id, "version": "0.1.0-alpha", "protocol_version": protocol,
         "breacher_protocol": 1,
         "player_launcher_protocol": 1,

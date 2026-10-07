@@ -11,6 +11,34 @@ from session import read_ini, config_hashes
 
 
 class WorkshopLoadoutTests(unittest.TestCase):
+    def test_saved_admin_auto_cheats_are_disabled_only_in_session_copies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = self.args(root, "--mods", "ukfp,aal")
+            game, user = root / "game", root / "user"
+            bases = [game / "KFGame/Config", args.server_root / "KFGame/Config", user]
+            original = "[AAL.AAL]\nVersion=2\nbAutoEnableCheats=True\n[AAL.AdminList]\nAdminId=preserved\n"
+            for base in bases:
+                for platform in ("", "PCServer", "Eos"):
+                    folder = base / platform
+                    folder.mkdir(parents=True, exist_ok=True)
+                    (folder / "KFAAL.ini").write_text(original)
+            for name in ("server", "driver"):
+                configs = root / "run" / name / "Config"
+                configs.mkdir(parents=True)
+                (configs / "KFAAL.ini").write_text(original)
+                role = {"role": name, "config_root": str(configs), "args": []}
+                loadout.configure_mod_settings(role, args, game, user)
+                for target in role["mod_config"]["destinations"]:
+                    for path in Path(target["root"]).rglob("KFAAL.ini"):
+                        text = read_ini(path)
+                        self.assertIn("bAutoEnableCheats=False", text)
+                        self.assertNotIn("bAutoEnableCheats=True", text)
+                        self.assertIn("AdminId=preserved", text)
+            for base in bases:
+                for platform in ("", "PCServer", "Eos"):
+                    self.assertEqual(original, (base / platform / "KFAAL.ini").read_text())
+
     def test_session_record_retries_a_transient_windows_share_violation(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "run.json"

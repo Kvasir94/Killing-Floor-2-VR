@@ -77,6 +77,7 @@ function CancelHand(int Hand, optional bool bThrown)
     if (!bThrown) Pulse(Hand, 0.18, 0.050);
     if (Preview != None) { Preview.DeactivateSystem(); Bridge.DetachComponent(Preview); Preview = None; }
     HoldingHand = -1; HeldClass = None; HeldInventory = None; HeldOwner = None; Samples = 0;
+    RefreshGripPose();
     Bridge.Hands[Hand].bGripArmed = false;
     Bridge.Hands[Hand].bTriggerArmed = false;
     // Inventory was only reserved logically; cancellation consumes nothing.
@@ -155,7 +156,13 @@ function bool FreeHand(int Hand)
 // The visible grenade centre: the slot origin plus the mesh centre.
 function vector SlotGrabPosition()
 {
-    return ChestPosition() + ((MeshCenter(ChestGrenadeClass()) * GrenadeDisplayScale(ChestGrenadeClass())) >> Torso);
+    return ChestPosition() + (DisplayCenter() >> Torso);
+}
+
+// Calibration must subtract the same scaled centre used for grab admission.
+function vector DisplayCenter()
+{
+    return MeshCenter(ChestGrenadeClass()) * GrenadeDisplayScale(ChestGrenadeClass());
 }
 // Kept for the calibration preview and older callers.
 function vector ChestGrabPosition() { return SlotGrabPosition(); }
@@ -203,11 +210,11 @@ function HandFrame(int Hand, out vector Position, out vector Forward, out vector
     }
 }
 
-// The held body sits in the closed fist, upright along the thumb, with its
-// visible centre (not the template origin) at the centre of the fist.
+// The authored grip seats each visible body in the rendered hand frame.
+// Neither this visual offset nor the finger table changes the throw anchor.
 function PlaceHeldPreview(int Hand)
 {
-    local vector Wrist, Forward, Thumb, Palm, Center;
+    local vector Wrist, Forward, Thumb, Palm, Center, Offset;
     local rotator Facing;
     if (Preview == None) return;
     HandFrame(Hand, Wrist, Forward, Thumb, Palm);
@@ -220,12 +227,22 @@ function PlaceHeldPreview(int Hand)
     {
         Forward = Normal(Forward);
         Thumb = Normal(Thumb - Forward * (Thumb dot Forward));
-        Center = Wrist + Forward * 8.5 + Palm * 3.0;
+        Offset = class'VRGrenadeGripPose'.static.HeldOffset(HeldClass.Name);
+        Center = Wrist + Forward * Offset.X + Thumb * Offset.Y + Palm * Offset.Z;
         Facing = OrthoRotation(Forward, Thumb cross Forward, Thumb);
         Preview.SetRotation(Facing);
         Preview.SetTranslation(Center - ((MeshCenter(HeldClass) * GrenadeDisplayScale(HeldClass)) >> Facing));
     }
     Preview.ForceUpdate(true);
+}
+
+// Grab/cancel can occur after the free hand's normal tick. Evaluate once here
+// so the preview and fingers change together, including a same-tick release.
+function RefreshGripPose()
+{
+    if (Bridge.FreeHandPose == None || !Bridge.FreeHandPose.bReady) return;
+    Bridge.FreeHandPose.Apply();
+    if (Bridge.Arms != None) Bridge.Arms.ForceSkelUpdate();
 }
 
 // A zed holding the player sets bNoWeaponFiring. Match tracked melee: a clot
@@ -274,6 +291,7 @@ function bool TakeGrenade(int Hand)
     StockOwner = FindProjectileOwner(Inv);
     if (StockOwner == None) { PulseRefused(Hand); return false; }
     HeldClass = GrenadeClass; HeldInventory = Inv; HeldOwner = StockOwner; HoldingHand = Hand;
+    RefreshGripPose();
     CaptureEpoch = Bridge.NativeCalibrationEpoch;
     LastPosition = Bridge.PalmPosition(Hand); LastPawnPosition = Bridge.Human.Location;
     LastTime = Bridge.WorldInfo.RealTimeSeconds; Samples = 0; ThrowVelocity = vect(0,0,0);

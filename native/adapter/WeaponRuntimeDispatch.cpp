@@ -7,6 +7,36 @@
 namespace kf2vr::adapter {
 namespace {
 
+// Keep this exact-class admission aligned with VRWeaponRuntime. Physical
+// magazine geometry alone does not establish a single-round chamber contract.
+bool AuditedMagazineWeapon(GameScript& script, void* weapon) {
+    const auto name=GameScript::ObjectName(GameScript::ObjectClass(weapon));
+    static constexpr const wchar_t* classes[]={
+        L"KFWeap_Pistol_9mm",
+        L"KFWeap_Pistol_Deagle",
+        L"KFWeap_Pistol_Colt1911",
+        L"KFWeap_Pistol_Medic",
+        L"KFWeap_AssaultRifle_AK12",
+        L"KFWeap_AssaultRifle_Bullpup",
+        L"KFWeap_Rifle_M14EBR",
+        L"KFWeap_SMG_Medic",
+        L"KFWeap_AssaultRifle_AR15",
+        L"KFWeap_AssaultRifle_SCAR",
+        L"KFWeap_SMG_MP7",
+        L"KFWeap_SMG_Kriss",
+        L"KFWeap_SMG_P90",
+        L"KFWeap_AssaultRifle_G36C",
+        L"KFWeap_SMG_HK_UMP",
+        L"KFWeap_SMG_MP5RAS",
+        L"KFWeap_Shotgun_Medic",
+        L"KFWeap_AssaultRifle_Medic",
+        L"KFWeap_Pistol_G18C",
+        L"KFWeap_AssaultRifle_FNFal",
+    };
+    for (const auto* type:classes) if (name==script.Intern(type)) return true;
+    return false;
+}
+
 void Count(GameScript& script, void* object, const wchar_t* field) {
     const auto count=script.Read<std::uint32_t>(object,field);
     if (count<0x7fffffff) script.Write(object,field,count+1);
@@ -142,20 +172,46 @@ bool ResolveItemPresenter(GameScript& script, void* bridge, void* pawn,
     return true;
 }
 
+bool MagazineFeedBlocksShot(GameScript& script, void* bridge, void* pawn,
+                             void* weapon, void* function) {
+    if (!weapon || !IsDeclaredFunction(script,weapon,function,L"KFWeapon")) return false;
+    auto* registry=Registry(script,bridge,pawn);
+    if (!registry) return false;
+    auto* runtime=Runtime(script,registry,weapon);
+    if (!runtime) return false;
+    const auto mode=script.Read<std::uint8_t>(weapon,L"CurrentFireMode");
+    if (mode>1 || !(script.Read<int>(runtime,L"MagazineFeedModeMask") & (1<<mode))) return false;
+    const EmptyMagazineState empty{script.Read<int>(runtime,L"EmptyMagazineFlags")};
+    if (empty.BlocksFire()) return true;
+    MagazineFeedState state{script.Read<int>(runtime,L"MagazineFeedFlags"),
+                            script.Read<int>(runtime,L"MagazineFeedLastAmmo")};
+    if (!(state.flags&MagazineFeedState::Ready)) return false;
+    const auto ammo=script.Read<int>(weapon,L"AmmoCount");
+    if (!state.Apply(MagazineFeedState::Event::Observe,ammo)) return false;
+    script.Write(runtime,L"MagazineFeedFlags",state.flags);
+    script.Write(runtime,L"MagazineFeedLastAmmo",state.lastAmmo);
+    return state.BlocksFire(ammo);
+}
+
 void CompleteMagazineShot(GameScript& script, void* bridge, void* pawn,
                           void* weapon, void* function) {
-    if (!weapon || !IsDeclaredFunction(script,weapon,function,L"KFWeapon") ||
-        script.Read<std::uint8_t>(weapon,L"CurrentFireMode")!=0) return;
+    if (!weapon || !IsDeclaredFunction(script,weapon,function,L"KFWeapon")) return;
     auto* registry=Registry(script,bridge,pawn);
     if (!registry) return;
     auto* runtime=Runtime(script,registry,weapon);
     if (!runtime) return;
+    const auto mode=script.Read<std::uint8_t>(weapon,L"CurrentFireMode");
+    if (mode>1 || !(script.Read<int>(runtime,L"MagazineFeedModeMask") & (1<<mode))) return;
     MagazineFeedState state{script.Read<int>(runtime,L"MagazineFeedFlags"),
                             script.Read<int>(runtime,L"MagazineFeedLastAmmo")};
     if (!state.Out()) return;
     if (!state.Apply(MagazineFeedState::Event::Shot,script.Read<int>(weapon,L"AmmoCount"))) return;
+    script.Write(runtime,L"MagazineFeedShotMode",static_cast<int>(mode));
     script.Write(runtime,L"MagazineFeedFlags",state.flags);
     script.Write(runtime,L"MagazineFeedLastAmmo",state.lastAmmo);
+    // Stock already consumed the shot. Stop its ordinary auto refire now, not
+    // on the next hand/HUD tick; the script retains the stock reliable RPCs.
+    script.Invoke(runtime,script.FindFunction(runtime,L"FlushMagazineShot"),nullptr);
 }
 
 bool RouteMagazineFeedEvent(GameScript& script, void* bridge, void* pawn,
@@ -172,7 +228,7 @@ bool RouteMagazineFeedEvent(GameScript& script, void* bridge, void* pawn,
         !ReadScriptLocal(function,locals,script.Intern(L"StockAmmo"),ammo) ||
         ammo!=script.Read<int>(weapon,L"AmmoCount")) return true;
     if (event>=8 && event<=11) {
-        // Separate empty-only policy. Script admits exact audited removable
+        // Separate no-chamber policy. Script admits exact audited removable
         // catalog loads; native validates the owned actor and stock snapshot.
         std::int32_t action=0;
         if (!ReadScriptLocal(function,locals,script.Intern(L"ActionKind"),action)) return true;
@@ -183,8 +239,7 @@ bool RouteMagazineFeedEvent(GameScript& script, void* bridge, void* pawn,
         std::memcpy(result,&accepted,sizeof(accepted));
         return true;
     }
-    if (!(GameScript::ObjectName(GameScript::ObjectClass(weapon))==script.Intern(L"KFWeap_Pistol_9mm") ||
-          GameScript::ObjectName(GameScript::ObjectClass(weapon))==script.Intern(L"KFWeap_Pistol_Deagle"))) return true;
+    if (!AuditedMagazineWeapon(script,weapon)) return true;
     MagazineFeedState state{script.Read<int>(object,L"MagazineFeedFlags"),
                             script.Read<int>(object,L"MagazineFeedLastAmmo")};
     if (!state.Apply(static_cast<MagazineFeedState::Event>(event),ammo)) return true;

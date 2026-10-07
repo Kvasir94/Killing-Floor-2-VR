@@ -41,7 +41,7 @@ RED, RED_HOT, RED_DEEP, AMBER = "#b01b1f", "#e23a2e", "#421113", "#d89e3c"
 DIFFICULTY_LABELS = {"normal": "Normal", "hard": "Hard", "suicidal": "Suicidal", "hellonearth": "Hell on Earth"}
 LENGTH_LABELS = {"short": "Short  -  4 waves, then the boss", "medium": "Medium  -  7 waves, then the boss",
                  "long": "Long  -  10 waves, then the boss"}
-QUALITY_LABELS = {"quality": "Quality  -  full detail", "balanced": "Balanced",
+QUALITY_LABELS = {"keep": "Keep my last settings", "quality": "Quality  -  full detail", "balanced": "Balanced",
                   "performance": "Performance  -  highest frame rate"}
 SCALES = ["Keep my last setting"] + [f"{n}%" for n in range(100, 49, -5)]
 
@@ -73,7 +73,7 @@ FRIENDLY_ERRORS = (
                              "make sure their game says it's up."),
     ("Package file changed or missing", "Some KF2-VR files are missing or damaged. Delete this folder and unzip a fresh copy."),
     ("Dedicated server installation", "The game server download didn't finish. Check your internet and disk space, then try again."),
-    ("Server reports VAC enabled", "That server isn't a KF2-VR game. Check the code with your friend."),
+    ("Server reports VAC enabled", "That server reports VAC enabled. KF2-VR requires a VAC-off host; secure injected VR is unsupported."),
     ("is not installed on both client and server", "That map isn't installed. Pick a different map."),
 )
 
@@ -378,11 +378,23 @@ class Launcher(tk.Tk):
         rule.pack(fill="x", pady=(0, self.px(6)))
 
     # ----- layout ---------------------------------------------------------
-    def screen(self, title, subtitle=""):
+    def screen(self, title, subtitle="", scrollable=False):
         for child in self.body.winfo_children():
             child.destroy()
         frame = tk.Frame(self.body, bg=INK, padx=self.px(40), pady=self.px(26))
         frame.pack(fill="both", expand=True)
+        if scrollable:
+            shell = frame
+            canvas = tk.Canvas(shell, bg=INK, highlightthickness=0, height=self.px(420))
+            scrollbar = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+            scrollbar.pack(side="right", fill="y")
+            canvas.pack(fill="both", expand=True)
+            canvas.configure(yscrollcommand=scrollbar.set)
+            frame = tk.Frame(canvas, bg=INK)
+            frame._scroll_shell = shell
+            item = canvas.create_window(0, 0, window=frame, anchor="nw")
+            frame.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
+            canvas.bind("<Configure>", lambda event: canvas.itemconfigure(item, width=event.width))
         tk.Label(frame, text=title.upper(), font=self.f_title, bg=INK, fg=WHITE, anchor="w").pack(fill="x")
         if subtitle:
             self.label(frame, subtitle, color=DIM, wraplength=self.px(640)).pack(anchor="w", pady=(self.px(2), 0))
@@ -390,13 +402,29 @@ class Launcher(tk.Tk):
         return frame
 
     def footer(self, frame, back=True, start=None, start_text="Start"):
+        frame = getattr(frame, "_scroll_shell", frame)
         row = tk.Frame(frame, bg=INK)
-        row.pack(side="bottom", fill="x", pady=(self.px(14), 0))
+        content = frame.pack_slaves()
+        row.pack(side="bottom", fill="x", pady=(self.px(14), 0),
+                 **({"before": content[0]} if content else {}))
         if back:
             self.button(row, "Back", self.home).pack(side="left")
         if start:
             self.button(row, start_text, start, primary=True).pack(side="right")
+        self.after_idle(self.fit_window)
         return row
+
+    def fit_window(self):
+        """Keep navigation visible while allowing the page to request more room."""
+        try:
+            self.update_idletasks()
+            have = self.winfo_height()
+            limit = max(1, self.winfo_screenheight() - self.px(80))
+            height = max(have, min(self.winfo_reqheight(), limit))
+            if height > have:
+                self.geometry(f"{self.winfo_width()}x{height}")
+        except tk.TclError:
+            pass
 
     def form(self, frame):
         grid = tk.Frame(frame, bg=INK)
@@ -413,14 +441,61 @@ class Launcher(tk.Tk):
         box.grid(row=row, column=1, sticky="w", pady=self.px(3))
         fields[label] = (box, labels)
 
+    def dlss_controls(self, grid, fields):
+        # DLSS mode and sharpening, shared by Play solo, Host and Join.
+        self.combo(grid, fields, "DLSS", {"off": "Off (experimental DLSS)", "dlaa": "DLAA (full resolution)", "quality": "Quality",
+                                          "balanced": "Balanced", "performance": "Performance",
+                                          "ultraperformance": "Ultra Performance"},
+                   getattr(self.saved, "dlss", None) or "off")
+        row = len(fields)
+        self.label(grid, "DLSS SHARPNESS", "label", DIM).grid(row=row, column=0, sticky="w", pady=self.px(3))
+        slider = tk.Frame(grid, bg=INK)
+        slider.grid(row=row, column=1, sticky="w", pady=self.px(3))
+        self.dlss_sharpness = tk.IntVar(value=int(getattr(self.saved, "dlss_sharpness", None) or 0))
+        shown = self.label(slider, "", "body")
+        def show(value=None):
+            amount = int(round(float(value if value is not None else self.dlss_sharpness.get())))
+            self.dlss_sharpness.set(amount)
+            shown.config(text=f"{amount}" + ("  (off)" if amount == 0 else ""))
+        ttk.Scale(slider, from_=0, to=100, orient="horizontal", length=self.px(240),
+                  variable=self.dlss_sharpness, command=show).pack(side="left")
+        shown.pack(side="left", padx=(self.px(10), 0))
+        show()
+        fields["DLSS sharpness"] = (None, {})
+        row = len(fields)
+        self.hide_bile_lens = tk.BooleanVar(value=getattr(self.saved, "hide_bile_lens", True) is not False)
+        ttk.Checkbutton(grid, text="Hide Bloat bile screen splatter",
+                        variable=self.hide_bile_lens).grid(row=row, column=1, sticky="w", pady=self.px(3))
+        fields["Bile lens"] = (None, {})
+
+    def dlss_arguments(self, fields):
+        return ["--dlss", self.pick(fields, "DLSS"), "--dlss-sharpness", str(int(self.dlss_sharpness.get())),
+                "--hide-bile-lens" if self.hide_bile_lens.get() else "--no-hide-bile-lens"]
+
     @staticmethod
     def pick(fields, label):
         box, labels = fields[label]
         return next(key for key, text in labels.items() if text == box.get())
 
     # ----- home -----------------------------------------------------------
+    def launch_warning(self, frame):
+        from friends import launch_notices
+        panel = tk.Frame(frame, bg=PLATE, highlightthickness=1, highlightbackground=AMBER,
+                         padx=self.px(12), pady=self.px(8))
+        panel.pack(fill="x", pady=self.px(8))
+        self.label(panel, "VAC AND PROGRESSION", "label", AMBER).pack(anchor="w")
+        for notice in launch_notices(self.store.get()):
+            self.label(panel, notice, "small", FG, wraplength=self.px(600)).pack(anchor="w", pady=self.px(3))
+        if self.store.get() != "epic":
+            # An unavailable control must never activate secure injected play.
+            off = tk.BooleanVar(master=panel, value=False)
+            control = ttk.Checkbutton(panel, text="Enable VAC (unavailable for KF2-VR)", variable=off, state="disabled")
+            control._vac_off = off
+            control.pack(anchor="w")
+        return panel
+
     def home(self):
-        frame = self.screen("Play", "Pick how you're playing, then what you want to do.")
+        frame = self.screen("Play", "Pick how you're playing, then what you want to do.", scrollable=True)
         stores = {"auto": "Auto detect", "steam": "Steam", "epic": "Epic Games - experimental Solo VR"}
         grid, fields = self.form(frame), {}
         self.combo(grid, fields, "Game store", stores, self.store.get())
@@ -439,6 +514,7 @@ class Launcher(tk.Tk):
                 self.highlight_events.set(False)
             self.home()
         fields["Game store"][0].bind("<<ComboboxSelected>>", change_store)
+        self.launch_warning(frame)
         installed = sorted({i.store for i in game_install.discover()})
         names = {"steam": "Steam", "epic": "Epic Games"}
         status = "Detected: " + ", ".join(names[i] for i in installed) if installed else "No completed Steam or Epic installation detected. Choose Play solo to locate your game folder."
@@ -478,7 +554,7 @@ class Launcher(tk.Tk):
             capture_controls.append(control)
         self.label(frame, "VR only. Local files; no video, audio or automatic sharing. Both start OFF on a fresh launch.",
                    "small", DIM, wraplength=self.px(640)).pack(anchor="w", pady=(self.px(4), 0))
-        tools = tk.Frame(frame, bg=INK)
+        tools = tk.Frame(frame._scroll_shell, bg=INK)
         tools.pack(side="bottom", fill="x")
         for text, command in (("Settings", self.settings), (REPORT_BUTTON, self.send_logs),
                               ("Fix a stuck session", self.recover), ("Help", self.help)):
@@ -540,7 +616,8 @@ class Launcher(tk.Tk):
         frame = self.screen("Play solo" if solo else "Host a game",
             ("Practice on your own. No download needed." if solo else
              "The first time you host, KF2-VR downloads the free KF2 game server (about 32 GB). "
-             "Your friends don't need it.") + ("  Playing in VR." if self.vr.get() else "  Playing on desktop."))
+             "Your friends don't need it.") + ("  Playing in VR." if self.vr.get() else "  Playing on desktop."), scrollable=True)
+        self.launch_warning(frame)
         if self.store.get() == "epic":
             self.label(frame, "Epic opens the stock menu. Choose map, difficulty and length there. These selections also "
                        "populate the headset's LOCAL MATCH menu. Startup still needs headset retesting.",
@@ -556,9 +633,10 @@ class Launcher(tk.Tk):
         if self.vr.get():
             self.section(frame, "Headset")
             grid = self.form(frame)
-            self.combo(grid, fields, "Graphics", QUALITY_LABELS, self.saved.vr_quality)
+            self.combo(grid, fields, "Graphics", QUALITY_LABELS, self.saved.vr_quality_requested or "keep")
             scale = f"{self.saved.eye_render_percent}%" if self.saved.eye_render_percent is not None else SCALES[0]
             self.combo(grid, fields, "Render scale", {s: s for s in [*SCALES, scale]}, scale)
+            self.dlss_controls(grid, fields)
             self.label(frame, "Shared with Settings and in-game VR Controls > Graphics.",
                        "small", DIM, wraplength=self.px(600)).pack(anchor="w")
         extras = {}
@@ -612,10 +690,12 @@ class Launcher(tk.Tk):
                          "--game-root", str(game), "--map", pick("Map"),
                          "--difficulty", pick("Difficulty"), "--game-length", pick("Match length")]
             if self.vr.get():
-                arguments += ["--vr-quality", pick("Graphics")]
+                if pick("Graphics") != "keep":
+                    arguments += ["--vr-quality", pick("Graphics")]
                 if pick("Render scale") != SCALES[0]:
                     arguments += ["--eye-render-percent", pick("Render scale").rstrip("%")]
                 arguments.append("--threaded-render" if extras["threaded"].get() else "--no-threaded-render")
+                arguments += self.dlss_arguments(fields)
             if not solo:
                 arguments.append("--multiplayer-grabs" if extras["grabs"].get() else "--no-multiplayer-grabs")
                 arguments.append("--inventory-focus" if extras["focus"].get() else "--no-inventory-focus")
@@ -643,7 +723,8 @@ class Launcher(tk.Tk):
             self.home()
             return
         frame = self.screen("Join a friend",
-            "Your friend gets a code when they host. It starts with KF2VR1: - copy the whole thing and paste it here.")
+            "Your friend gets a code when they host. It starts with KF2VR1: - copy the whole thing and paste it here.", scrollable=True)
+        self.launch_warning(frame)
         self.section(frame, "Join code")
         code = tk.StringVar()
         entry = ttk.Entry(frame, textvariable=code, font=self.f_body)
@@ -658,6 +739,10 @@ class Launcher(tk.Tk):
             except tk.TclError:
                 messagebox.showinfo("Nothing copied", "Copy the code from your friend's message first.")
         self.button(row, "Paste code", paste, small=True).pack(side="left")
+        headset = {}
+        if self.vr.get():
+            self.section(frame, "Headset")
+            self.dlss_controls(self.form(frame), headset)
         address, password = tk.StringVar(), tk.StringVar()
         manual = tk.Frame(frame, bg=INK)
 
@@ -687,6 +772,8 @@ class Launcher(tk.Tk):
             else:
                 messagebox.showwarning("Check the code", "Paste the whole code from your friend. It starts with KF2VR1:")
                 return
+            if self.vr.get():
+                arguments += self.dlss_arguments(headset)
             self.run(arguments, "Joining")
 
         self.footer(frame, start=start, start_text="Join")
@@ -732,6 +819,7 @@ class Launcher(tk.Tk):
         self.join_code = None
         self.epic_options = None
         frame = self.screen(title, "VR headset" if self.vr.get() else "Desktop")
+        self.launch_warning(frame)
         self.status = self.label(frame, "Starting...", "status", WHITE, wraplength=self.px(640))
         self.status.pack(anchor="w", pady=(self.px(10), 0))
         self.progress = ttk.Progressbar(frame, mode="indeterminate", style="Red.Horizontal.TProgressbar")
@@ -872,7 +960,8 @@ class Launcher(tk.Tk):
         text = apply_preferences("", read_ini(path) if path.exists() else "")
         hands = values(text, "KF2VR.VRHandsBridge")
         session = values(text, "KF2VR.VRSessionUI")
-        frame = self.screen("VR settings", "These are also in the headset under VR Controls.")
+        frame = self.screen("VR settings", "These are also in the headset under VR Controls.", scrollable=True)
+        self.launch_warning(frame)
         self.section(frame, "Hands and aim")
         grid = self.form(frame)
         aims = {"Relaxed": "Relaxed wrist (like Arizona Sunshine 2)", "Neutral": "Straight", "Quest2": "Older Quest 2 angle"}

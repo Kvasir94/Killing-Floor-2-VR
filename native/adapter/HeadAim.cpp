@@ -300,11 +300,13 @@ void BoundRoomView(AppliedHeadAim& aim, const xr::FrameState& frame, float leanM
     aim.reference.pos = frame.head.pos-aim.reference.rot.Rotate(BasisUnrealToXr(offset));
 }
 
-void HeadAim::SetFloorEye(float pawnEyeMetres) noexcept {
+void HeadAim::SetFloorEye(float pawnEyeMetres, float fixedEyeOffsetMetres) noexcept {
     if (!ready_) return;
     float shift=0;
     if (std::isfinite(pawnEyeMetres) && pawnEyeMetres>0)
         shift=(std::min)((std::max)(pawnEyeMetres-standingHeight_,-kMaxFloorLift),kMaxFloorDrop);
+    else if (std::isfinite(fixedEyeOffsetMetres))
+        shift=-(std::min)((std::max)(fixedEyeOffsetMetres,-kMaxFloorDrop),kMaxFloorLift);
     if (std::abs(shift-floorShift_)<1e-4f) return;
     // Only the height moves: the yaw-only reference keeps horizontal room
     // offsets, and room movement, pivot turns and lean bounds preserve it.

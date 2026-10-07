@@ -56,6 +56,12 @@ public:
     void SetSingleViewDiagnostic(bool enabled, unsigned eye=0) noexcept { singleViewDiagnostic_=enabled; singleEye_=eye?1:0; }
     bool ReferenceReady() const noexcept { return referenceReady_; }
     const StereoAtlas& LastAtlas() const noexcept { return lastAtlas_; }
+    // DLSS sub-pixel sample offset (render pixels, x right, y down) for the
+    // next submissions; zero disables. Applied to the submitted projections.
+    void SetJitter(float x, float y) noexcept { jitterX_=x; jitterY_=y; }
+    // Unjittered matrices of the most recent single-eye submission.
+    const EyeMatrices& LastSubmitted() const noexcept { return lastSubmitted_; }
+    bool LastSubmittedValid() const noexcept { return lastSubmittedValid_; }
 
 private:
     HeadInTracking initialHead_{};
@@ -63,6 +69,9 @@ private:
     StereoAtlas lastAtlas_{};
     bool singleViewDiagnostic_=false;
     unsigned singleEye_=0;
+    float jitterX_=0, jitterY_=0;
+    EyeMatrices lastSubmitted_{};
+    bool lastSubmittedValid_=false;
 };
 
 } // namespace kf2vr::adapter

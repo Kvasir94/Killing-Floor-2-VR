@@ -194,3 +194,9 @@ optional compile-time content, and to provide reviewed authored inputs or a
 public procedural recipe for the first alpha's exact later hand-art revision.
 Headset and real online sessions remain the acceptance checks for source-built
 candidates.
+
+Experimental DLSS builds: review `third_party/NVIDIA-DLSS-LICENSE.txt`, run `tools/fetch-ngx.ps1`, then `tools/build-kf2vr.ps1 -NoSelect -Dlss`. Without `-Dlss`, no NGX SDK/runtime is required. CPU DLSS math checks run in either build. See `docs/DLSS.md` for limitations and publication obligations.
+
+## Optional experimental DLSS build
+
+The default SDK-free adapter uses the Off stub. For the optional DLSS-enabled build, fetch the official pinned SDK with `tools/fetch-ngx.ps1`, then use `tools/build-kf2vr.ps1 -NoSelect -Dlss`. `tools/ngx-pins.json` pins the SDK commit, consumed files and runtime. NVIDIA SDK/runtime binaries are not included in this source export. Retain the NVIDIA and AMD licence files. Public distribution requires resolving the publication obligations described in [DLSS](DLSS.md); a successful build or bundled notice does not resolve them.

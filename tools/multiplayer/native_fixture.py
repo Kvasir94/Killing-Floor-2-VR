@@ -26,6 +26,13 @@ def verify_native(root: Path, script_receipt: dict, digest) -> dict:
     actual = {p.relative_to(root).as_posix(): digest(p) for p in files}
     if not receipt.get("success") or actual != receipt.get("sources_sha256"):
         raise RuntimeError("Native build is stale; run tools/build-multiplayer-native.ps1")
+    if receipt.get("dlss_enabled"):
+        pins = json.loads((root / "tools/ngx-pins.json").read_text(encoding="utf-8"))
+        if receipt.get("ngx_sdk") != pins:
+            raise RuntimeError("NGX receipt differs from pinned SDK")
+        for name, expected in pins["files_sha256"].items():
+            if digest(root / "third_party/ngx" / name) != expected:
+                raise RuntimeError("NGX dependency differs: " + name)
     for name, expected in receipt["artifacts_sha256"].items():
         if digest(build / "native/adapter/Release" / name) != expected:
             raise RuntimeError(f"Native artifact receipt mismatch: {name}")

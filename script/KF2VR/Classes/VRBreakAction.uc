@@ -20,6 +20,12 @@ var VRActionPath ActionPath;
 var bool bPath, bClip;
 var bool bCylinder, bSpeedloader, bEjected;
 var float EjectStarted, EjectTime;
+// Exact MG3 profile only. The seated box and seated belt are separate facts.
+var VRMG3BeltPath BeltPath;
+var bool bBoxSeated, bBeltSeated, bBeltEngaged, bBeltGripWasDown;
+var float BeltAmount;
+var vector BeltGrabOffset;
+var int BeltPartStart;
 
 static function bool Supported(KFWeapon W)
 {
@@ -55,10 +61,10 @@ function float HingeAngle(quat Delta)
 
 function bool Enabled() { return Owner != None && Owner.Enabled(); }
 function bool BlocksFire(KFWeapon W) { return Enabled() && Gun == W && !bClosed; }
-function bool ReadyForShell() { return bOpened && !bClosed && !bEngaged && SeatedShells < RequiredShells; }
+function bool ReadyForShell() { return bOpened && !bClosed && !bEngaged && !bBoxSeated && SeatedShells < RequiredShells; }
 function bool OwnsHand(int Hand)
 {
-    return Enabled() && Owner.InputOwner.ContextValid() && Gun != None && bEngaged && Hand == OffHand();
+    return Enabled() && Owner.InputOwner.ContextValid() && Gun != None && (bEngaged || bBeltEngaged) && Hand == OffHand();
 }
 
 // Before a reload, trigger near the authored support contact requests a manual
@@ -126,7 +132,7 @@ function Update()
                 Ref.GetBoneLocation(Bridge.HandBone(0)) - Ref.GetBoneLocation('RW_Weapon'));
             if (1-H == 1) ContactLocal.Y = -ContactLocal.Y;
             ContactPosition = R.Item.MySkelMesh.GetBoneLocation('RW_Weapon')
-                + QuatRotateVector(R.Item.MySkelMesh.GetBoneQuaternion('RW_Weapon'), ContactLocal);
+                + QuatRotateVector(R.Item.MySkelMesh.GetBoneQuaternion('RW_Weapon'), ContactLocal * Owner.ScaleOf(R.Item));
             if (VSize(ContactPosition - Bridge.Hands[1-H].Position) <= Radius)
             {
                 // A squeeze during the shot recovery must survive until stock
@@ -166,6 +172,9 @@ function bool BeginSession(VRWeaponRuntime R, int Hand)
     bCylinder = class'VRBreakCatalog'.static.CylinderReload(Gun);
     bSpeedloader = bCylinder && class'VRBreakCatalog'.default.Profiles[Profile].ClipBone == 'RW_Speedloader';
     bEjected = false; EjectStarted = 0; EjectTime = 0;
+    BeltPath = None; bBoxSeated = false; bBeltSeated = false;
+    bBeltEngaged = false; bBeltGripWasDown = true; BeltAmount = 0;
+    BeltPartStart = -1;
     ActionPath = None;
     if (bPath)
     {
@@ -245,6 +254,8 @@ function bool BeginPath(AnimNodeSequence Seq)
     local int I;
     Bridge.DetachComponent(Owner.RefMesh);
     if (!ActionPath.SampleClip(Bridge, Gun, RootBone, Owner.InsertAnim, Bridge.HandBone(0))) { Gun = None; return false; }
+    GripTime = ActionPath.GripTime;
+    GripQ = ActionPath.GripQ;
     Parts.Length = 0;
     for (I = 0; I < ActionPath.BoneCount; ++I) AddPart(ActionPath.Ref, ActionPath.Bones[I], false);
     Tree = AnimTree(Gun.MySkelMesh.Animations);
@@ -260,6 +271,18 @@ function bool BeginPath(AnimNodeSequence Seq)
         if (Parts.Length != I + 1) { Tree = None; Parts.Length = 0; Gun = None; return false; }
         Parts[I].IdleLocal = Owner.SeatLocal;
         Parts[I].IdleLocalQ = Owner.SeatLocalQ;
+    }
+    if (Gun.Class == class'KFWeap_LMG_MG3' && !Owner.bBreakInspection)
+    {
+        BeltPath = new(self) class'VRMG3BeltPath';
+        Bridge.AttachComponent(ActionPath.Ref);
+        if (!BeltPath.Sample(Owner, ActionPath))
+        { Bridge.DetachComponent(ActionPath.Ref); BeltPath = None; Parts.Length = 0; Tree = None; Gun = None; return false; }
+        BeltPartStart = Parts.Length;
+        for (I = 1; I <= 12; ++I) AddPart(ActionPath.Ref, name("RW_Bullets" $ I), false);
+        Bridge.DetachComponent(ActionPath.Ref);
+        if (Parts.Length != BeltPartStart + 12)
+        { BeltPath = None; Parts.Length = 0; Tree = None; Gun = None; return false; }
     }
     if (bCylinder)
     {
@@ -352,6 +375,7 @@ function vector Hinge() { return RootPos() + QuatRotateVector(RootQ(), Pivot * G
 function vector Contact()
 {
     local vector P;
+    if (bBeltEngaged) return RootPos() + QuatRotateVector(RootQ(), BeltPath.ContactAt(BeltAmount) * GunScale());
     if (bPath) return RootPos() + QuatRotateVector(RootQ(), ActionPath.ContactLocal(Amount) * GunScale());
     P = GripLocal;
     if (OffHand() == 1) P.Y = -P.Y;
@@ -359,10 +383,24 @@ function vector Contact()
 }
 function quat WristQ()
 {
-    local quat Q;
+    local vector P;
+    local quat Q, ActionQ;
+    if (bBeltEngaged)
+    {
+        BeltPath.PoseAt(BeltAmount, 0, P, ActionQ);
+        Q = QuatProduct(QuatProduct(ActionQ, BeltPath.GripQ), QuatInvert(Bridge.FreeHandPose.WristBasis[0]));
+        if (OffHand() == 1) Q = class'VRHandRolePose'.static.MirrorCanonicalRotation(Q);
+        return QuatProduct(RootQ(), QuatProduct(Q, Bridge.FreeHandPose.WristBasis[OffHand()]));
+    }
+    if (bPath)
+    {
+        ActionPath.PoseAt(Amount, 0, P, ActionQ);
+        ActionQ = QuatProduct(RootQ(), ActionQ);
+    }
+    else ActionQ = BarrelQ();
     Q = QuatProduct(GripQ, QuatInvert(Bridge.FreeHandPose.WristBasis[0]));
     if (OffHand() == 1) Q = class'VRHandRolePose'.static.MirrorCanonicalRotation(Q);
-    return QuatProduct(BarrelQ(), QuatProduct(Q, Bridge.FreeHandPose.WristBasis[OffHand()]));
+    return QuatProduct(ActionQ, QuatProduct(Q, Bridge.FreeHandPose.WristBasis[OffHand()]));
 }
 function float HandAngle()
 {
@@ -380,6 +418,8 @@ function UpdateHand()
     { CancelHand(OffHand()); LastTime = 0; return; }
     if (bEngaged && !Motion.Check(LocalHandPosition(), Time))
     { CancelHand(OffHand()); return; }
+    if (BeltPath != None && bBoxSeated && !bBeltSeated)
+    { UpdateBelt(); LastTime = 0; return; }
     CanClose = bOpened && (Owner.bAwaitAmmo || Owner.bBreakInspection)
         && (SeatedShells >= RequiredShells
             || (!bClip && !Gun.bInfiniteSpareAmmo && Gun.bReloadFromMagazine
@@ -459,6 +499,47 @@ function UpdateHand()
     LastQ = RootQ(); LastTime = Time;
 }
 
+// A fresh offhand squeeze acquires the authored wrist contact. Release at
+// the tray completes it; tracking loss and early release never grant credits.
+function UpdateBelt()
+{
+    local bool Down, Edge;
+    local vector P, Target;
+    local float Next;
+    if ((Bridge.NativeValidMask & Bridge.NativeGripActiveMask & 3) != 3)
+    { CancelHand(OffHand()); return; }
+    Down = Owner.GripDown(OffHand());
+    Edge = Down && !bBeltGripWasDown;
+    bBeltGripWasDown = Down;
+    P = LocalHandPosition() / GunScale();
+    Target = BeltPath.ContactAt(BeltAmount);
+    if (!bBeltEngaged)
+    {
+        if (!Edge || Owner.HandMode != 0 || VSize(P - Target) > 6) return;
+        BeltGrabOffset = P - Target;
+        if (!Motion.Begin(LocalHandPosition(), Owner.Now())) return;
+        Owner.InputOwner.Inventory.ReleaseHand(OffHand());
+        bBeltEngaged = true;
+        Owner.Pulse(1 << OffHand(), 0.25, 0.02);
+        return;
+    }
+    if (!Motion.Check(LocalHandPosition(), Owner.Now())) { CancelHand(OffHand()); return; }
+    Next = BeltPath.Project(P - BeltGrabOffset);
+    if (VSize(P - BeltGrabOffset - BeltPath.ContactAt(Next)) > 6)
+    { CancelHand(OffHand()); return; }
+    BeltAmount = Next;
+    if (Down) return;
+    bBeltEngaged = false;
+    Motion.Reset();
+    if (BeltAmount >= 0.95
+        && VSize(P - BeltGrabOffset - BeltPath.ContactAt(1)) <= 2)
+    {
+        BeltAmount = 1; bBeltSeated = true;
+        Owner.SeatBelt();
+    }
+    else BeltAmount = 0;
+}
+
 function PlaceVisuals()
 {
     local int I;
@@ -497,6 +578,15 @@ function PlaceVisuals()
         }
         for (I = ActionPath.BoneCount; I < Parts.Length; ++I)
         {
+            if (BeltPath != None && I >= BeltPartStart)
+            {
+                if (!bBoxSeated) { Parts[I].Control.SetSkelControlStrength(0, 0); continue; }
+                BeltPath.PoseAt(BeltAmount, I - BeltPartStart, P, Q);
+                Parts[I].Control.BoneTranslation = RootPos() + QuatRotateVector(RootQ(), P * GunScale());
+                Parts[I].Control.BoneRotation = QuatToRotator(QuatProduct(RootQ(), Q));
+                Parts[I].Control.SetSkelControlStrength(1, 0);
+                continue;
+            }
             P = Parts[I].IdleLocal; Q = Parts[I].IdleLocalQ;
             if (bExtracting
                 && (Parts[I].Bone == 'RW_ExtractorPin' || Parts[I].Bone == 'RW_ExtractorHead'))
@@ -543,6 +633,8 @@ function CancelHand(int Hand)
     // Input context cancellation returns before Update can discard recovery intent.
     bQueuedOpening = false; bQueuedReload = false; QueuedGun = None; bRequestTrigger = true;
     Motion.Reset();
+    bBeltEngaged = false; bBeltGripWasDown = true;
+    if (!bBeltSeated) BeltAmount = 0;
     bEngaged = false; bTriggerWasDown = true; LastTime = 0; FlickTravel = 0; bFlickClosing = false;
 }
 function Unbind()
@@ -557,6 +649,8 @@ function Unbind()
             Gun.MySkelMesh.UnHideBoneByName(class'VRBreakCatalog'.default.Profiles[Profile].DropBone);
         ShowCylinderRounds(true);
     }
+    if (KFWeap_LMG_MG3(Gun) != None) KFWeap_LMG_MG3(Gun).UpdateAmmoBeltBullets(Gun.AmmoCount[0]);
+    BeltPath = None; bBoxSeated = false; bBeltSeated = false; bBeltEngaged = false;
     super.Unbind();
     bRequestOpening = false; bRequestTrigger = true; bQueuedOpening = false; bQueuedReload = false; QueuedGun = None;
 }

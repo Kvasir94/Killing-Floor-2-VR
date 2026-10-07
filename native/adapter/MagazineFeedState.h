@@ -10,6 +10,9 @@ struct MagazineFeedState {
     int flags=0, lastAmmo=0;
     bool Out() const { return (flags & (Ready|MagazineOut))==(Ready|MagazineOut); }
     bool Chamber(int stockAmmo) const { return stockAmmo>0 && (flags & (Ready|ChamberLoaded))==(Ready|ChamberLoaded); }
+    bool BlocksFire(int stockAmmo) const {
+        return (flags&Ready) && (Out() || (flags&NeedsRack)) && !Chamber(stockAmmo);
+    }
     int DisplayAmmo(int stockAmmo) const { return Out() ? (Chamber(stockAmmo)?1:0) : stockAmmo; }
     bool Apply(Event event,int stockAmmo) {
         if(stockAmmo<0 || static_cast<int>(event)<0 || static_cast<int>(event)>7) return false;

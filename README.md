@@ -109,3 +109,7 @@ game-derived packages; its redistribution review remains unresolved, as disclose
 in the release notes. Public availability does not establish rights clearance.
 See [PROVENANCE](docs/PROVENANCE.md)
 and [dependency pins](third_party/VERSIONS.md).
+
+## October 7 handling and graphics update
+
+See the [release notes](docs/public-alpha/RELEASE-NOTES-DRAFT.md) for exact MG3 and retained-chamber coverage, loading-hand and grenade-grip corrections, belt visuals, seated calibration and experimental DLSS. DLSS starts Off and requires NVIDIA RTX hardware; see [DLSS](docs/DLSS.md) for limitations and publication obligations. Ordinary startup disables saved Admin Auto Login automatic cheats in isolated session copies. VAC status is separate from XP eligibility; secure injected VR is unsupported. Final headset and real online acceptance remain pending.

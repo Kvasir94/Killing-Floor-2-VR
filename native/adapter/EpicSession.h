@@ -93,6 +93,12 @@ inline bool Root(std::string_view utf8,std::wstring& root) {
     }
     return true;
 }
+inline bool GraphicsOptions(std::string_view mode,std::string_view sharp,std::string_view bile) {
+    if(mode!="off" && mode!="dlaa" && mode!="quality" && mode!="balanced" && mode!="performance" && mode!="ultraperformance") return false;
+    if(sharp.empty() || sharp.size()>3 || sharp.find_first_not_of("0123456789")!=sharp.npos) return false;
+    unsigned value=0;for(char c:sharp)value=value*10+static_cast<unsigned>(c-'0');
+    return value<=100 && (bile=="0" || bile=="1");
+}
 inline Result Consume(std::wstring_view command) {
     Marker marker;const auto parsed=Parse(command,marker);
     if(parsed!=Result::Accepted)return parsed;
@@ -106,8 +112,8 @@ inline Result Consume(std::wstring_view command) {
     FILETIME created{},exited{},kernel{},user{};
     if(!server.value||!GetProcessTimes(server.value,&created,&exited,&kernel,&user)||
        ((std::uint64_t(created.dwHighDateTime)<<32)|created.dwLowDateTime)!=marker.created||!SameUser(server.value))return Result::Refused;
-    DWORD mode=PIPE_READMODE_MESSAGE;
-    if(!SetNamedPipeHandleState(pipe.value,&mode,nullptr,nullptr))return Result::Refused;
+    DWORD pipeMode=PIPE_READMODE_MESSAGE;
+    if(!SetNamedPipeHandleState(pipe.value,&pipeMode,nullptr,nullptr))return Result::Refused;
     std::string challenge;
     if(!Transfer(pipe.value,false,challenge)||challenge.size()!=83||challenge.substr(0,18)!="KF2VR-CHALLENGE/1\n"||challenge.back()!='\n')return Result::Refused;
     const auto nonce=challenge.substr(18,64);
@@ -117,9 +123,26 @@ inline Result Consume(std::wstring_view command) {
     if(!Transfer(pipe.value,false,config)||config.size()>60000)return Result::Refused;
     std::vector<std::string> lines;size_t at=0;
     while(at<config.size()) {const auto end=config.find('\n',at);if(end==config.npos)return Result::Refused;lines.push_back(config.substr(at,end-at));at=end+1;}
-    if(lines.size()!=4||lines[0]!="KF2VR-CONFIG/1"||lines[1]!=Narrow(marker.session))return Result::Refused;
+    if(lines.size()!=7||lines[0]!="KF2VR-CONFIG/2"||lines[1]!=Narrow(marker.session))return Result::Refused;
     std::wstring root;std::uint64_t percent=0;const std::wstring percentText(lines[3].begin(),lines[3].end());
     if(!Root(lines[2],root)||!Number(percentText,percent)||percent<50||percent>100)return Result::Refused;
+    // Typed options only. Runtime location is derived from the authenticated
+    // packaged broker executable, never accepted as a supplied path or env map.
+    const auto& mode=lines[4];
+    const auto& sharp=lines[5];
+    if(!GraphicsOptions(mode,sharp,lines[6])) return Result::Refused;
+    std::wstring ngx;
+    if(mode!="off") {
+        wchar_t executable[32768]{};DWORD size=32768;
+        if(!QueryFullProcessImageNameW(server.value,0,executable,&size)) return Result::Refused;
+        std::wstring path(executable,size);const auto slash=path.find_last_of(L"\\");
+        if(slash==path.npos) return Result::Refused;
+        path.resize(slash);const auto parent=path.find_last_of(L"\\");
+        if(parent==path.npos || _wcsicmp(path.substr(parent+1).c_str(),L"runtime")) return Result::Refused;
+        path.resize(parent);ngx=path+L"\\Native";
+        const auto attr=GetFileAttributesW((ngx+L"\\nvngx_dlss.dll").c_str());
+        if(attr==INVALID_FILE_ATTRIBUTES || (attr&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))) return Result::Refused;
+    }
     if(!Send(pipe.value,"KF2VR-READY/1\n"))return Result::Refused;
     std::string accepted;
     if(!Transfer(pipe.value,false,accepted)||accepted!="KF2VR-ACCEPTED/1\n"||WaitForSingleObject(server.value,0)!=WAIT_TIMEOUT)return Result::Refused;
@@ -132,7 +155,11 @@ inline Result Consume(std::wstring_view command) {
     if(!SetEnvironmentVariableW(L"KF2VR_LOG_PATH",(root+L"\\native.log").c_str())||
        !SetEnvironmentVariableW(L"KF2VR_STOP_PATH",(root+L"\\stop.request").c_str())||
        !SetEnvironmentVariableW(L"KF2VR_PLAYABLE_PATH",(root+L"\\playable.ready").c_str())||
-       !SetEnvironmentVariableW(L"KF2VR_EYE_RENDER_PERCENT",percentText.c_str()))return Result::Refused;
+       !SetEnvironmentVariableW(L"KF2VR_EYE_RENDER_PERCENT",percentText.c_str()) ||
+       !SetEnvironmentVariableW(L"KF2VR_DLSS",std::wstring(mode.begin(),mode.end()).c_str()) ||
+       !SetEnvironmentVariableW(L"KF2VR_DLSS_SHARPNESS",std::wstring(sharp.begin(),sharp.end()).c_str()) ||
+       !SetEnvironmentVariableW(L"KF2VR_HIDE_BILE_LENS",lines[6]=="1"?L"1":L"0") ||
+       (!ngx.empty() && !SetEnvironmentVariableW(L"KF2VR_NGX_DIR",ngx.c_str())))return Result::Refused;
     return Result::Accepted;
 }
 } // namespace kf2vr::adapter::epic

@@ -21,6 +21,7 @@ var quat WristBasis[2];
 var vector LocalForward[2], LocalThumb[2], LocalPalm[2];
 var float Amount[2];
 var bool bReady;
+var VRHandsBridge BoundBridge;
 
 function name FingerBone(int Hand, int Finger, int Joint)
 {
@@ -83,6 +84,7 @@ function bool Bind(VRHandsBridge B)
     local quat Align, Twist;
     local FingerJoint Entry;
     local name Bone;
+    BoundBridge = B;
     bReady = false;
     Joints.Length = 0;
     for (Hand = 0; Hand < 2; ++Hand)
@@ -142,10 +144,20 @@ function bool Bind(VRHandsBridge B)
 
 function Apply()
 {
-    local int I;
+    local int I, Hand, GrenadeProfile[2];
     local float Alpha, LiftAlpha;
-    local quat Curl;
+    local quat Curl, Authored;
+    local VRChestGrenade Grenade;
     if (!bReady) return;
+    GrenadeProfile[0] = -1;
+    GrenadeProfile[1] = -1;
+    if (BoundBridge != None && BoundBridge.HandInventory != None
+        && BoundBridge.HandInventory.Input != None)
+        Grenade = BoundBridge.HandInventory.Input.Grenade;
+    if (Grenade != None)
+        for (Hand = 0; Hand < 2; ++Hand)
+            if (Grenade.IsHeld(Hand))
+                GrenadeProfile[Hand] = class'VRGrenadeGripPose'.static.ProfileFor(Grenade.HeldClass.Name);
     for (I = 0; I < Joints.Length; ++I)
     {
         Alpha = Amount[Joints[I].Hand];
@@ -154,6 +166,10 @@ function Apply()
         if (Joints[I].OppositionDegrees != 0)
             Curl = QuatProduct(QuatFromAxisAndAngle(Joints[I].OppositionAxis,
                 Joints[I].OppositionDegrees * Pi / 180.0 * Alpha), Curl);
+        // A held stock grenade uses its reviewed pose at full strength. Grip
+        // pressure still owns the ordinary free fist and gameplay admission.
+        if (class'VRGrenadeGripPose'.static.Read(GrenadeProfile[Joints[I].Hand],
+            Joints[I].Hand, I % 15, Authored)) Curl = Authored;
         Joints[I].Control.BoneRotation = QuatToRotator(Curl);
         Joints[I].Control.ControlStrength = 1;
         Joints[I].Control.StrengthTarget = 1;

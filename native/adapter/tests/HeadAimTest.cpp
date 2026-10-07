@@ -65,6 +65,31 @@ int main() {
             Check(floor.RenderState(0x99,c,a) && Near(a.reference.pos.y-f.head.pos.y,HeadAim::kMaxFloorDrop),"short drop capped");
             floor.SetFloorEye(0);
             Check(floor.RenderState(0x99,c,a) && Near(a.reference.pos.y,1.60f),"zero restores the fixed eye");
+            floor.SetFloorEye(0,.10f);
+            Check(floor.RenderState(0x99,c,a) && Near(f.head.pos.y-a.reference.pos.y,.10f),
+                "seated offset raises the fixed view by ten centimetres without STAGE");
+            const Vec3 hand{.2f,1.10f,-.4f};
+            Check(Near((hand-a.reference.pos).y,-.40f),"hand shares the seated view's ten centimetre lift");
+            floor.SetFloorEye(0,.10f);
+            Check(floor.RenderState(0x99,c,a) && Near(a.reference.pos.y,1.50f),"repeated seated setting does not accumulate");
+            Check(Near(floor.StandingHeight(),1.60f),"seated adjustment does not recapture physical height");
+            floor.SetFloorEye(0,1.f);
+            Check(floor.RenderState(0x99,c,a) && Near(f.head.pos.y-a.reference.pos.y,.12f),"seated lift capped at twelve centimetres");
+            floor.SetFloorEye(0,-1.f);
+            Check(floor.RenderState(0x99,c,a) && Near(f.head.pos.y-a.reference.pos.y,-.40f),"seated drop capped at forty centimetres");
+            floor.SetFloorEye(1.54f,.10f);
+            Check(floor.RenderState(0x99,c,a) && Near(f.head.pos.y-a.reference.pos.y,.06f),"standing floor matching takes precedence over seated offset");
+            floor.SetFloorEye(0,std::numeric_limits<float>::quiet_NaN());
+            Check(floor.RenderState(0x99,c,a) && Near(a.reference.pos.y,1.60f),"invalid seated offset restores fixed eye");
+            floor.SetFloorEye(0,std::numeric_limits<float>::infinity());
+            Check(floor.RenderState(0x99,c,a) && Near(a.reference.pos.y,1.60f),"infinite seated offset rejected");
+            floor.Reset();
+            f=Frame(2); f.head.pos={0,.90f,0};
+            Check(floor.Prepare(0x99,c,f,r)==HeadAimStatus::ReferenceEstablished,"seated recapture at new physical height");
+            floor.SetFloorEye(0,.10f);
+            Check(floor.RenderState(0x99,c,a) && Near(f.head.pos.y-a.reference.pos.y,.10f),"saved seated offset reapplies once after recapture");
+            floor.SetFloorEye(0);
+            Check(floor.RenderState(0x99,c,a) && Near(a.reference.pos.y,.90f),"reset height restores the newly captured fixed eye");
         }
         constexpr std::uintptr_t controller=0x1234;
         {

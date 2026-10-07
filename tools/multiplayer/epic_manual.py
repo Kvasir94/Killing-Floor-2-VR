@@ -182,7 +182,8 @@ def run_session(args, manifest, install):
             record.update(owner=identity, status='game_authenticated')
             save(output, record)
         broker = EpicBroker(ticket, Path(role['log']).parent, on_claim=claim,
-                            eye_percent=role['eye_render_percent'])
+                            eye_percent=role['eye_render_percent'], dlss=role.get('dlss', 'off'),
+                            dlss_sharpness=role.get('dlss_sharpness', 0), hide_bile_lens=role.get('hide_bile_lens', True))
         plan = prepare_session('', role['args'], broker)
         option_path = run/'Launch Options.txt'
         option_path.write_text(plan.prepared, encoding='utf-8')

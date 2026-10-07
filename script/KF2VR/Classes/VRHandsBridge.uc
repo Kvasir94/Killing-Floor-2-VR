@@ -175,8 +175,11 @@ var int WeaponHand;
 var config bool bUseQuest2GripProfile;
 // Set by the CAPTURE SEATED / STANDING tiles. Standing play in a STAGE space
 // stands the view at the player's real eye height over the pawn's floor
-// (HeadAim::SetFloorEye); seated play keeps the fixed pawn eye.
+// (HeadAim::SetFloorEye); seated play uses the pawn eye plus SeatedEyeOffset.
 var config bool bSeatedPlay;
+// Centimetres relative to the stock pawn eye; only applied in seated mode.
+var config float SeatedEyeOffset;
+var float NativeSeatedEyeOffset;
 // Turn stick down to the rim toggles crouch (VRPhysicalCrouch.bButtonCrouch).
 var config bool bStickCrouch;
 var float NativeFloorEyeHeight; // metres above the pawn floor, 0 = fixed eye
@@ -603,6 +606,8 @@ simulated function RefreshEyeBase()
     NativeWristOffset = CurrentWristOffset();
     NativeFloorEyeHeight = (bSeatedPlay || Human == None) ? 0.0
         : (Human.default.CylinderComponent.CollisionHeight + Human.default.BaseEyeHeight) / 100.0;
+    if (!(SeatedEyeOffset >= -40.0 && SeatedEyeOffset <= 12.0)) SeatedEyeOffset = 0.0;
+    NativeSeatedEyeOffset = bSeatedPlay ? SeatedEyeOffset / 100.0 : 0.0;
     if (PC == None || PC.Pawn == None) return;
     NativeEyeBase = PC.Pawn == Human ? VREyeLocation() : PC.Pawn.GetPawnViewLocation();
 }
@@ -2620,6 +2625,7 @@ simulated function PlaceWeapon()
     local rotator DesiredRot, MuzzleRotation, ItemRecoil;
     local int I, SupportHand, AuthoredPrimaryHand, RiotShieldHand, ShotCount;
     local bool bOffhandGauntletVisible;
+    local VRManualAction ManualCycle;
     local name RootBone;
     local float ReleaseElapsed, ReleaseAlpha, NowTime, KickImpulse, KickWeight, KickElapsed;
 
@@ -2841,6 +2847,13 @@ simulated function PlaceWeapon()
     if (RecoilKick > 0.0)
     {
         Target -= QuatRotateVector(QuatProduct(DesiredQ, BoreQ), vect(1,0,0)) * RecoilKick;
+    }
+    if (RootBridge != None && RootBridge.HandInventory != None
+        && RootBridge.HandInventory.Input != None && RootBridge.HandInventory.Input.Reloads != None)
+    {
+        ManualCycle = RootBridge.HandInventory.Input.Reloads.ManualAction;
+        if (!RootBridge.HandInventory.Input.Reloads.PrimaryLeverRoot(W, Target, DesiredQ)
+            && ManualCycle != None) ManualCycle.PrimaryRoot(W, Target, DesiredQ);
     }
     // Stock adjusted aim adds the recoil buffer. Include the visible animation
     // in its input while leaving that stock recoil addition exactly once.

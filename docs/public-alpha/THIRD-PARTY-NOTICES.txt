@@ -24,3 +24,7 @@ into the distribution. No ownership rights are asserted over game/Workshop asset
 Embedded bell sounds: BigSoundBank "Boxing bell #1" (sound #1926), CC0.
 https://bigsoundbank.com/boxing-bell-1-s1926.html
 The embedded resources use trimmed/faded strikes normalized to -14 dBFS peak.
+
+Experimental NVIDIA DLSS/NGX: separately licensed by NVIDIA. Full licence: app/notices/NVIDIA-DLSS-LICENSE.txt in a DLSS-enabled playable package, or third_party/NVIDIA-DLSS-LICENSE.txt in source. This software contains source code provided by NVIDIA Corporation. NVIDIA GeForce RTX and NVIDIA RTX are NVIDIA trademarks. Inclusion of the licence does not complete required publication obligations; see docs/DLSS.md.
+
+AMD FidelityFX CAS: retains its upstream MIT notice in app/notices/AMD-CAS-LICENSE.txt (third_party/AMD-CAS-LICENSE.txt in source). Adapted contribution credit: optimumbox, with recorded Claude Opus 5.5 co-author attribution.

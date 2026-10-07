@@ -1,112 +1,37 @@
-# Public alpha - release notes
+# Killing Floor 2 VR — physical handling and experimental DLSS alpha
 
-This is an early PCVR fan adaptation of Killing Floor 2 for Windows.
-It is unaffiliated with Tripwire Interactive. Download complete playable ZIPs
-from [GitHub Releases](https://github.com/Kvasir94/Killing-Floor-2-VR/releases).
-Use this ZIP's build ID and store support, rather than an older release's notes.
+Proposed tag: `v0.1.0-alpha.20261007`. Changes below are relative to the October 6 public alpha. KF2-VR is a fan-made Windows PCVR adaptation, unaffiliated with Tripwire Interactive.
 
-Read the launcher build ID and `app/release.json` for the exact version,
-source commit, protocol and supported game-executable hash. All players in a
-Steam multiplayer session need the same ZIP and their own Steam copy of KF2.
-Epic is an experimental Solo VR option in the same player launcher; Host, Join,
-Desktop and cross-store online play are unavailable. Its official launcher
-handles authentication through a manual session Launch Options paste.
-Extract each update into a fresh folder and keep the previous ZIP for rollback.
+## Downloads and setup
 
-## Included behavior and defaults
+Use `KF2VR-Multiplayer-v0.1.0-alpha.20261007.zip` to play; extract the entire ZIP into a fresh folder and open **Start KF2-VR**. Keep `app` intact and the launcher open until KF2 exits and cleanup finishes. Keep the previous release for rollback. Use `KF2VR-Source-v0.1.0-alpha.20261007.zip` for development: it contains no private Git history or game-derived binary packages and requires your own supported game/SDK and local asset inputs. See [BUILDING](https://github.com/Kvasir94/Killing-Floor-2-VR/blob/main/docs/BUILDING.md).
 
-- Shared Steam/Epic detection and selection, with exact executable gates and
-  temporary native deployment/recovery. Epic opens the stock frontend and
-  carries Solo VR options through isolated INIs; headset retesting is pending.
-- Localized VR Use/hold prompts and an optional physical-stock aim setting
-  retaining support grip/recoil while the primary controller aims. Both await
-  headset feedback. Support-hand aim remains enabled by default.
-- Steam retains motion recording/highlight logging. Epic disables both because
-  their configuration is not integrated into its native session handoff.
+Steam supports Solo/Host/Join in VR or Desktop. Epic remains experimental Solo VR through the official launcher's manually pasted session Launch Options; Host/Join/Desktop and cross-store online play remain unavailable. Remove the session line and restore your earlier Epic options after quitting. Exact executable and package hashes gate deployment. Do not mix release files or bypass mismatches.
 
-- Steam Solo, Host and Join in VR or Desktop, with a portable launcher and recovery.
-  First hosting downloads the separate free dedicated server (about 32 GB).
-- Tracked hands, independent weapons, motion melee, VR menus and wrist readouts.
-  Start with Performance graphics at 75% render scale and Button reload mode.
-  Saved preferences override fresh defaults.
-- Optional Physical and Physical + Pump reload modes. Holsters, threaded
-  rendering and optional content start OFF. Solo Zed grabbing starts ON;
-  experimental multiplayer grabbing starts OFF and follows the host.
-- Wheel choices confirm when trigger is released. Syringe selection is on the
-  wheel or by double-tapping an already empty hand; there is no wrist pouch.
-  Chest grenades use an empty hand and held grip; release grip to throw/drop.
-- Optional Portal Gun is Solo-only and initially disabled. Its see-through
-  views require threaded rendering OFF. Optional Breacher is experimental.
-- Save logs for a bug report produces a local sanitized report ZIP. Nothing
-  uploads automatically. See the controls guide and quick card for bindings.
+Fresh defaults remain Performance graphics, 75% render scale and Button reloads; saved preferences take precedence. Physical reloads are optional. DLSS starts Off. No game or headset was launched while preparing this release.
 
-## Known bugs and incomplete features
+## Changes
 
-Earlier reports do not establish that every issue occurs in this exact ZIP.
-Please include its build ID when reporting a recurrence.
+- **MG3 physical belt:** box insertion and belt seating are now separate stages. Seat the box, release its carrying grip, squeeze the loose belt with the offhand, draw it across to the feed tray, release, then close the cover. Reload credit is paid once at belt seating. Early release or tracking loss cancels the unpaid stroke and requires a fresh squeeze. Stock ammunition and cover gates remain authoritative; no extra charging step is added. **Stoner and Bastion retain their existing combined box/belt seating.** This does not fix the reported Stoner sideways firing issue.
+- **Retained chamber round:** with physical reloads, 20 exact single closed-bolt actors can retain one already-loaded round after magazine removal. Supported groups are 9mm/M1911/Deagle/Glock 18C; HMTech-101/201/301/401 primary ammunition; AR-15/AK-12/SA80/M14 EBR/SCAR/FN FAL; MP7/Kriss/P90/G36C/UMP/MP5RAS. Automatic fire stops after the retained shot; supported burst selections use one same-ammunition shot without changing the selected mode. The HUD reads CHAMBERED, MAGAZINE OUT and RACK from actual state. After firing the retained round, reinsertion requires the physical rack, including interrupted or stowed reloads. Stock ammo owns every round; this grants no bonus round.
+- **Chamber exceptions:** Tommy Gun, MAC-10, MKb.42 and HRG Boomy explicitly retain no chamber shot when their magazine is removed. FAMAS/HRG 93R burst-only paths, AF2011, paired-class actors, unaudited subclasses, and special/underbarrel/pump/belt/battery/tank/launcher loads are excluded. Two independently held supported actors keep separate state; the existing two-occupied-hand Button fallback returns authority to stock.
+- **Lever handling and loading hands:** supported Winchester/SPX primary-hand lever stages now let the support hand anchor the weapon after shots and during empty reloads. Authored path-action grips retain their sampled timing and wrist rotation. .500/Rhino/HRG Buckshot speedloader carry poses select the loading fingers. Corrupter uses its authored right loading hand. Flare Gun/Winterbite cylinder seating is sampled before barrel closure.
+- **Grenades and belt readouts:** all nine stock perk grenades have authored shape-specific finger grips in either hand, including a narrower nail-bomb grip. Residual clipping remains. The pouch moves forward; reserve reveal aims at its readout. Audited KF2 magazines/clips/shells remain visible at the belt anchors with readable white reserve counts and an eligible GRIP cue. Pickup and ammo ownership are unchanged. Chest calibration follows the scaled grenade display centre.
+- **Comfort and settings:** calibration adds bounded seated view-height adjustment. In-game VR graphics edits persist across launches. Physical-stock mode retains held firearm support grips; ordinary aim keeps its existing distance release. Long launcher pages keep navigation visible, and threaded HUD ownership checks are more precise.
+- **Experimental DLSS/DLAA and CAS sharpening:** Off, DLAA, Quality, Balanced, Performance and Ultra Performance are available for VR, with sharpness 0–100. NVIDIA RTX hardware and a compatible driver are required. This is Super Resolution/DLAA, not frame generation. Motion vectors describe camera motion only; moving hands/enemies can show artifacts. Both-eye fallback is implemented, but performance, image quality and headset acceptance are pending. The Bloat bile-lens suppression option is personal and initially on for VR; damage/poisoning are unchanged. See [DLSS](https://github.com/Kvasir94/Killing-Floor-2-VR/blob/main/docs/DLSS.md).
+- **Startup and progression:** ordinary launches do not request cheats or restore Godmode; Solo forces normal play. Saved Admin Auto Login automatic cheats are disabled in isolated session copies while original settings remain intact. Explicit later Practice remains available with its warning. The launcher warns before play that VAC status and XP eligibility are separate. Use Solo or VAC-off custom servers; secure injected VR is unsupported. Cheats/Practice can make a session unranked; mods and custom multiplayer do not promise ordinary perk XP. No VAC, progression or anti-cheat safety guarantee is made.
 
-- **Stoner 63A:** reported quarter-turn/sideways firing remains unresolved.
-  Avoid it for the baseline match; report barrel, laser, tracer or impact disagreement.
-- **Weapon wheel:** icons are visible in the current desktop check and the
-  developer reports them working. Report blank/text/wrong silhouettes if they
-  recur, especially after buying a weapon. Arsenal-wide headset coverage is not claimed.
-- **Physical reloads:** M32 manual reload was reported absent; the observed
-  Crossboom loads arrows automatically. HX25 insertion, closure and fit need
-  feedback after its carry and two-hand brace corrections. M79/HX25 deliberate
-  reload requests now survive shot recovery; physical opening/insertion/closure
-  still need headset feedback. Select Button mode if physical reloads block play.
-- **Lever rifles:** primary-hand release to drive the lever while the support
-  hand anchors the rifle is missing. Off-hand cycling exists, but its proposed
-  workaround has not been headset-confirmed and does not satisfy the requested
-  interaction. This remains a handling blocker.
-- **Epic:** experimental; overall headset acceptance remains incomplete.
-  Earlier testing confirmed partial controller/gameplay functionality including
-  Outpost, 1858/Deagle tracking and trader access. The current menu-first startup
-  and final ZIP have not had a headset retest. Host/Join/Desktop and cross-store
-  online play are unavailable.
-- **Earlier fit reports:** SCAR magazine rotation, HMTech-501 magazine offset,
-  Blunderbuss reload difficulty and FAL glove appearance.
-- **Combat and networking:** crowded/grabbed retaliation, melee contacts,
-  hosted body/grab stability, remote gestures and map travel need wider feedback.
-  Multiplayer grabs initially remain OFF.
-- **Coverage:** other headsets, larger player counts, sustained performance and
-  complete matches are not comprehensively verified. Prior developer headset,
-  hosted-server and install/recovery testing does not establish runtime acceptance
-  of this final ZIP. Quest over Link is the primary developer setup.
-- **Progression:** custom multiplayer does not promise ordinary perk XP/ranked
-  progression. Practice and God Mode make the session unranked.
 
-Implemented corrections awaiting headset feedback include Minigun insertion,
-HMTech-401 charging-action contact, MG3 seating and bore alignment, HX25 carry
-contact and receiver bracing, M79/HX25 recovery reload intent, M79 opening
-and spent-shell display, FAMAS aim, Gravity Imploder carry, RPG insertion guides,
-pouch-counter orientation and Seeker/Locust duplicate markers. These are
-corrections to retest, not an arsenal-wide acceptance claim.
+The optional experimental Breacher compiled package is now bundled compared with the October 6 public ZIP; it remains OFF by default. Its source was already public. This adds no claim of Breacher runtime acceptance.
 
-## Report and recover
+## Validation and limits
 
-Click **Save logs for a bug report** in the launcher. The ZIP appears beside
-**Start KF2-VR**. Report copies replace recognized personal paths, known names,
-account IDs, addresses and emails with aliases; passwords, recognized tokens
-and join codes are removed. Original files remain local; configs, deployment
-backups and crash dumps are excluded. Review the ZIP before sharing because
-free-form text can contain other personal details. Keep raw logs/configs/dumps,
-passwords and join codes private. Post public reports in
-[GitHub Issues](https://github.com/Kvasir94/Killing-Floor-2-VR/issues); keep
-sensitive details private.
+The selected build passed 37 native CPU tests, script compilation with zero errors and two existing warnings, and 376 launcher/package tests. Its native/script payload matches the validated MG3 build. The cleaned source ran 368 launcher/package tests successfully with 13 optional fixture skips; portable entry-point and ZIP/hash checks are also performed on the prepared repack. These checks do not establish headset or real online acceptance. Retest both hands, empty/partial reloads, interruptions, perk variants, crowded combat, replication, travel and complete matches. Button reloads remain available if physical handling blocks play.
 
-Include build ID, Solo/Host/Join and VR/Desktop, map/perk/character/weapon,
-headset/runtime/GPU, relevant options, last action, expected/actual result and
-repeat steps. For reloads include normal/elite, empty/tactical and left/right hand.
-For network issues identify which player saw it and whether they were outside
-the host's network. The bundled FEEDBACK-QUESTIONS guide suggests useful feedback.
+For feedback, include the build ID, store, Solo/Host/Join, headset/runtime/GPU, weapon, options and repeat steps. **Save logs for a bug report** creates local sanitized copies; review them before sharing. Keep raw configs/dumps, credentials and password-bearing join codes private. Nothing uploads automatically.
 
-Keep the launcher open until cleanup finishes. After interruption, quit KF2
-and use **Fix a stuck session** before deleting that folder or changing releases.
-Never mix DLLs between releases or bypass a game/package mismatch. After cleanup,
-ordinary KF2 can be started from your store.
+## Credits and licences
 
-Playable packages include KF2/Valve-derived assets whose rights remain with
-their respective owners. Redistribution clearance is unresolved; public availability
-does not establish clearance. Source archives exclude these binary packages and
-require local game/SDK inputs to build. See the included third-party notices.
+DLSS/CAS and physical-stock support changes adapt optimumbox's reviewed contribution, with its recorded Claude Opus 5.5 co-author attribution preserved here. Other handling and launcher changes are by the KF2-VR contributors. NVIDIA DLSS/NGX retains NVIDIA's separate licence; NVIDIA GeForce RTX and NVIDIA RTX are NVIDIA trademarks. CAS retains AMD's MIT notice. CPython, OpenXR, MinHook and the CC0 bell retain their bundled notices.
+
+The playable package includes KF2/Valve-derived assets whose redistribution clearance remains unresolved. Prior public availability does not establish clearance. NVIDIA publication obligations, including attribution/trademark placement and applicable pre-commercial-release notification, must be resolved before this DLSS-enabled package is published. Original project contributions use MIT; no new terms or third-party ownership rights are granted. The source archive excludes the derived binary packages and NVIDIA SDK/runtime binaries.

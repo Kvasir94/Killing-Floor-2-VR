@@ -18,6 +18,7 @@ from evidence import query_server
 from native_fixture import NativeDeployment
 from vr_config import import_preferences, export_preferences
 import desktop_settings
+import vr_graphics
 import local_test_control
 import promo_session
 import motion_session
@@ -27,7 +28,7 @@ import game_install
 from workshop_map import MAP_NAME, ensure_map, add_map_path, receipt as map_receipt
 from launch_menu import (DIFFICULTIES, LENGTHS, host_url, installed_maps,
                          installed_solo_maps, resolve_solo_map, choose_options)
-from workshop_loadout import (parse_mods, load_preferences, save_preferences, prepare_content,
+from workshop_loadout import (parse_mods, load_preferences, save_preferences, save_dlss_preferences, prepare_content,
                               configure_content, configure_mod_settings, damage_popups_enabled, HEADSET_PRESETS)
 from session import digest, config_hashes, role_config, set_ini, read_ini, log_text, unreal_command, check_port
 from watchdog import api, creation_time
@@ -37,6 +38,20 @@ ROOT = Path(__file__).resolve().parents[2]
 # Server and Workshop cache sit beside the extracted release so later releases
 # reuse them. A ZIP keeps the release in app/ under its own top-level folder.
 SHARED = ROOT.parent.parent if ROOT.name.lower() == "app" else ROOT.parent
+
+PROGRESSION_WARNING = (
+    "PROGRESSION WARNING: Displayed XP and levels may not persist in unranked or cheat sessions. "
+    "Saving progress depends on the game's ranked/cheat and online-stat checks; VAC alone does not establish eligibility."
+)
+
+
+def launch_notices(store):
+    if store == "epic":
+        security = "VAC is Steam server protection. Epic supports experimental Solo VR only; no VAC-on mode is available here."
+    else:
+        security = ("VAC OFF: This launcher requires VAC-off hosts. "
+                    "Secure injected VR is unsupported; the adapter's VAC safety has not been established.")
+    return security, PROGRESSION_WARNING
 
 
 def save_session_record(output, record):
@@ -225,6 +240,16 @@ def role_environment(environment, role):
                 or type(percent) is not int or not 50 <= percent <= 100):
             raise ValueError("Eye resolution is valid only for the live VR driver, from 50 to 100 percent")
         result["KF2VR_EYE_RENDER_PERCENT"] = str(percent)
+    if role.get("role") == "driver" and role.get("native_adapter"):
+        from epic_broker import graphics_payload
+        graphics_payload(role.get("dlss", "off"), role.get("dlss_sharpness", 0), role.get("hide_bile_lens", False))
+    if role.get("role") == "driver" and role.get("native_adapter") and role.get("hide_bile_lens"):
+        result["KF2VR_HIDE_BILE_LENS"] = "1"
+    if role.get("dlss", "off") != "off" and role.get("role") == "driver" and role.get("native_adapter"):
+        # The adapter loads nvngx_dlss.dll from the release's native folder.
+        result["KF2VR_DLSS"] = role["dlss"]
+        result["KF2VR_NGX_DIR"] = str(ROOT / "Native")
+        result["KF2VR_DLSS_SHARPNESS"] = str(int(role.get("dlss_sharpness", 0)))
     result.update(promo_session.environment(role))
     result.update(motion_session.environment(role))
     return result
@@ -421,6 +446,9 @@ def configure_role(run, name, user, game, args):
                 # game thread ticks N+1. Replaces -onethread; no portals.
                 role["args"][role["args"].index("-onethread")] = "-kf2vr-threaded-render"
             role["native_adapter"] = True
+            role["dlss"] = getattr(args, "dlss", None) or "off"
+            role["dlss_sharpness"] = int(getattr(args, "dlss_sharpness", None) or 0)
+            role["hide_bile_lens"] = getattr(args, "hide_bile_lens", True) is not False
             requested_percent = getattr(args, "eye_render_percent", None)
             role["eye_render_percent"] = import_preferences(configs, eye_percent=requested_percent,
                                                             root=getattr(args, "profile_root", None))
@@ -450,6 +478,9 @@ def configure_role(run, name, user, game, args):
     configure_mod_settings(role, args, game, user)
     if name == "driver" and not args.vr:
         desktop_settings.apply(configs, user, getattr(args, "profile_root", None))
+    elif name == "driver" and args.vr:
+        vr_graphics.apply(configs, getattr(args, "profile_root", None),
+                          reset=getattr(args, "vr_quality_requested", None) is not None)
     role["config_hashes"] = config_hashes(configs)
     return role
 
@@ -495,6 +526,12 @@ def parse_options(argv=None):
                         help="This live VR session: log highlight hit/kill events and F9 video sync marks; initially OFF")
     parser.add_argument("--record-motion", action=argparse.BooleanOptionalAction, default=False,
                         help="This live VR session: record player headset/controllers/input and presentation locally; initially OFF")
+    parser.add_argument("--dlss", choices=("off", "dlaa", "quality", "balanced", "performance", "ultraperformance"), default=None,
+                        help="NVIDIA DLSS for the headset image (saved, initially off); requires --vr")
+    parser.add_argument("--hide-bile-lens", action=argparse.BooleanOptionalAction, default=None,
+                        help="VR: skip the Bloat bile screen splatter particles, a large GPU cost (saved, initially on)")
+    parser.add_argument("--dlss-sharpness", type=int, default=None,
+                        help="Sharpening after DLSS, 0 (off) to 100 (saved, initially 0)")
     parser.add_argument("--threaded-render", action=argparse.BooleanOptionalAction, default=None,
                         help="Experimental: render on UE3's render thread instead of -onethread (saved, initially off). "
                              "The portal gun's see-through view works only with this off; requires --vr")
@@ -574,6 +611,10 @@ def parse_options(argv=None):
         parser.error("--headset-preset, --vr-quality and --eye-render-percent require VR play; omit --desktop")
     if args.frame_timings and not args.vr:
         parser.error("--frame-timings requires --vr")
+    if getattr(args, "dlss", None) not in (None, "off") and not args.vr:
+        parser.error("--dlss requires --vr")
+    if args.dlss_sharpness is not None and not 0 <= args.dlss_sharpness <= 100:
+        parser.error("--dlss-sharpness must be from 0 to 100")
     if args.threaded_render and not args.vr:
         parser.error("--threaded-render requires --vr")
     if (args.eye_render_percent is not None and not args.vr
@@ -643,11 +684,15 @@ def main():
     for name, expected in manifest["files_sha256"].items():
         if not (ROOT / name).resolve().is_relative_to(ROOT.resolve()) or digest(ROOT / name) != expected:
             raise RuntimeError(f"Package file changed or missing: {name}. Extract a fresh copy.")
+    if args.vr and args.dlss != "off" and not manifest.get("native_build", {}).get("dlss_enabled", False):
+        raise ValueError("This package has no DLSS runtime. Choose DLSS Off or use a DLSS-enabled package.")
     saved_path = ROOT / "settings.json"
     saved = json.loads(saved_path.read_text(encoding="utf-8")) if saved_path.exists() else {}
     install = game_install.select_for_launch(store=args.store, root=args.game_root, saved_root=saved.get("game_root"))
     game_install.validate_native(install, manifest.get("supported_game_sha256", [manifest["game_sha256"]]))
     game, exe = install.root, install.executable
+    for notice in launch_notices(install.store):
+        print(notice, flush=True)
     if install.store == "epic":
         from epic_manual import run_session
         return run_session(args, manifest, install)
@@ -724,6 +769,8 @@ def main():
     # loadout when Solo's effective content selection is empty.
     if (args.host or args.solo) and not args.replay_teammate:
         save_preferences(args)
+    elif args.vr and not args.replay_teammate:
+        save_dlss_preferences(args)
     record = {"launcher_pid": os.getpid(), "launcher_creation_time": creation_time(api(), ctypes.windll.kernel32.GetCurrentProcess()),
               "build_id": manifest.get("build_id", ROOT.name), "protocol_version": manifest.get("protocol_version"),
               "session_mode": "solo" if args.solo else ("host" if args.host else "join"),
@@ -961,7 +1008,8 @@ def main():
             errors += server_deployment.restore()
         if args.vr and any(role is player_role for role, _ in owned):
             try:
-                export_preferences(Path(player_role["config_root"]), network=not args.solo)
+                export_preferences(Path(player_role["config_root"]), root=getattr(args, "profile_root", None),
+                                   network=not args.solo)
             except (OSError, ValueError) as error:
                 errors.append(f"Could not save VR preferences: {error}")
         elif not args.vr and any(role is player_role for role, _ in owned):

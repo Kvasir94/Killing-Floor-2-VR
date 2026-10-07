@@ -27,14 +27,14 @@ class PortablePackageTests(unittest.TestCase):
     def frozen_release(self, root):
         release = root / "frozen"
         files = {}
-        for name in ("Native/client.dll", "ServerNative/server.dll", "Packages/client.u"):
+        for name in ("Native/client.dll", "Native/nvngx_dlss.dll", "ServerNative/server.dll", "Packages/client.u"):
             path = release / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(name.encode())
             files[name] = digest(path)
         sources = {"native/adapter/Adapter.cpp": "native-source", "script/KF2VR/Classes/Hands.uc": "script-source",
                    "tools/multiplayer/package.py": "old-packager"}
-        native = {"success": True, "artifacts_sha256": {"client.dll": files["Native/client.dll"]},
+        native = {"success": True, "artifacts_sha256": {"client.dll": files["Native/client.dll"], "nvngx_dlss.dll": files["Native/nvngx_dlss.dll"]},
                   "server_artifacts_sha256": {"server.dll": files["ServerNative/server.dll"]}}
         scripts = {"success": True, "includes_vr_client": True,
                    "packages_sha256": {"client.u": files["Packages/client.u"]}}
@@ -64,7 +64,7 @@ class PortablePackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             release, sources, _, _ = self.frozen_release(root)
-            (release / "Native/client.dll").write_bytes(b"corrupt")
+            (release / "Native/nvngx_dlss.dll").write_bytes(b"corrupt")
             with patch("package.workspace_sources", return_value=sources), self.assertRaisesRegex(RuntimeError, "missing or changed"):
                 frozen_inputs(root, release)
 

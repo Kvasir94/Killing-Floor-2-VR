@@ -27,6 +27,9 @@ struct MagazineProfile
     // A gun whose magazine is not RW_Magazine1/RW_Magazine2 (the Blunderbuss
     // swaps its RW_Cylinder; the spare RW_Cylinder2 rides the hidden arm).
     var name LoadedBone, SpareBone;
+    // Anatomical hand carrying the incoming part in the stock reload. The
+    // Corrupter holds the gun with its left and loads with its right.
+    var int InsertHand;
     // A part stock seats into a moving assembly (the Freeze Thrower's open
     // chamber) or that stock finishes sliding home after its ammo moment (the
     // Ballistic Bouncer's canister): the hand seats it where the stock clip
@@ -225,5 +228,5 @@ defaultproperties
     // at the ammo moment).
     Profiles(65)=(WeaponClass=class'KFWeap_Blunt_Pulverizer',MeshName=Wep_1stP_Pulverizer_Rig_New,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Mag1,SpareBone=RW_Mag1,LoadedExtras[0]=RW_Shell1,LoadedExtras[1]=RW_Shell2,LoadedExtras[2]=RW_Shell3,LoadedExtras[3]=RW_Shell4,LoadedExtras[4]=RW_MagSpringPlate1)
     Profiles(66)=(WeaponClass=class'KFWeap_AssaultRifle_Doshinegun',MeshName=Wep_1stP_Doshinegun_Rig,RackBone=RW_Weapon,MaterialIndex=2,ActionKind=2,LoadedBone=RW_Notes2,SpareBone=RW_Notes2,bSeatAtNotify=true,bNoEject=true,bParkedLoaded=true)
-    Profiles(60)=(WeaponClass=class'KFWeap_Rifle_ParasiteImplanter',MeshName=Wep_1stP_ParasiteImplanter_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Magazine,SpareBone=RW_Magazine)
+    Profiles(60)=(WeaponClass=class'KFWeap_Rifle_ParasiteImplanter',MeshName=Wep_1stP_ParasiteImplanter_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Magazine,SpareBone=RW_Magazine,InsertHand=1)
 }

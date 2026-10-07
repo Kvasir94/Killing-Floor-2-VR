@@ -2,6 +2,7 @@
 #include "EmptyMagazineState.h"
 #include <cstdio>
 #include <limits>
+#include <initializer_list>
 
 using State=kf2vr::adapter::MagazineFeedState;
 using Event=State::Event;
@@ -184,8 +185,14 @@ int main() {
                                  "resumed action completes without another ammo credit");
             Check(stock==12 && reserve==0,"seat and action metadata never change stock totals");
             Empty loaded;
-            Check(!loaded.Apply(E::Eject,stock,action) && loaded.flags==0,
-                  "empty-only policy cannot infer a chamber on loaded removal");
+            Check(loaded.Apply(E::Eject,stock,action)==(action==1),
+                  "loaded no-chamber removal is admitted only for an explicit open bolt");
+            if (action==1) {
+                Check((loaded.flags&Empty::Removed) && (loaded.flags&Empty::Cocked) && loaded.BlocksFire(),
+                      "loaded open-bolt removal gates actual shots despite a cocked action");
+                Check(loaded.Apply(E::Seat,stock,action) && loaded.flags==0 && !loaded.BlocksFire(),
+                      "open-bolt top-up needs no invented chamber or second cock");
+            } else Check(loaded.flags==0,"unaudited loaded removal keeps stock policy");
         }
         Empty open;
         open.Apply(E::Eject,0,1);
@@ -206,6 +213,49 @@ int main() {
               "invalid empty-policy snapshots and actions leave state intact");
         Check(closed.Apply(E::Reset,0,0) && closed.flags==0,
               "explicit stock-mode fallback clears metadata only");
+    }
+    {
+        // The actual-shot gate is used before the stock body, including a
+        // delayed automatic/burst callback and ammo-saving perk shots.
+        for (const int capacity : {1, 15, 30, 100}) {
+            for (const bool savesAmmo : {false, true}) {
+                State state;
+                int stock=capacity, shots=0;
+                state.Apply(Event::Observe,stock);
+                state.Apply(Event::Eject,stock);
+                for (int callback=0;callback<10;++callback) {
+                    state.Apply(Event::Observe,stock);
+                    if (state.BlocksFire(stock)) continue;
+                    ++shots;
+                    if (!savesAmmo) --stock;
+                    state.Apply(Event::Shot,stock);
+                }
+                Check(shots==1 && state.DisplayAmmo(stock)==0 && state.BlocksFire(stock),
+                      "held/refire callbacks expose exactly one retained chamber shot");
+                Check(stock==capacity-(savesAmmo?0:1),"shot gate never debits retained magazine ammunition");
+                state.Apply(Event::Seat,stock);
+                Check(state.BlocksFire(stock),"seated spent chamber remains gated before rack");
+                State stowed=state;
+                stowed.Apply(Event::Observe,stock+5); // stock refill/correction while action pending
+                Check(stowed.BlocksFire(stock+5),"positive correction cannot finish an interrupted rifle rack");
+                stowed.Apply(Event::Rack,stock+5);
+                Check(!stowed.BlocksFire(stock+5),"explicit recovered rack releases the funded load");
+                state.Apply(Event::Reset,stock);
+                Check(!state.BlocksFire(stock),"stock fallback relinquishes the actual-shot gate");
+            }
+        }
+        using Empty=kf2vr::adapter::EmptyMagazineState;
+        using E=Empty::Event;
+        Empty open;
+        open.Apply(E::Eject,0,1);
+        open.Apply(E::Seat,12,1); // stock funded, but never cocked
+        Check(open.Apply(E::Eject,12,1) && (open.flags&Empty::NeedsAction) && !(open.flags&Empty::Cocked),
+              "removing an interrupted open-bolt load cannot cock it");
+        open.Apply(E::Seat,12,1);
+        Check((open.flags&Empty::NeedsAction)!=0 && open.BlocksFire(),
+              "reinserting the unworked open-bolt load gates actual shots");
+        open.Apply(E::Action,12,1);
+        Check(open.flags==0,"physical cock releases the same conserved open-bolt load");
     }
     std::printf("Magazine feed checks=%d failures=%d\n",checks,failures);
     return failures?1:0;

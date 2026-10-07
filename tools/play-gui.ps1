@@ -633,7 +633,9 @@ $sessionFoot = New-Caption $session 0 364 $cw 40 '' $fontSmall $mute 'TopLeft'
 
 # Headset ------------------------------------------------------------------
 $headset = $pages['HEADSET']
-$qualityField = New-Field $headset 'Graphics' 0 @($s.vr_qualities | ForEach-Object { Get-Label $_ }) ([Math]::Max(0, [Array]::IndexOf([string[]]$s.vr_qualities, [string]$s.vr_quality)))
+$qualityIndex = if ($InitialSelections.ContainsKey('VrQuality')) { 1 + [Math]::Max(0, [Array]::IndexOf([string[]]$s.vr_qualities, [string]$s.vr_quality)) } else { 0 }
+$qualityLabels = @('Keep my last settings') + @($s.vr_qualities | ForEach-Object { Get-Label $_ })
+$qualityField = New-Field $headset 'Graphics' 0 $qualityLabels $qualityIndex
 $scales = @(100, 95, 90, 85, 80, 75, 70, 65, 60, 55, 50)
 $scaleIndex = 0
 if ($InitialSelections.ContainsKey('EyeRenderPercent')) {
@@ -832,7 +834,7 @@ if ($result.Solo) {
 }
 else { $result.Remove('PortalGun') }
 if ($vrCard.Tag.Checked) {
-    $result.VrQuality = [string]$s.vr_qualities[$qualityField.Tag.Index]
+    if ($qualityField.Tag.Index -gt 0) { $result.VrQuality = [string]$s.vr_qualities[$qualityField.Tag.Index - 1] }
     $result.ThreadedRender = $(if ($threadedToggle.Tag.Checked) { 'On' } else { 'Off' })
     if ($scaleField.Tag.Index -gt 0) { $result.EyeRenderPercent = $scales[$scaleField.Tag.Index - 1] }
 }

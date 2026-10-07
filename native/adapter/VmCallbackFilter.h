@@ -32,9 +32,9 @@ public:
         ClientPlayBlockEffects, ClientPlayParryEffects, IsGrappleBlocked,
         TakeDamage, UpdateGroundSpeed, PlayWeaponAnimation,
         CalcWeaponFire, NativePortalShotsUpdate, HitWall, NativeMagazineFeedEvent, ScoreDamage,
-        ClientSetRotation, ClientSetLocation, SetPosition, Unrelated
+        ClientSetRotation, ClientSetLocation, AddCameraLensEffect, SetPosition, Unrelated
     };
-    static constexpr std::array<const wchar_t*,72> CallbackNames{
+    static constexpr std::array<const wchar_t*,73> CallbackNames{
         L"AddSpread", L"AdjustDamage", L"ApplyAutoTarget", L"ApplyForceLookAtPawn",
         L"ApplyTargetAdhesion", L"ApplyTargetFriction", L"AttachWeaponTo", L"CheckTargetLock", L"ClearAllPendingFire",
         L"ClearFlashCount", L"ClearFlashLocation", L"ClearPendingFire", L"ClientPlayCameraAnim", L"ClientWeaponSet",
@@ -53,7 +53,7 @@ public:
         L"ClientPlayBlockEffects", L"ClientPlayParryEffects", L"IsGrappleBlocked",
         L"TakeDamage", L"UpdateGroundSpeed", L"PlayWeaponAnimation",
         L"CalcWeaponFire", L"NativePortalShotsUpdate", L"HitWall", L"NativeMagazineFeedEvent", L"ScoreDamage",
-        L"ClientSetRotation", L"ClientSetLocation"
+        L"ClientSetRotation", L"ClientSetLocation", L"AddCameraLensEffect"
     };
     static_assert(CallbackNames.size()==static_cast<std::size_t>(Callback::SetPosition));
 

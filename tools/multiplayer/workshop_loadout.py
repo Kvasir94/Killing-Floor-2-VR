@@ -5,6 +5,8 @@ import json
 import re
 import shutil
 import subprocess
+import functools
+import msvcrt
 
 from vr_config import profile_root
 from workshop_map import MAP_NAME
@@ -91,10 +93,43 @@ def parse_mods(value):
 # launch, and only a profile with nothing in it falls back to the shipped
 # default. Saved play mode applies to Host and Solo; a friend joining still gets the
 # flat screen unless they ask for --vr.
+DLSS_MODES = ("off", "dlaa", "quality", "balanced", "performance", "ultraperformance")
+
+
+def _read_preferences(path, *, strict=False):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(value, dict):
+            raise ValueError("Launcher preferences must be an object")
+        return value
+    except (ValueError, OSError):
+        if strict:
+            raise ValueError("Cannot save malformed launcher preferences; preserve and repair launcher.json first")
+        return {}
+
+
+def _preference_transaction(function):
+    @functools.wraps(function)
+    def locked(args):
+        root = getattr(args, "profile_root", None) or profile_root()
+        root.mkdir(parents=True, exist_ok=True)
+        # Serialize read/merge/replace across launcher processes, including Join.
+        with (root / "launcher.lock").open("a+b") as lock:
+            lock.seek(0)
+            if not lock.read(1):
+                lock.write(b"0");lock.flush()
+            lock.seek(0);msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                return function(args)
+            finally:
+                lock.seek(0);msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+    return locked
+
+
 def load_preferences(args):
     root = getattr(args, "profile_root", None) or profile_root()
     path = root / "launcher.json"
-    saved = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    saved = _read_preferences(path)
     # Existing diagnostic scenarios have their own content contract, so they
     # take the shipped defaults for anything the caller left unset and nothing
     # from the profile. Every selection still ends up set: the rest of the
@@ -129,6 +164,14 @@ def load_preferences(args):
         args.portal_gun = saved.get("portal_gun", False) is True
     if getattr(args, "threaded_render", None) is None:
         args.threaded_render = saved.get("threaded_render", False) is True
+    if getattr(args, "dlss", None) is None:
+        mode = saved.get("dlss", "off")
+        args.dlss = mode if mode in DLSS_MODES else "off"
+    if getattr(args, "hide_bile_lens", None) is None:
+        args.hide_bile_lens = saved.get("hide_bile_lens", True) is not False
+    if getattr(args, "dlss_sharpness", None) is None:
+        value = saved.get("dlss_sharpness", 0)
+        args.dlss_sharpness = value if type(value) is int and 0 <= value <= 100 else 0
     if scenario or getattr(args, "solo", False):
         args.mods = []
         args.damage_popups = False
@@ -147,6 +190,22 @@ def load_preferences(args):
         raise ValueError("Saved test map players must be 0 or 6")
 
 
+@_preference_transaction
+def save_dlss_preferences(args):
+    # A join takes the host's match settings, but DLSS is the player's own.
+    root = getattr(args, "profile_root", None) or profile_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "launcher.json"
+    saved = _read_preferences(path, strict=True)
+    saved.update({"dlss": getattr(args, "dlss", None) or "off",
+                  "dlss_sharpness": int(getattr(args, "dlss_sharpness", None) or 0),
+                  "hide_bile_lens": getattr(args, "hide_bile_lens", True) is not False})
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(saved, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+@_preference_transaction
 def save_preferences(args):
     root = getattr(args, "profile_root", None) or profile_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -155,13 +214,16 @@ def save_preferences(args):
     # Headset render scale is deliberately absent: it lives with the rest of
     # the in-headset preferences in the profile KFGame.ini, and two owners for
     # one setting is how they start disagreeing.
-    saved = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    saved = _read_preferences(path, strict=True)
     saved.update({"vr": bool(getattr(args, "vr", True)),
         "map": MAP_NAME if getattr(args, "test_map", False) else getattr(args, "map", "KF-BurningParis"),
         "difficulty": getattr(args, "difficulty", "normal"),
         "game_length": getattr(args, "game_length", "short"),
         "vr_quality": getattr(args, "vr_quality", "performance"),
         "threaded_render": bool(getattr(args, "threaded_render", False)),
+        "dlss": getattr(args, "dlss", None) or "off",
+        "dlss_sharpness": int(getattr(args, "dlss_sharpness", None) or 0),
+        "hide_bile_lens": getattr(args, "hide_bile_lens", True) is not False,
         "breacher": bool(getattr(args, "breacher", False))})
     # Solo applies no hosted loadout. Remember its common choices without
     # erasing the mods and host settings the next hosted session will use.
@@ -392,6 +454,11 @@ def configure_mod_settings(role, args, game, user):
             path = destination / f"KF{kind}.ini"
             if not path.exists():
                 path.write_text(f"[{kind}.{kind}]\nVersion=2\nLogLevel=LL_Info\n" + extra, encoding="utf-16")
+        # A saved admin preference must not enable cheats on ordinary startup.
+        # Change only this session's copies, including platform overrides.
+        for path in destination.rglob("KFAAL.ini"):
+            path.write_text(set_ini(read_ini(path), "AAL.AAL", {
+                "bAutoEnableCheats": "False"}), encoding="utf-16")
         path = destination / "KFUnofficialPatch.ini"
         text = read_ini(path) if path.exists() else ""
         text = set_ini(text, "UnofficialKFPatch.UKFPHUDInteraction", {

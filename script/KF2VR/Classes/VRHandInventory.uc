@@ -884,6 +884,7 @@ function Update(float DeltaTime)
         R = Registry.Items[I];
         if (R == None || R.SupportHand < 0 || R.Presenter == None
             || !R.Presenter.HasValidSupportTracking() || R.Presenter.SupportContactWithinReleaseRange()) continue;
+        if (R.Presenter.RetainPhysicalStockSupport()) continue;
         if (R.Presenter.CanRetainCarriedSupport()) continue;
         // A held pump keeps its acquired support contact through sideways
         // strokes and moving reload parts. Input still releases the grip.

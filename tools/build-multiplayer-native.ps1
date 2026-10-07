@@ -2,6 +2,7 @@
 param(
     [string]$CMake = 'C:\Program Files\CMake\bin\cmake.exe',
     [string]$CTest = '',
+    [switch]$Dlss,
     [ValidateRange(1,12)][int]$Parallel = 4,
     # Only for an independently owned worktree and correctness replay. Keep
     # performance runs quiet; this never deploys DLLs or selects a package.
@@ -69,10 +70,17 @@ try {
             throw 'KF2, its dedicated server or its editor is running; defer native compilation.'
         }
     }
+    $ngxPins = $null
+    if ($Dlss) {
+        $ngxPins = Get-Content (Join-Path $projectRoot 'tools/ngx-pins.json') -Raw | ConvertFrom-Json
+        foreach ($entry in $ngxPins.files_sha256.PSObject.Properties) {
+            if ((Get-FileHash (Join-Path $projectRoot ("third_party/ngx/" + $entry.Name))).Hash -ne $entry.Value) { throw "NGX dependency differs: $($entry.Name)" }
+        }
+    }
     $sources = Read-NetworkNativeSources
     # Friend builds carry their C++ runtime inside the DLL. No Visual Studio or
     # matching redistributable installation is needed on a friend's machine.
-    & $CMake -S $projectRoot -B $buildRoot -A x64 '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded'
+    & $CMake -S $projectRoot -B $buildRoot -A x64 '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded' ('-DKF2VR_ENABLE_DLSS=' + @('OFF','ON')[[int][bool]$Dlss])
     if ($LASTEXITCODE -ne 0) { throw 'Network native configure failed.' }
     & $CMake --build $buildRoot --config Release --parallel $Parallel
     if ($LASTEXITCODE -ne 0) { throw 'Network native build failed.' }
@@ -82,13 +90,15 @@ try {
         throw 'Native sources changed during build.'
     }
     $artifacts = [ordered]@{}
-    foreach ($name in @('dinput8.dll','openxr_loader.dll')) {
+    $clientArtifacts = @('dinput8.dll','openxr_loader.dll')
+    if ($Dlss) { $clientArtifacts += 'nvngx_dlss.dll' }
+    foreach ($name in $clientArtifacts) {
         $path = Join-Path $buildRoot "native/adapter/Release/$name"
         $artifacts[$name] = (Get-FileHash -LiteralPath $path).Hash
     }
     $serverArtifacts = [ordered]@{'dinput8.dll'=(Get-FileHash -LiteralPath (Join-Path $buildRoot 'native/adapter/server/Release/dinput8.dll')).Hash}
     [ordered]@{schema='kf2vr/net-native-build/1';success=$true;runtime_linkage='static';sources_sha256=$sources;
-        runtime_overlap=[bool]$AllowRuntimeOverlap;parallel_jobs=$Parallel;
+        runtime_overlap=[bool]$AllowRuntimeOverlap;parallel_jobs=$Parallel;dlss_enabled=[bool]$Dlss;ngx_sdk=$ngxPins;
         artifacts_sha256=$artifacts;server_artifacts_sha256=$serverArtifacts;finished_utc=[DateTime]::UtcNow.ToString('o')} |
         ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $buildRoot 'build.json')
 } finally {

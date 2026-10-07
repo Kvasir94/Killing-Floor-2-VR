@@ -191,7 +191,7 @@ and holsters. **MENU AND INTERFACE** sets pointer/panel placement and recenter;
 **CALIBRATION** sets weapon fit, captured height and chest zones.
 Initial values are **30-degree snap** and **50% smooth sensitivity**; old zero values
 are repaired. Solo/network defaults come from **tools/vr-defaults.json**.
-Every in-headset preference persists in
+In-headset control and calibration preferences persist in
 **%LOCALAPPDATA%/KF2VR/Profile/KFGame.ini**, including ones with no shipped
 default, such as aim fit, hand calibration and selector favourites. Diagnostic,
 probe, replay and capture flags are deliberately not preferences and never cross
@@ -200,6 +200,19 @@ back into the profile after exit. The original stock KF2 config stays intact.
 Profiles carry `[KF2VR.Profile] Revision=2`. A profile written before that could
 never hold an in-game choice, so its stale `MovementHand=1` is reset once to the
 shipped left hand; a later right-hand choice is saved normally.
+
+Changes to the nine in-game quality rows (environment, character, effects,
+texture quality/filtering, shadows, bloom, volumetric lighting and light shafts)
+are saved separately in **%LOCALAPPDATA%/KF2VR/Profile/vr-graphics.json** after
+the game exits. Solo, Host and Join use those same choices, including experimental
+Epic Solo, across extracted packages. Only supported quality values changed during
+play are saved; display dimensions, connection settings and comfort overrides
+are excluded. Leave **Graphics > Keep my last settings** selected to retain them.
+Choosing a quality preset, `-VrQuality` / `--vr-quality`, or a headset preset
+explicitly starts that preset without older custom quality edits; after playing,
+subsequent launches retain any new edits. `-PrepareOnly` changes no saved graphics
+profile. For example, `./Play-KF2VR.cmd -Solo -Vr` keeps the last settings;
+`./Play-KF2VR.cmd -Solo -Vr -VrQuality performance` starts Performance again.
 
 Every session copy of KFEngine.ini (hosted server, player client, replay teammate)
 raises KF2's network rate caps to 40000 bytes/s: `[IpDrv.TcpNetDriver]
@@ -397,3 +410,17 @@ preserves unknown/changed files. Never mix DLLs or bypass package/game hash chec
 automatically. Review the ZIP before sharing and keep raw logs/configs/dumps private.
 See [controls and troubleshooting](docs/VR_CONTROLS.md),
 [feedback](CONTRIBUTING.md) and [optional Breacher](docs/public-alpha/BREACHER.md).
+
+### Experimental headset graphics and physical stocks
+
+Portable Solo/Host/Join options `--dlss {off,dlaa,quality,balanced,performance,ultraperformance}` (default Off) and `--dlss-sharpness 0..100` (default 0) save personal graphics preferences. Non-Off DLSS requires VR and an RTX-compatible driver/runtime. Example: `runtime\python.exe tools\multiplayer\friends.py --solo --vr --dlss quality --dlss-sharpness 0`. Use `--dlss off` to restore ordinary rendering. These are portable CLI options; the root launcher exposes them through its player window.
+
+VR hides Bloat bile lens splatter by default. `--no-hide-bile-lens` restores it; damage and poison gameplay remain. Steam and Epic Solo support these choices; Epic remains Solo-only. DLSS failure selects complete ordinary images for both eyes, then returns to ordinary sizing. DLSS remains experimental and needs headset/online acceptance.
+
+With **Physical stock - gun hand aims**, a firearm's acquired support grip remains owned across distance drift while the physical grip is held and tracking is valid. Ordinary two-hand aiming still releases at the existing distance; tracking loss suspends support accuracy, and grip release/stow remain available. Melee and pump/carry exceptions retain their existing rules.
+
+## Current startup, progression and graphics
+
+Ordinary launches do not request cheats or restore Godmode. Solo forces normal play; saved Admin Auto Login automatic-cheats settings are disabled in isolated session copies, with originals preserved. Explicit later Practice remains available with its warning. The pre-play warning distinguishes VAC status from XP eligibility. The disabled VAC control reflects unsupported secure injected VR; VAC does not guarantee ordinary perk XP. Custom modes/mods and Practice can prevent progression.
+
+Experimental DLSS options are `--dlss off|dlaa|quality|balanced|performance|ultraperformance` with `--dlss-sharpness 0` through `100`; Off/0 are fresh defaults. Non-Off requires VR and NVIDIA RTX hardware with a compatible driver. The portable Solo/Host/Join graphics controls keep these personal settings; Epic carries the same typed Solo graphics options. `--hide-bile-lens` is initially on for VR; use `--no-hide-bile-lens` to restore the stock splatter. See [DLSS](docs/DLSS.md).

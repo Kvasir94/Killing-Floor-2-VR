@@ -38,7 +38,7 @@ def resolve_game_root(game_root, package_root):
 
 def selections(vr=None):
     args = SimpleNamespace(host=True, vr=True, map=None, difficulty=None, game_length=None,
-                           vr_quality=None, inventory_focus=None, mods=None, damage_popups=None, portal_gun=None, threaded_render=None,
+                           vr_quality=None, inventory_focus=None, mods=None, damage_popups=None, portal_gun=None, threaded_render=None, dlss=None, dlss_sharpness=None, hide_bile_lens=None,
                            test_map_players=None, test_map=False, mode_requested=vr is not None,
                            replay_teammate=False, avatar_preview=False)
     if vr is not None:

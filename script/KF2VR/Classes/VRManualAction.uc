@@ -1,13 +1,14 @@
 // Manual bolt and lever actions (VR CONTROLS > INTERACTIVE RELOADS: ON + MANUAL
 // PUMP), as the manual pump works the pump shotguns: after every shot that
-// leaves a round, the gun will not fire again until the off hand works its
+// leaves a round, the gun will not fire again until a hand works its
 // action open (ejecting the spent case) and closed (chambering the next round).
 // The action follows the hand along the motion the stock fire clip gives it
 // (VRCycleCatalog, VRActionPath sampled from Shoot); that clip's own cycle
 // notifies are muted on the live node and the same stock events play at the
 // physical open and close instead. Firing stays stock: only the trigger press
 // is withheld, an empty gun still dry fires into its auto-reload, and the
-// reload's own open and close (break action, lever) count as a cycle.
+// reload's own open and close (break action, lever) count as a cycle. The lever
+// actions also admit the primary hand while the other hand supports the rifle.
 class VRManualAction extends VRManualPump;
 
 var VRActionPath Cycle;
@@ -15,6 +16,73 @@ var float Amount;
 var bool bOpened;
 var int CycleProfile;
 var AkEvent ShotSound;
+var int ActionHand, ActionRevision;
+var bool bPrimaryGripWasDown;
+var vector SupportRootOffset;
+var quat SupportRootRotation;
+
+function bool LeverAction() { return Cycle != None && Cycle.Bones[0] == 'RW_Finger_Lever'; }
+
+// The support role carries the same rifle while its primary hand works the
+// lever. Keep that role; no inventory transfer or stow is part of the stroke.
+function bool PrimaryStrokeReady()
+{
+    return LeverAction() && Runtime != None && Runtime.IsCurrent() && InHand()
+        && Runtime.PrimaryHand == GunHand && Runtime.SupportHand == OffHand()
+        && Owner.InputOwner.Inventory.Registry.GetPrimary(GunHand) == Runtime
+        && Owner.InputOwner.Inventory.Registry.GetSupport(OffHand()) == Runtime
+        && (Bridge.NativeValidMask & Bridge.NativeGripActiveMask & 3) == 3
+        && (!Bridge.bHoldSupportGrip || Owner.GripDown(OffHand()))
+        && !Owner.InputOwner.IsSelectorOpen(0) && !Owner.InputOwner.IsSelectorOpen(1)
+        && (!bEngaged || ActionHand != GunHand || Runtime.OwnershipRevision == ActionRevision);
+}
+
+function quat SupportQ()
+{
+    return QuatFromRotator(OffHand() == 0 ? Bridge.LeftRotation : Bridge.RightRotation);
+}
+
+function vector RootPos()
+{
+    if (bEngaged && ActionHand == GunHand && PrimaryStrokeReady())
+        return Bridge.Hands[OffHand()].Position + QuatRotateVector(SupportQ(), SupportRootOffset);
+    return super.RootPos();
+}
+
+function quat RootQ()
+{
+    if (bEngaged && ActionHand == GunHand && PrimaryStrokeReady()) return QuatProduct(SupportQ(), SupportRootRotation);
+    return super.RootQ();
+}
+
+function vector LocalHandPosition()
+{
+    return QuatRotateVector(QuatInvert(RootQ()), Bridge.Hands[ActionHand].Position - RootPos());
+}
+
+// Called by the normal placement solve, including native late placement, so
+// locomotion/turning follows the support controller while primary motion only
+// drives the lever. Losing either role/tracking immediately restores placement.
+function bool PrimaryRoot(KFWeapon W, out vector At, out quat Q)
+{
+    if (!Enabled() || !Owner.InputOwner.ContextValid() || W != Gun
+        || !bEngaged || ActionHand != GunHand || !PrimaryStrokeReady()) return false;
+    At = RootPos(); Q = RootQ();
+    return true;
+}
+
+function bool OwnsHand(int Hand)
+{
+    return Enabled() && Owner.InputOwner.ContextValid() && Gun != None
+        && bEngaged && Hand == ActionHand
+        && (ActionHand != GunHand || PrimaryStrokeReady());
+}
+
+function bool LatchesSupport(VRWeaponRuntime R, int Hand)
+{
+    return Enabled() && Owner.InputOwner.ContextValid() && R == Runtime
+        && bEngaged && ActionHand == GunHand && Hand == OffHand() && PrimaryStrokeReady();
+}
 
 static function bool Supported(KFWeapon W)
 {
@@ -60,6 +128,7 @@ function bool Bind(VRWeaponRuntime R, int Hand)
     Gun = R.Item;
     EnsureSounds();
     GunHand = Hand;
+    ActionHand = OffHand();
     LastAmmo = Gun.AmmoCount[0];
     bNeedsPump = R.bManualPumpPending;
     bEngaged = false;
@@ -68,6 +137,7 @@ function bool Bind(VRWeaponRuntime R, int Hand)
     Motion.Reset();
     bTriggerWasDown = true;
     bGripWasDown = (Bridge.NativeGripActiveMask & (1 << OffHand())) == 0 || Owner.GripDown(OffHand());
+    bPrimaryGripWasDown = (Bridge.NativeGripActiveMask & (1 << GunHand)) == 0 || Owner.GripDown(GunHand);
     Parts.Length = 0;
     RootBone = 'RW_Weapon';
     if (R.Presenter != None && R.Presenter.ActiveProfile >= 0)
@@ -80,7 +150,10 @@ function bool Bind(VRWeaponRuntime R, int Hand)
         Cycle.Bones[I] = class'VRCycleCatalog'.default.Profiles[CycleProfile].Bones[I];
         if (Cycle.Bones[I] != '') Cycle.BoneCount = I + 1;
     }
-    if (!Cycle.SampleClip(Bridge, Gun, RootBone, 'Shoot', Bridge.HandBone(0))) { Cycle = None; return false; }
+    // Winchester/SPX Shoot is authored around the right wrist on the lever;
+    // the left wrist stays on the fore-end. Sampling it made the contact path
+    // follow the support grip instead of the hand which operates the part.
+    if (!Cycle.SampleClip(Bridge, Gun, RootBone, 'Shoot', Bridge.HandBone(LeverAction() ? 1 : 0))) { Cycle = None; return false; }
     for (I = 0; I < Cycle.BoneCount; ++I) AddPart(Cycle.Ref, Cycle.Bones[I], true);
     Tree = AnimTree(Gun.MySkelMesh.Animations);
     if (Tree == None || Tree == Gun.MySkelMesh.AnimTreeTemplate || Parts.Length != Cycle.BoneCount)
@@ -109,6 +182,7 @@ function CancelHand(int Hand)
     Motion.Reset();
     bEngaged = false;
     bGripWasDown = true;
+    bPrimaryGripWasDown = true;
 }
 
 // A reload that opened and closed the action has cycled it.
@@ -132,34 +206,61 @@ function Update()
 function UpdateHand()
 {
     local int Hand;
-    local bool bGrip, bGripEdge;
+    local bool bGrip, bGripEdge, bPrimaryGrip, bPrimaryEdge, bOffGrip, bOffEdge;
     local vector P, HandLocal;
-    Hand = OffHand();
+    local quat InvSupport;
+    bPrimaryGrip = Owner.GripDown(GunHand);
+    bPrimaryEdge = bPrimaryGrip && !bPrimaryGripWasDown;
+    bPrimaryGripWasDown = bPrimaryGrip;
+    bOffGrip = Owner.GripDown(OffHand());
+    bOffEdge = bOffGrip && !bGripWasDown;
+    bGripWasDown = bOffGrip;
+    if (!bEngaged && bPrimaryEdge && PrimaryStrokeReady() && (bNeedsPump || Amount > 0.05)
+        && VSize(Bridge.Hands[GunHand].Position
+            - (RootPos() + QuatRotateVector(RootQ(), Cycle.ContactLocal(Amount) * GunScale()))) <= Radius)
+    {
+        InvSupport = QuatInvert(SupportQ());
+        SupportRootOffset = QuatRotateVector(InvSupport, RootPos() - Bridge.Hands[OffHand()].Position);
+        SupportRootRotation = QuatProduct(InvSupport, RootQ());
+        ActionRevision = Runtime.OwnershipRevision;
+        ActionHand = GunHand;
+        bEngaged = true; bByGrip = true; bBySupport = false;
+        Cycle.GrabOffset = LocalHandPosition() / GunScale() - Cycle.ContactLocal(Amount);
+        Motion.Begin(LocalHandPosition(), Owner.Now());
+        Owner.Pulse(1 << GunHand, 0.25, 0.02);
+        return;
+    }
+    Hand = bEngaged ? ActionHand : OffHand();
     if ((Bridge.NativeValidMask & Bridge.NativeGripActiveMask & 3) != 3
-        || Owner.InputOwner.Inventory.Registry.GetPrimary(Hand) != None
+        || (Hand == GunHand ? !PrimaryStrokeReady() : Owner.InputOwner.Inventory.Registry.GetPrimary(Hand) != None)
         || Owner.InputOwner.Inventory.HasWorldGrab(Hand) || Owner.InputOwner.IsSelectorOpen(Hand) || Cycle == None)
     {
         CancelHand(Hand);
         return;
     }
     P = Bridge.Hands[Hand].Position;
-    HandLocal = LocalHandPosition() / GunScale();
+    HandLocal = QuatRotateVector(QuatInvert(RootQ()), P - RootPos()) / GunScale();
     bGrip = Owner.GripDown(Hand);
-    bGripEdge = bGrip && !bGripWasDown;
-    bGripWasDown = bGrip;
+    bGripEdge = Hand == OffHand() && bOffEdge;
     if (!bEngaged)
     {
         if (!bGripEdge || (!bNeedsPump && Amount <= 0.05)
             || VSize(P - (RootPos() + QuatRotateVector(RootQ(), Cycle.ContactLocal(Amount) * GunScale()))) > Radius) return;
         // The action grip replaces any support grip on the fore-end.
         if (Owner.InputOwner.Inventory.Registry.GetSupport(Hand) == Runtime) Owner.InputOwner.Inventory.ReleaseHand(Hand);
+        ActionHand = Hand;
         bEngaged = true; bByGrip = true; bBySupport = false;
         Cycle.GrabOffset = HandLocal - Cycle.ContactLocal(Amount);
         Motion.Begin(LocalHandPosition(), Owner.Now());
         Owner.Pulse(1 << Hand, 0.25, 0.02);
         return;
     }
-    if (!Motion.Check(LocalHandPosition(), Owner.Now())) { Motion.Begin(LocalHandPosition(), Owner.Now()); return; }
+    if (!Motion.Check(LocalHandPosition(), Owner.Now()))
+    {
+        if (Hand == GunHand) CancelHand(Hand);
+        else Motion.Begin(LocalHandPosition(), Owner.Now());
+        return;
+    }
     if (!bGrip) { bEngaged = false; Motion.Reset(); return; }
     Amount = Cycle.Project(HandLocal - Cycle.GrabOffset);
     if (!bOpened && Amount >= 0.95)
@@ -183,7 +284,7 @@ function Pumped()
     bEngaged = false;
     Amount = 0;
     Motion.Reset();
-    PlayList(class'VRCycleCatalog'.default.Profiles[CycleProfile].Close, Bridge.Hands[OffHand()].Position);
+    PlayList(class'VRCycleCatalog'.default.Profiles[CycleProfile].Close, Bridge.Hands[ActionHand].Position);
     bNeedsPump = false;
     if (Runtime != None) Runtime.bManualPumpPending = false;
     Gun.ANIMNOTIFY_EnableAdditiveBob();

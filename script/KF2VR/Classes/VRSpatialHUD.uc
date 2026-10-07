@@ -469,10 +469,20 @@ simulated function bool PouchEntry(int HandIndex)
     return HandIndex == 0 || Ammo[0].Weapon != Ammo[1].Weapon;
 }
 
+// Read the reload system's existing hover decision, including hand occupancy
+// and holster priority; this display has no selection or pickup input.
+simulated function bool PouchHovered(int HandIndex)
+{
+    local VRInteractiveReload R;
+    if (Bridge == None || Bridge.HandInventory == None || Bridge.HandInventory.Input == None) return false;
+    R = Bridge.HandInventory.Input.Reloads;
+    return R != None && R.BeltShells != None && R.BeltShells.Hovered(Ammo[HandIndex].Weapon, HandIndex);
+}
+
 simulated function string PouchKey()
 {
-    return string(Ammo[0].Weapon) @ PouchEntry(0) @ Ammo[0].Reserve @ Ammo[0].Capacity @ string(Ammo[0].WeaponImage)
-        @ string(Ammo[1].Weapon) @ PouchEntry(1) @ Ammo[1].Reserve @ Ammo[1].Capacity @ string(Ammo[1].WeaponImage);
+    return string(Ammo[0].Weapon) @ PouchEntry(0) @ Ammo[0].Reserve @ Ammo[0].Capacity @ string(Ammo[0].WeaponImage) @ PouchHovered(0)
+        @ string(Ammo[1].Weapon) @ PouchEntry(1) @ Ammo[1].Reserve @ Ammo[1].Capacity @ string(Ammo[1].WeaponImage) @ PouchHovered(1);
 }
 
 // Shown while the player looks down at the pouch or brings a hand to it.
@@ -495,13 +505,15 @@ simulated function PlacePouchCounter()
     // The stock camera can lag or clamp controller pitch; stereo retains the
     // residual HMD pose, so its gaze is not necessarily GetPlayerViewPoint's.
     GetAxes(Bridge.NativeHeadRotation, HeadForward, HeadRight, HeadUp);
-    // Within about 35 degrees of gaze, or a palm within reach of the pouch.
-    bNear = (HeadForward dot Normal(Pouch - Bridge.HeadPosition)) > 0.82;
+    // Keep the card forward of the pouch, above its props. Pulling it toward
+    // the eyes moved it behind the neck when looking straight down.
+    Position = Pouch + vector(Bridge.BodyYaw()) * 8 + vect(0,0,9);
+    // Within about 35 degrees of the visible card, or a palm at the pouch.
+    // Looking at the readout must reveal it even before reaching for ammo.
+    bNear = (HeadForward dot Normal(Position - Bridge.HeadPosition)) > 0.82;
     for (H = 0; H < 2 && !bNear; ++H)
         bNear = (Bridge.NativeValidMask & (1 << H)) != 0 && VSize(Bridge.PalmPosition(H) - Pouch) < 22;
     if (bNear) PouchVisibleUntil = WorldInfo.RealTimeSeconds + 0.4;
-    // Just above the pouch and nudged toward the eyes, so the belt never covers it.
-    Position = Pouch + vect(0,0,9) + Normal(Bridge.HeadPosition - Pouch) * 4;
     // Cube's front is -X, text runs across +Y and up +Z. A direction-only
     // rotator fixes roll against world up, which becomes ambiguous looking
     // straight down. Project the headset's right axis onto the card instead.
@@ -919,11 +931,12 @@ simulated function ReadWeapon(int HandIndex)
         if (Bridge.HandInventory != None)
         {
             R = Bridge.HandInventory.Registry.FindItem(W);
-            if (R != None && R.MagazineOut())
+            if (R != None && (R.MagazineOut() || R.MagazineNeedsRack()))
             {
                 A.Magazine = R.MagazineDisplayAmmo();
                 A.AmmoLabel = string(A.Magazine);
-                A.StateLabel = R.MagazineHasChamber() ? "CHAMBERED" : "MAGAZINE OUT";
+                if (R.MagazineOut()) A.StateLabel = R.MagazineHasChamber() ? "CHAMBERED" : "MAGAZINE OUT";
+                else A.StateLabel = "RACK";
             }
             if (R != None && R.AlternateKind() == 1)
             {
@@ -1517,35 +1530,45 @@ simulated function RenderWeaponReadout(Canvas C, HUDWeaponReadout A)
         Bar(C, 36, 224, 720, float(A.Magazine) / Max(1,A.Capacity), Tint, 6);
 }
 
-// Same look as the gun readout: translucent backer, stock weapon icon, and
-// the reserve in ink, amber under one magazine, red when empty.
+// Exposed KF2 ammo props carry identity in 3D. White reserve digits lead;
+// small stock gun art and a status rule support them without a large card.
 simulated function RenderPouchPanel(Canvas C)
 {
     local int H, Count;
     local float X, Width;
     Count = (PouchEntry(0) ? 1 : 0) + (PouchEntry(1) ? 1 : 0);
     if (Count == 0) return;
-    Box(C, 12, 12, 776, 296, ReadoutBacking);
     Width = 776.0 / Count;
     X = 12;
     for (H = 0; H < 2; ++H)
     {
         if (!PouchEntry(H)) continue;
-        DrawPouchEntry(C, Ammo[H], X, Width);
+        DrawPouchEntry(C, Ammo[H], X, Width, PouchHovered(H));
         X += Width;
     }
 }
 
-simulated function DrawPouchEntry(Canvas C, HUDWeaponReadout A, float X, float Width)
+simulated function DrawPouchEntry(Canvas C, HUDWeaponReadout A, float X, float Width, bool bHovered)
 {
     local color Tint;
-    local string Value;
+    local string Value, ReserveLabel;
     local float ValueWidth;
-    Tint = A.Reserve <= 0 ? Red : (A.Reserve < A.Capacity ? Amber : Ink);
-    Art(C, A.WeaponImage, X + 24, 24, Width - 48, 104, Muted);
+    Tint = A.Reserve <= 0 ? Red : (A.Reserve < A.Capacity ? Amber : Muted);
+    ReserveLabel = A.Reserve <= 0 ? "EMPTY" : (bHovered ? "GRIP" : "RESERVE");
+    // Separate count backers leave clear space between independently owned pools.
+    Box(C, X + 16, 38, Width - 32, 208, ReadoutBacking);
     Value = string(A.Reserve);
-    ValueWidth = FMin(TextWidth(C, Value, 160), Width - 48);
-    Text(C, Value, X + (Width - ValueWidth) * 0.5, 136, ValueWidth + 1, 160, Tint, true);
+    ValueWidth = FMin(TextWidth(C, Value, 176), Width - 64);
+    Text(C, Value, X + (Width - ValueWidth) * 0.5, 48, ValueWidth + 1, 176, Ink, true);
+    Box(C, X + 32, 234, Width - 64, bHovered ? 8 : 3, bHovered ? MakeColor(90,200,255,255) : Tint);
+    Art(C, A.WeaponImage, X + 24, 252, 96, 48, Muted);
+    Text(C, ReserveLabel, X + 132, 254, Width - 156, 36, A.Reserve <= 0 ? Red : Muted, true);
+    if (bHovered)
+    {
+        // Brackets and a verb accompany the cyan rule: colour is not the only cue.
+        Box(C, X + 16, 38, 8, 38, MakeColor(90,200,255,255));
+        Box(C, X + Width - 24, 38, 8, 38, MakeColor(90,200,255,255));
+    }
 }
 
 // The stock layout on a 512 x 256 tag: name, armor bar, health bar with the

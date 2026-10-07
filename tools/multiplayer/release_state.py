@@ -23,7 +23,8 @@ def workspace_sources(root):
     paths.update(root / name for name in ("CMakeLists.txt", "third_party/xr-sdks.cmake", "Play-KF2VR.cmd", "Play-KF2VR-TestMap.cmd",
         "tools/play-main.ps1", "tools/play-gui.ps1", "tools/vr-defaults.json", "tools/vr-defaults.ps1", "tools/test-online-play.ps1",
         "tools/dependency-pins.json", "tools/install-multiplayer-server.ps1", "tools/build-kf2vr.ps1", "tools/build-multiplayer-native.ps1", "tools/build-multiplayer-scripts.ps1"))
-    for name in ("script/KF2Breacher/Localization/INT/KF2Breacher.int",
+    for name in ("tools/ngx-pins.json", "third_party/NVIDIA-DLSS-LICENSE.txt", "third_party/AMD-CAS-LICENSE.txt",
+                 "script/KF2Breacher/Localization/INT/KF2Breacher.int",
                  "tools/test-emulated-motion.ps1", "tools/test-saved-network-motion.ps1",
                  "tools/create-motion-contact-sheet.ps1"):
         if (root / name).is_file():

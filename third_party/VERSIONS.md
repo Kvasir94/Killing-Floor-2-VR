@@ -48,3 +48,7 @@ Retain the supplied MinHook and bundled HDE copyright/license notices. The curat
 includes these pinned source files and their licence. Verify their hashes above;
 an upstream tag with a similar version label does not establish identical bytes.
 A mismatch requires a reviewed dependency update.
+
+## Optional DLSS / CAS
+
+NVIDIA DLSS SDK v310.7.0, commit `a291cc7d2cc642a51566f3dfd5376f635cd1b284`, has exact consumed-file and runtime SHA-256 pins in `tools/ngx-pins.json`. Fetch separately; no SDK/runtime binaries are in the source snapshot. Full licence: `NVIDIA-DLSS-LICENSE.txt`; public distribution obligations: `docs/DLSS.md`. CAS adapts GPUOpen-Effects/FidelityFX-CAS commit `9fabcc9a2c45f958aff55ddfda337e74ef894b7f`, with its full `AMD-CAS-LICENSE.txt` notice. Implementation attribution is recorded in the release notes.
