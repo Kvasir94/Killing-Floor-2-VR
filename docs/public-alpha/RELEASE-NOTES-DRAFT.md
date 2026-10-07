@@ -35,3 +35,11 @@ For feedback, include the build ID, store, Solo/Host/Join, headset/runtime/GPU, 
 DLSS/CAS and physical-stock support changes adapt optimumbox's reviewed contribution, with its recorded Claude Opus 5.5 co-author attribution preserved here. Other handling and launcher changes are by the KF2-VR contributors. NVIDIA DLSS/NGX retains NVIDIA's separate licence; NVIDIA GeForce RTX and NVIDIA RTX are NVIDIA trademarks. CAS retains AMD's MIT notice. CPython, OpenXR, MinHook and the CC0 bell retain their bundled notices.
 
 The playable package includes KF2/Valve-derived assets whose redistribution clearance remains unresolved. Prior public availability does not establish clearance. NVIDIA publication obligations, including attribution/trademark placement and applicable pre-commercial-release notification, must be resolved before this DLSS-enabled package is published. Original project contributions use MIT; no new terms or third-party ownership rights are granted. The source archive excludes the derived binary packages and NVIDIA SDK/runtime binaries.
+
+## Original fork DLSS licence disclaimer and credit
+
+Adapted from [optimumbox's exact fork release](https://github.com/optimumbox/Killing-Floor-2-VR/releases/tag/v0.1.0-alpha.20261006-dlss), source commit `e080bc0e1e1a56e3de61498634f40ca2c29692ed`, authored by optimumbox with recorded Claude Opus 5.5 co-author attribution. The following licence disclaimer is carried verbatim from that release:
+
+> Original contributions use MIT. `nvngx_dlss.dll` is NVIDIA's DLSS runtime, redistributed under the NVIDIA DLSS SDK licence (`app/notices/NVIDIA-DLSS-LICENSE.txt`). Bundled components keep their own notices.
+
+The complete NVIDIA licence was retrieved from that fork's actual playable ZIP using bounded HTTP ranges. Its SHA-256 is `DC2778A3283427285984CDB5B3F7F03EAE7D8A06057F672F2999C5EE7FD4F67D`, identical to the official pinned SDK licence and this package's full notice. The integration retains the complete AMD CAS licence separately. Fork testing claims do not establish acceptance of this adapted build.
