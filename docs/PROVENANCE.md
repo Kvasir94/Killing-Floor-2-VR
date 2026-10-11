@@ -38,6 +38,8 @@ pinned to `v0.5.0-alpha.20261011`
 (`e35ec355ae951dda72ee80b20cb1cef12345b9ac`). Keep upstream attribution and
 licence notices with incorporated source and dependencies. This repository's
 public history remains independent of the private development checkout.
+The full integrated contribution areas, earlier fork pins and recorded Claude
+Opus 5.5 co-author attribution are listed in [CREDITS](../CREDITS.md).
 
 The integrated source retains local shared paired reserve accounting, authority
 validation and recovery repairs, haptics, current sight alignment and jump-zone

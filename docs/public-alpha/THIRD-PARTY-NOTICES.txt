@@ -1,5 +1,14 @@
 KF2-VR third-party notices
 
+OptimumBox's Killing-Floor-2-VR fork: integrated/adapted source contributions
+include rendering/DLSS/stereo/HUD, hip and revolver reloads, multiplayer poses,
+interaction/controls, cameras, launcher and Linux/Epic desktop companions.
+Baseline: v0.5.0-alpha.20261011, e35ec355ae951dda72ee80b20cb1cef12345b9ac.
+Original source contributions use MIT; copyright and permission notice retained.
+Donor commits record Claude Opus 5.5 co-author attribution.
+Full credits: https://github.com/Kvasir94/Killing-Floor-2-VR/blob/main/CREDITS.md
+Upstream: https://github.com/optimumbox/Killing-Floor-2-VR
+
 CPython 3.14.3 Windows embeddable runtime: Python Software Foundation and
 contributors. Complete bundled license: app/runtime/LICENSE.txt. The Python archive
 is pinned to the publisher's SHA-256 before extraction; source pins: tools/dependency-pins.json.

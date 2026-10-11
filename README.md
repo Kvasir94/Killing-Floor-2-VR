@@ -60,7 +60,9 @@ deleting that release folder. Never mix DLLs or bypass game/package checks.
 
 This source snapshot integrates OptimumBox's `v0.5.0-alpha.20261011`
 (`e35ec355ae951dda72ee80b20cb1cef12345b9ac`) with retained local interaction,
-rendering and launcher choices. The combined source is compiled and checked
+rendering and launcher choices. His reload, multiplayer, interaction, camera,
+rendering, launcher and desktop-companion contributions are credited in
+[CREDITS](CREDITS.md). The combined source is compiled and checked
 with the offline CPU/launcher gate; headset and real online acceptance remain
 pending. This source update does not publish a new playable ZIP or establish
 runtime parity. Existing release notes and manifests govern each download.
