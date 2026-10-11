@@ -15,72 +15,55 @@ logging are unavailable. Steam offers Solo/Host/Join in VR or Desktop. Epic's
 current menu-first route still needs headset feedback; earlier partial gameplay
 checks do not establish overall acceptance.
 
-From the repository root on **main**, Double-click **Play-KF2VR.cmd** to open the launcher window.
-Pick VR or desktop, map, difficulty, match length, mods and optional VR graphics/scale,
-then press Play to host a dedicated server and join it. Keep Steam running, connect the headset/controllers, and select
-your OpenXR runtime first. Choose a perk and Ready. Keep the launcher open until
-you close KF2 so it can restore temporary DLLs and save VR preferences.
+From the repository root, double-click **Play-KF2VR.cmd** to open the selected
+package's player window. From an extracted playable ZIP, open **Start KF2-VR**.
+Choose your store and **VR headset** or **Desktop - no headset**, then **Play solo**,
+**Host a game** or **Join a friend**. Solo and Host offer map, difficulty and match
+length, plus a Headset section for VR graphics. Join accepts the host's code.
+Settings is on the home page. Connect your headset/controllers and activate the
+OpenXR runtime before VR play. Keep the window open until game exit and cleanup.
 
-The Session page's first choice sets the kind of match:
+Steam Solo is a standalone match without a server download. Host starts the free
+dedicated server and joins it; first hosting downloads about 32 GB. A blank Host
+password makes the server public. Joiners need neither the server download nor
+port forwarding. Epic offers experimental Solo VR only; follow the manual
+Launch Options steps in [READ ME FIRST](docs/public-alpha/READ-ME-FIRST.txt).
 
-- **HOST ON THIS PC** starts the dedicated server on this PC and joins it: the
-  multiplayer path, with replication. Friends can join. Everything below
-  describes this mode.
-- **TRUE SOLO** is a standalone single-player match: stock Survival with the
-  VR mutators, no server, no network and no replication. Use it to test
-  features without replication involved. It runs the same selected package as Host
-  (`build/multiplayer/current-release.json`),
-  plays only the stock maps installed in the game's `BrewedPC`, and ignores mods
-  and the inventory slowdown. The last kind chosen is remembered in
-  **%LOCALAPPDATA%/KF2VR/Profile/session-type.txt**.
+In a headset session, **LOCAL MATCH** starts a standalone match. It cycles through
+installed Survival maps with MAP and PREVIOUS MAP. The same compiled playable
+feature set is used for solo and network play; host-controlled options apply to
+network sessions.
 
-In a headset session, **LOCAL MATCH** on the VR menu starts the same kind of
-standalone match. It cycles through every installed Survival map with MAP and
-PREVIOUS MAP.
-
-The window groups the same choices as the text menu onto three pages - Session
-(play mode, map, difficulty, match length), Headset (VR graphics, render scale,
-the experimental inventory slowdown) and Mods - with the current selection
-always shown beside the artwork. The text menu is still there under `-Menu`,
-for a console session or a machine without a desktop.
-
-Its artwork is the player's own installed game, read at run time and never
-copied into this repository or a release package: the Wallpaper folder, the
-official logo from the local Steam library cache, and optional locally extracted HUD artwork. Each is optional and the window draws its own equivalent when a
-file is missing.
+The player window's artwork is read from the player's own installed game and
+local Steam library cache, with drawn fallbacks. No game artwork needs to be
+copied into the launcher folder.
 
 For the test map, double-click **[Play-KF2VR-TestMap.cmd](Play-KF2VR-TestMap.cmd)**.
-It opens the same window with Remilly already selected and accepts the same
-additional options, such as `-Desktop` or `-EyeRenderPercent 75`.
-Explicit command-line arguments launch directly; add `-Gui` to review/change
-those initial choices in the window, or `-Menu` for the text menu. Quit leaves
-without starting a game.
+It preselects Remilly and accepts options such as `-Desktop` or
+`-EyeRenderPercent 75`. Explicit arguments launch directly; add `-Gui` to review
+those choices in the player window, or `-Menu` for the text menu. `-DevGui` opens
+the separate advanced PowerShell development window with Session, Headset, Mods
+and TEST CONTROL pages. Its **HOST ON THIS PC** / **TRUE SOLO** choices describe
+that development UI, rather than the normal player window.
 
-Ordinary launcher selections are remembered. Local agent test control is always OFF unless explicitly selected for this launch. Play mode, map, difficulty, match
-length, VR graphics, the experimental inventory slowdown, mods, damage popups
-and test-map scaling are saved to
-**%LOCALAPPDATA%/KF2VR/Profile/launcher.json** on each host launch. Solo saves the
-common mode/map/difficulty/length/graphics choices without overwriting hosted
-mods, popups, scaling, slowdown or grabbing preferences. The next launch starts
-from those choices; headset render scale is saved with the in-headset
-preferences instead. The packaged launcher's Play solo / Host > Headset and
-Settings > Comfort and graphics both label this **Render scale**. They edit the
-same setting as in-game VR Controls > Graphics; choosing **Keep my last setting**
-on the launch page uses that saved value. A switch given on the command line overrides the saved
-value for that launch and is then itself remembered.
+Ordinary launch selections are saved in **%LOCALAPPDATA%/KF2VR/Profile/launcher.json**;
+VR graphics and fit also use the shared VR profile. Solo preserves host-only
+loadout and server choices. **Render scale** on Solo/Host > Headset and
+Settings > Comfort and graphics edits the same setting as in-game
+VR Controls > Graphics. **Keep my last setting** uses the saved value; fresh
+profiles start at Performance / 100%. Local agent test control and recording
+are opt-ins for the current launch. The advanced development UI additionally
+remembers its Solo/Host choice in **%LOCALAPPDATA%/KF2VR/Profile/session-type.txt**.
 
-The launcher uses **build/multiplayer/current-release.json** and prints the
-release name. It verifies package hashes and build/runtime source fingerprints.
-Offline multiplayer test edits do not invalidate the playable package. If a
-build/runtime source changed after packaging, the menu offers **1. Play this build
-anyway (allow stale)** or **Q / Enter. Quit** before the game options. Double-click
-either CMD shortcut and tick **Play this older build anyway** in the window;
-the console menu uses option 1. Solo and Host have the same freshness gate. This choice
-applies to that launch. Direct launches without a menu still stop by default;
-use `-AllowStale` to override them. The override warns about source
-differences and still checks package integrity. Old releases stay intact.
-Build current source with **tools/build-kf2vr.ps1**. Compilation and fast CPU checks do
-not establish headset acceptance.
+The repository launcher uses **build/multiplayer/current-release.json**. It
+verifies the selected manifest, package files and build/runtime source fingerprints.
+If source has changed, the player window asks **Play this older build?**
+before starting that launch. The text menu offers **Play this build anyway (allow stale)**;
+direct launches require `-AllowStale`. This permits source differences only and
+still checks package integrity. Portable release ZIPs have their own immutable
+manifest and do not depend on a repository selection. Old releases stay intact.
+Build current source with **tools/build-kf2vr.ps1**; compiling and offline checks
+do not establish headset acceptance.
 
 ## Local agent test control (Solo VR, default OFF)
 
@@ -152,7 +135,7 @@ PowerShell's standard common parameters are also available.
 | `-EyeRenderPercent` | Saved value; initially 100 | Integer 50-100, per-eye width/height scale. Explicit value overrides saved scale. VR only. | `./Play-KF2VR.cmd -EyeRenderPercent 75` |
 | `-HeadsetPreset` | None | Provisional `quest2`, `quest3`, `quest3s`, `index`, `high-resolution` graphics/eye-scale bundle. Explicit quality/scale wins; resulting settings remembered. VR only. | `./Play-KF2VR.cmd -Vr -HeadsetPreset quest2` |
 | `-VrQuality` | Saved; initially `performance` | `quality`, `balanced`, `performance`. Session preset, separate from eye scale. VR only. | `./Play-KF2VR.cmd -VrQuality performance` |
-| `-ThreadedRender` | Saved; initially Off | On/Off. Experimental, VR only. Runs without `-onethread`: UE3's render thread draws one frame while the game ticks the next. The portal gun's see-through view works only one-threaded (Off); with On its portals keep their flat colour fill. A checkbox on the Headset page of both launcher windows. | `./Play-KF2VR.cmd -Vr -ThreadedRender On` |
+| `-ThreadedRender` | Saved; initially Off | On/Off. Experimental, VR only. Runs without `-onethread`: UE3's render thread draws one frame while the game ticks the next. The portal gun's see-through view works only one-threaded (Off); with On its portals keep their flat colour fill. A checkbox in Solo/Host > Headset, and on the advanced development window's Headset page. | `./Play-KF2VR.cmd -Vr -ThreadedRender On` |
 | `-SinglePass` | Saved; initially On for Steam VR | On/Off. Experimental Steam stereo, shared by Solo/Host/Join; Epic uses Off and rejects explicit On. Combined target width is capped at 8192 pixels. | `./Play-KF2VR.cmd -Solo -Vr -SinglePass Off` |
 | `-Dlss` | Saved; initially `off` | `off`, `dlaa`, `quality`, `balanced`, `performance`, `ultraperformance`. VR only; non-Off needs a DLSS-enabled package and compatible NVIDIA runtime. | `./Play-KF2VR.cmd -Solo -Vr -Dlss quality` |
 | `-DlssSharpness` | Saved; initially 0 | Integer 0-100, VR only. Zero disables sharpening. | `./Play-KF2VR.cmd -Solo -Vr -Dlss quality -DlssSharpness 0` |

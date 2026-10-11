@@ -39,8 +39,9 @@ start OFF and follow the host. Saved preferences override starting defaults.
 - Hold that hand's Y/B for 250 ms, then release: its wheel stays open. Point or
   move the same controller to highlight a sector, squeeze **and release** its
   trigger to confirm. The stick does not select an icon. Y/B cancels; a trigger
-  click with nothing highlighted also cancels. Return that stick to centre
-  before expecting movement/turning after closing the wheel.
+  click with nothing highlighted also cancels. After closing the turn-hand
+  wheel, centre its stick before turning/jumping. Smooth walking remains
+  available with the movement-hand wheel open; teleport is blocked while open.
 - Single-tap Y/B recalls that hand's previous item, or opens it if no distinct
   previous item exists. Double-tap stows an occupied hand. Double-tap an already
   empty hand to draw the syringe; alternatively choose it on the wheel. There
@@ -69,9 +70,12 @@ start OFF and follow the host. Saved preferences override starting defaults.
 - Dosh remains the stock toss action, not a hip-wallet grab: keyboard **B** on
   the default desktop layout. VR controller B still controls right-hand inventory.
 - Y/B beside that controller's temple toggles the flashlight instead of swapping.
-  The non-movement-stick click offers the welder near a closed/broken door; it
-  always equips the right hand. Trigger welds, A plus trigger unwelds; click
-  again or walk away to return the previous right-hand item.
+  The non-movement-stick click closes an open movement-hand wheel. If neither
+  wheel is open, it offers the welder near a closed/broken door; elsewhere it
+  opens the movement-hand wheel. The welder always equips the right hand.
+  Trigger welds, A plus trigger unwelds; click again near the door or walk away
+  to return the previous right-hand item. Point/move the wheel controller and
+  release its trigger to select; stick tilt does not select a sector.
 
 **Comfort, menus and practice**
 
@@ -152,7 +156,8 @@ a recall shortcut. Portal Gun, when offered in Solo: trigger places blue,
 X/A plus trigger places orange, quick X/A dismisses portals. Threaded rendering
 must be OFF for portal see-through views. Ported tools route their secondary
 intent through X/A plus trigger; their separate content guides describe special
-stock actions. Optional Breacher controls are in the bundled BREACHER guide.
+stock actions. Breacher is frozen and omitted from release 213005; leave its
+launcher checkbox OFF. Its optional controls remain documented for earlier packages.
 
 **Friends, desktop and recovery**
 
@@ -199,8 +204,8 @@ and include build ID (`app/release.json`), mode/map/weapon, headset/runtime/GPU,
 options, expected/actual result and repeat steps. Keep raw logs/configs/dumps private.
 
 Useful troubleshooting: release triggers after a menu/tracking interruption;
-re-centre a wheel's stick before moving; empty both primary/support occupancy
-before taking a chest grenade; try ordinary Button reload mode if an optional
+re-centre the turn-hand wheel's stick before turning/jumping; empty both
+primary/support occupancy before taking a chest grenade; try ordinary Button reload mode if an optional
 physical mechanism blocks play; retain normal/elite, empty/tactical and handedness
 in a reload report. Do not bypass a game/package mismatch or assume a compiled
 candidate passed headset acceptance.
@@ -268,7 +273,7 @@ slot to recall. Behavior, tuning and pending acceptance.
 | X / A, tap and release | Reload left / right item immediately on release |
 | X / A, hold | Change one persistent firing mode, or prepare that hand's temporary secondary modifier; see Weapons |
 | X / A + that hand's fresh trigger pull | Secondary fire for a secondary-action weapon. Single-shot secondaries (e.g. the double-barrel shotguns) need a fresh pull per shot; continuous ones fire while held |
-| Non-movement stick click | Door context action: next to a closed or broken door, draw the welder into the right hand; click again to put it away. Does nothing elsewhere. Suppressed while a wheel is open. There is no stick bash; bash physically |
+| Non-movement stick click | Close an open movement-hand wheel. Otherwise, with neither wheel open, draw/return the right-hand welder near a closed/broken door, or open the movement-hand wheel elsewhere. There is no stick bash; bash physically |
 | Trigger | Operate that hand's item; an open empty hand interacts. Syringe self-heal uses the upper-chest zone described above |
 | Empty hand: clenched grip + hold trigger | Charge that fist (red glow, rising haptics); punch while still holding to spend it. Replaces interact while clenched, including a partial analog squeeze |
 | Menu button, or both stick clicks held 0.6 s | Toggle and recentre the VR menu (stock UI floats inside). The chord needs both sticks centred, both triggers released and both hands tracked |
@@ -325,8 +330,9 @@ pulses lightly. Once the trigger passes 30% of its travel the cursor holds, so
 the pull cannot tip the choice; release confirms, with distinct confirmation
 haptics. A trigger held on entry cannot equip or fire. Trigger with nothing
 highlighted and Y/B cancel; page/settings navigation keeps the selector open.
-The owning stick is captured and does nothing while its wheel is open, and it
-must return to neutral before resuming movement or turning. (Stick-tilt
+The turn-hand stick is captured while its wheel is open and must return to
+neutral before turning/jumping resumes. Smooth walking stays available with the
+movement-hand wheel open; teleport is blocked while it is open. (Stick-tilt
 selection is not supported.)
 
 Single-tap Y/B waits 240 ms to distinguish a double tap without performing an

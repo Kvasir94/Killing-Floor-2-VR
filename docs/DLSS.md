@@ -14,7 +14,11 @@ NVIDIA DLSS/NGX is separately licensed by NVIDIA, not covered by this project's 
 
 CAS sharpening adapts AMD FidelityFX CAS, pinned provenance `GPUOpen-Effects/FidelityFX-CAS` commit `9fabcc9a2c45f958aff55ddfda337e74ef894b7f`, with its full notice in `third_party/AMD-CAS-LICENSE.txt` and the package notices folder. Fork implementation credit: optimumbox, original commit `e080bc0e1e1a56e3de61498634f40ca2c29692ed`, with Claude Opus 5.5 co-author attribution.
 
-Public distribution is a separate step: NVIDIA licence obligations include attribution/trademark placement and pre-commercial-release notification. Resolve those obligations before publication; including a notice alone does not complete them. This experimental private integration does not authorize a public release.
+Release `v0.2.0-alpha.20261011` includes the DLSS-enabled 213005 payload, with the
+full NVIDIA licence and attribution in its notices. The maintainer confirmed
+approval and mark-placement coverage for that release. Future distributors must
+review NVIDIA's licence obligations for their own distribution; including a
+notice alone does not complete them.
 
 Single-pass stereo is an experimental Steam option from optimumbox's
 `0e972979` contribution, initially On for Steam VR (saved Off choices remain).

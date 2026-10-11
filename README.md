@@ -8,13 +8,20 @@ KF2-VR is unaffiliated with Tripwire Interactive.
 
 ## Play the mod
 
-Public playable alpha downloads are on [GitHub Releases](https://github.com/Kvasir94/Killing-Floor-2-VR/releases).
-Choose the complete **KF2VR-Multiplayer-*.zip** attached to the release you
-want to play. The separate **KF2VR-Source-*.zip** and GitHub's automatic
-**Source code** archives are for development. See that release's notes and
-`app/release.json` for checksums, supported stores/builds and limitations.
-The older October 5 alpha is Steam-only; Steam/Epic support requires a newer
-release explicitly listing both stores. Existing release ZIPs and tags stay intact.
+The current playable prerelease is [v0.2.0-alpha.20261011 (build 213005)](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/tag/v0.2.0-alpha.20261011).
+
+| Download | Use |
+| --- | --- |
+| **[KF2VR-Multiplayer-v0.2.0-alpha.20261011-213005.zip](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/download/v0.2.0-alpha.20261011/KF2VR-Multiplayer-v0.2.0-alpha.20261011-213005.zip)** | Complete Windows player launcher: Steam Solo/Host/Join and experimental Epic Solo VR |
+| **…-LinuxKit.zip** | Experimental Steam/Proton desktop joining; [Linux setup](docs/LINUX-DESKTOP.md) |
+| **…-Epic-Desktop-Pack.zip** | Experimental manual Epic desktop joining; [Epic desktop setup](docs/EPIC-DESKTOP.md) |
+| **KF2VR-Source-v0.2.0-alpha.20261011.zip** | Matching source for development; requires local game/SDK inputs to build |
+| **SHA256SUMS.txt** | Archive checksums |
+
+GitHub's automatic **Source code** archives are also development downloads.
+Use the release notes and `app/release.json` for exact compatibility and build
+identity. Keep your previous release folder for rollback; extract updates into
+a fresh folder. Existing release ZIPs and tags stay intact.
 
 Extract the whole playable ZIP into a fresh folder, leave `app` intact,
 connect your headset and activate its OpenXR runtime, then open
@@ -64,8 +71,10 @@ rendering and launcher choices. His reload, multiplayer, interaction, camera,
 rendering, launcher and desktop-companion contributions are credited in
 [CREDITS](CREDITS.md). The combined source is compiled and checked
 with the offline CPU/launcher gate; headset and real online acceptance remain
-pending. This source update does not publish a new playable ZIP or establish
-runtime parity. Existing release notes and manifests govern each download.
+pending. Release `v0.2.0-alpha.20261011` includes this integration in the
+unchanged compiled 213005 payload, with matching source and full credits/notices.
+Its tag pins the release source; main can contain later documentation updates.
+Compilation and offline checks do not establish runtime parity.
 
 The source includes one-hand and paired hip reloads, sender-timed remote poses,
 walking with the weapon wheel open, fixed boss-introduction views, level
@@ -88,7 +97,7 @@ The source is for review and development. Building a playable candidate requires
 your own supported KF2/SDK and Portal 2 installations, Windows build tools and
 Blender. The source build extracts needed game inputs locally and regenerates
 its glove/watch, reload props and weapon art; generated outputs stay excluded.
-This route does not recreate the first alpha's exact hand-art revision or ZIP bytes.
+This route does not recreate the released hand-art revision or ZIP bytes.
 **The launcher can be audited and built independently**, without KF2, the SDK
 or authored game art; see [launcher source and build](docs/BUILDING.md#audit-and-build-the-launcher).
 See [BUILDING](docs/BUILDING.md) for native/full-mod prerequisites,

@@ -105,6 +105,20 @@ need your own Portal 2 installation: the current VR script compile references
 Portal assets even when Portal gameplay is OFF. Source/Engineer assets belong
 to separate optional content builders and are not required by this default route.
 
+Install NumPy and Pillow in the external Python used by `-Python`; the decal
+generator runs outside Blender. These dependencies are for asset generation;
+the portable player launcher already bundles its runtime and needs no pip setup.
+
+```powershell
+python -m pip install numpy Pillow
+```
+
+The SDK hand-asset sub-builder currently locates Blender at
+`C:\Program Files\Blender Foundation\Blender 5.2\blender.exe` for its watch,
+weapon and icon generation. Install there for the full recipe: passing a
+different `-Blender` path affects the initial generators only. Run the build
+from a Visual Studio x64 developer shell so the compiler/Windows SDK are available.
+
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/build-from-source.ps1 `
   -GameRoot 'C:\Games\KillingFloor2' `
@@ -146,8 +160,8 @@ assets. Retain their upstream licences locally.
 The procedural hand/watch route uses authored revision 59 from public generator
 source. It creates an authoring scene locally, skins it to the locally extracted
 KF2 rig, then bakes and exports it. The first public alpha used a later
-hand-art revision. A source-built candidate therefore differs in art and build
-metadata; this recipe does not promise a byte-identical recreation of that ZIP.
+hand-art revision, as does 213005. A source-built candidate therefore differs
+in art and build metadata; this recipe does not promise a byte-identical recreation of that ZIP.
 Check a source-built candidate in a headset before relying on its gameplay.
 
 For subsequent development builds with prepared inputs and the default installation,

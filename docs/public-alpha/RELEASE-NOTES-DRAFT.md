@@ -13,10 +13,11 @@ Desktop and cross-store online play are unavailable. Its official launcher
 handles authentication through a manual session Launch Options paste.
 Extract each update into a fresh folder and keep the previous ZIP for rollback.
 
-This source update integrates OptimumBox's `v0.5.0-alpha.20261011` donor
-baseline with local retained choices. It has compiled and passed offline checks;
-headset and real online acceptance are pending. It does not publish a new
-playable release; use each download's own manifest and release notes.
+The current public prerelease is [v0.2.0-alpha.20261011, build 213005](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/tag/v0.2.0-alpha.20261011).
+It integrates OptimumBox's `v0.5.0-alpha.20261011` donor baseline with retained
+local choices and includes matching source and full [credits](../../CREDITS.md).
+The compiled candidate passed offline checks; headset and real online acceptance
+remain pending. The linked release notes describe its exact changes and identity.
 
 ## Included behavior and defaults
 

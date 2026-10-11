@@ -7,9 +7,12 @@ online acceptance. This workflow supports desktop joining; use Windows for VR.
 1. Install KF2 in Steam. In **Properties > Compatibility**, select a Steam Play
    compatibility tool, such as Proton. Start ordinary KF2 once, reach the menu,
    then quit.
-2. Extract the full KF2-VR ZIP supplied by your host to a fresh folder accessible
-   to Steam. Keep the whole `app` directory together. No additional installation
-   script, system Python, or package copying is required.
+2. If you downloaded LinuxKit, extract the kit, then extract its enclosed full
+   playable ZIP into a fresh folder accessible to Steam. If your host supplied
+   the full playable ZIP directly, extract that instead. Keep the whole `app`
+   directory together. Use its `app/tools/multiplayer/linux-desktop.sh`, rather
+   than the standalone helper beside the kit's nested ZIP. No additional
+   installation script, system Python, or package copying is required.
 3. In **Properties > General > Launch Options**, save your previous text, then
    enter this line, replacing both paths:
 

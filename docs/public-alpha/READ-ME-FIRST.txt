@@ -14,8 +14,8 @@ BEFORE THE FIRST TIME
 3. Playing in VR? Turn on your headset and start its PC app
    (Quest Link / Air Link, SteamVR, or Virtual Desktop) before you start.
    Select that app as the active OpenXR runtime in its settings.
-4. Everyone needs the same KF2-VR ZIP. When a new one comes out,
-   unzip it as a new folder and use that.
+4. Launcher players need the same full release; desktop companions must match
+   that release's compiled packages. Extract updates as new folders.
 5. KF2-VR is matched to the exact Steam and Epic builds in app\release.json. If your store
    updates KF2, the launcher will say your copy doesn't match until a new
    KF2-VR ZIP is out. Epic is experimental Solo VR only; see its steps below.
@@ -73,7 +73,7 @@ JOIN A FRIEND
 -------------
 Steam only in this alpha.
 1. Your friend sends you a code that starts with KF2VR1:
-2. Start KF2-VR, pick "VR headset" or "Desktop", click "Join a friend".
+2. Start KF2-VR, pick "VR headset" or "Desktop - no headset", click "Join a friend".
 3. Click "Paste code", then "Join".
 4. In the lobby, pick your perk and press Ready.
 
@@ -110,7 +110,8 @@ Physical reloads: VR SETTINGS > INTERACTION > RELOAD MODE (Button by default).
 SOMETHING WENT WRONG?
 ---------------------
 Click "Save logs for a bug report" in the KF2-VR window. It makes a ZIP of
-your recent logs, copies the ZIP, and opens the folder it's in. Report copies
+your recent logs, opens its folder, and copies the file to the clipboard when
+available. Report copies
 replace personal paths, known usernames/player names, account IDs and network
 addresses; passwords, recognized tokens and join codes are removed before zipping.
 Original logs stay on your PC. Configs and crash dumps are not included.
@@ -141,6 +142,8 @@ map, weapon, the last action before the problem, and whether it happens again.
 Keep join codes and passwords private. Do not attach raw session folders,
 configs or crash dumps publicly; they have not been anonymized.
 
-Each player needs their own Killing Floor 2 copy. Multiplayer is Steam-only in this alpha.
+Each player needs their own Killing Floor 2 copy. Supported launcher multiplayer
+is Steam-only. Separate Linux/Proton and manual Epic desktop companions are
+experimental and await real online acceptance. Their downloads include setup guides.
 This is an early alpha test build. KF2-VR is a fan project and is not
 affiliated with Tripwire Interactive.

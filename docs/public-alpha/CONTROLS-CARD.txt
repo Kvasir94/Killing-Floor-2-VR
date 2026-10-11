@@ -18,7 +18,8 @@ WEAPONS AND HANDS
   Y / B hold 0.25 s        Open that hand's wheel, then release the button.
   Point/move controller   Highlight a sector; squeeze AND RELEASE trigger to confirm.
                           Stick tilt does not select. Y/B or an unhighlighted-centre
-                          trigger click cancels. Centre the stick after closing.
+                          trigger click cancels. After closing the turn-hand wheel,
+                          centre its stick before turning/jumping.
   Grip at support contact Hold two-hand support by default; release grip to detach.
                           Acquired firearm support stays held across distance drift;
                           valid tracking is required.
@@ -53,8 +54,11 @@ MOVE AND MENU (DEFAULT MOVEMENT HAND LEFT)
                           centre or crouch ends it. Fire/reload/draw can pause sprint.
   Right stick             Left/right: 30-degree snap turn. Outer rim up: jump, or stand
                           from stick crouch first. Outer rim down: crouch toggle.
-  Right-stick click       Near closed/broken door: draw/return welder in RIGHT hand.
+  Right-stick click       Close the movement-hand wheel if open. Otherwise near a
+                          closed/broken door: draw/return welder in RIGHT hand;
+                          elsewhere: open the movement-hand wheel.
                           Trigger welds; A+trigger unwelds. No stick bash.
+  Movement-hand wheel     Smooth walking stays available while open; teleport is blocked.
   Physical crouch         Uses captured height; seated/button crouch is separately set.
   Teleport mode           Movement-stick deflection aims arc; RETURN TO CENTRE commits
                           a valid destination. Movement-stick CLICK cancels.
@@ -83,7 +87,8 @@ SETTINGS AND SPECIAL ITEMS
   RAVEN-7: hold trigger, swing, release to throw. Fresh airborne hold suspends; release
   recalls. Resting axe: fresh press recalls. Fresh grip is a recall shortcut.
   Optional Solo Portal Gun: trigger blue, X/A+trigger orange, quick X/A dismisses portals.
-  Portal see-through needs threaded rendering OFF. Optional Breacher: app\docs\BREACHER.md.
+  Portal see-through needs threaded rendering OFF. Breacher is frozen and omitted
+  from this release; leave its launcher checkbox OFF.
 
 Desktop uses stock KF2 bindings; full guide lists default keyboard controls.
 Keep the launcher open for cleanup. After a crash use Fix a stuck session.
