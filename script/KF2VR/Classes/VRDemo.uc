@@ -123,9 +123,6 @@ simulated event Tick(float DeltaTime)
     super.Tick(DeltaTime);
     if (WorldInfo.NetMode == NM_Standalone && DemoController != None && DemoController.IsLocalController())
     {
-        // Local preference only: grabbing still restricts movement and does
-        // damage, but never turns the player's view toward the clot.
-        DemoController.bSkipNonCriticalForceLookAt = true;
         ApplyRenderDiagnostic(DemoController);
         if (!bNormalGame && !bPracticeStartupAttempted
             && HandsBridge != None && !HandsBridge.bDeleteMe && HandsBridge.HandInventory != None
@@ -187,7 +184,6 @@ function TryStartDemo()
         }
     }
     PC = DemoController;
-    if (PC != None) PC.bSkipNonCriticalForceLookAt = true;
     ApplyRenderDiagnostic(PC);
     if (bNormalGame)
     {

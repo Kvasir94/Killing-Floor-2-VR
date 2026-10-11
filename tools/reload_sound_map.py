@@ -22,6 +22,7 @@ import os
 import re
 import struct
 import sys
+from functools import cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,11 +123,20 @@ def read_clips(pkg, animset):
     return clips
 
 
+@cache
+def exported_files(folder, ext):
+    # One immutable discovery snapshot per invocation. The full build tree
+    # contains retained releases and runtimes; scanning it for every gun is
+    # much more expensive than sampling the clips themselves.
+    return tuple(Path(p) for p in glob.glob(
+        str(ROOT / 'build' / '**' / folder / ('*' + ext)), recursive=True))
+
+
 def export_file(folder, name, ext):
     want = name.lower() + ext
-    for p in glob.glob(str(ROOT / 'build' / '**' / folder / ('*' + ext)), recursive=True):
-        if Path(p).name.lower() == want:
-            return Path(p)
+    for p in exported_files(folder, ext):
+        if p.name.lower() == want:
+            return p
     return None
 
 
@@ -190,9 +200,9 @@ def gun_inputs(cls, mesh):
     psk = export_file('SkeletalMesh3', mesh, '.psk')
     # An AnimSet name is not unique (the 93R ships Wep_1stP_9MM_Anim in its own
     # package): match the exporting package folder too.
-    psa = next((Path(f) for f in glob.glob(str(ROOT / 'build' / '**' / 'AnimSet' / '*.psa'), recursive=True)
-                if Path(f).name.lower() == set_name.lower() + '.psa'
-                and Path(f).parent.parent.name.lower() == pkg_name.lower()), None)
+    psa = next((f for f in exported_files('AnimSet', '.psa')
+                if f.name.lower() == set_name.lower() + '.psa'
+                and f.parent.parent.name.lower() == pkg_name.lower()), None)
     return Package(pkg), set_name, psk, psa
 
 
@@ -347,7 +357,9 @@ def sound_rows(classes=()):
             events = motion_events(motion, clip, data['length'], rack, kinds.get(cls, 0),
                                    magazine=magazines.get(cls))
             for t, kind, detail, props in data['notifies']:
-                if kind != 'AnimNotify_AkEvent' or not detail:
+                # Empty AkEvent notifies can still have a NotifyName (the
+                # Eviscerator's BevelGear3); that label is not a sound asset.
+                if kind != 'AnimNotify_AkEvent' or not props.get('AkEvent'):
                     continue
                 role, why = classify(detail.split('.')[-1], t, events)
                 rows.append((cls, clip, detail, t, role, why, events))
@@ -357,6 +369,22 @@ def sound_rows(classes=()):
 # Sounds whose motion evidence is indirect, decided once by reading the clip
 # (timeline in --classify); the reason is the clip, not the name.
 OVERRIDES = {
+    # These insertable loads have no eject/rack event. Cable cocking, rail
+    # handling after the load, and the saw's feed switch keep stock timing.
+    ('KFWeap_Bow_Crossbow', 'Play_Crossbow_Bolt_Load'): 3,
+    ('KFWeap_Bow_Crossbow', 'Play_Crossbow_Cock_Forward'): 8,
+    ('KFWeap_Bow_Crossbow', 'Play_Crossbow_Cock_Back'): 8,
+    ('KFWeap_HRG_Crossboom', 'Play_WEP_HRG_Crossboom_Bolt_Load'): 3,
+    ('KFWeap_HRG_Crossboom', 'Play_WEP_HRG_Crossboom_Cock_Forward'): 8,
+    ('KFWeap_HRG_Crossboom', 'Play_WEP_HRG_Crossboom_Cock_Back'): 8,
+    ('KFWeap_Rifle_RailGun', 'Play_Railgun_Reload_Put'): 3,
+    ('KFWeap_Rifle_RailGun', 'Play_Railgun_Reload_Pull'): 8,
+    ('KFWeap_Rifle_HRGIncision', 'Play_Railgun_Reload_Put'): 3,
+    ('KFWeap_Rifle_HRGIncision', 'Play_Railgun_Reload_Pull'): 8,
+    ('KFWeap_Bow_CompoundBow', 'CompundBow_Arrow_Reload_1P'): 3,
+    ('KFWeap_Eviscerator', 'Play_WEP_SA_Sawblade_MagRelease'): 1,
+    ('KFWeap_Eviscerator', 'Play_WEP_SA_Sawblade_MagOn'): 3,
+    ('KFWeap_Eviscerator', 'Play_WEP_SA_Sawblade_AmmoSwitch'): 8,
     # The flintlock's hammer cock after the cylinder seats (-1: no physical
     # role; VRReloadAudioPlan leaves it on the stock clip of a no-action gun).
     ('KFWeap_Pistol_Blunderbuss', 'Play_WEP_Blunderbuss_Handling_Reload_C'): -1,

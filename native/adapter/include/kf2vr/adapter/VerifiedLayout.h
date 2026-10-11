@@ -25,6 +25,10 @@ inline constexpr std::uintptr_t kSceneViewConstructRva = 0x8d6180;
 inline constexpr std::uintptr_t kSceneViewCopyConstructRva = 0x8ff130;
 inline constexpr std::uintptr_t kSceneViewInitializeRva = 0x8e9760;
 inline constexpr std::uintptr_t kSceneViewDestructRva = 0x8d91b0;
+// AllocateViewState: no arguments, returns new FSceneViewState (0x4a0 bytes,
+// constructor 0x8d66e0). Callers include ULocalPlayer (state at +0xcc) and
+// the scene capture components.
+inline constexpr std::uintptr_t kAllocateViewStateRva = 0x8ded90;
 
 struct NativeVector3 { float x, y, z; };
 struct NativeRotator { std::int32_t pitch, yaw, roll; };

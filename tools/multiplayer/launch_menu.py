@@ -1,7 +1,7 @@
 """Console selections and host URL shared by the normal launcher."""
 from pathlib import Path
 import breacher
-from workshop_map import MAP_NAME
+from workshop_map import MAP_NAME, cached_solo_map
 from workshop_loadout import MAPS, choose_mods, launch_options, load_preferences
 
 DIFFICULTIES = {"normal": 0, "hard": 1, "suicidal": 2, "hellonearth": 3}
@@ -18,6 +18,10 @@ def installed_solo_maps(game):
 
 def resolve_solo_map(args, maps):
     """A remembered hosted map may fall back; an explicit selection may not."""
+    if getattr(args, "map_requested", False) and (args.test_map or args.map == MAP_NAME):
+        args.test_map_path = cached_solo_map(args.cache_root)
+        args.map, args.test_map = MAP_NAME, True
+        return
     if not maps:
         raise RuntimeError("No installed client maps are available for Solo.")
     if args.map not in maps:

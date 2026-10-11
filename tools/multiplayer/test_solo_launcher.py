@@ -1,5 +1,8 @@
 """Offline Solo/Host preference and configuration contracts; no game launch."""
 import json
+import hashlib
+import contextlib
+import io
 from pathlib import Path
 import re
 import sys
@@ -13,12 +16,82 @@ import friends
 import launch_menu
 import launch_state
 import workshop_loadout as loadout
+import workshop_map
 from session import config_hashes, read_ini
 from vr_config import values
 from workshop_map import MAP_NAME
 
 
 class SoloLauncherTests(unittest.TestCase):
+    def cached_remilly_fixture(self):
+        path = self.root / "cache" / workshop_map.ITEM_ID / "0/Unpublished/BrewedPC" / (MAP_NAME + ".kfm")
+        path.parent.mkdir(parents=True)
+        content = b"\xc1\x83\x2a\x9e" + b"parser fixture" * 100
+        path.write_bytes(content)
+        return path, hashlib.sha256(content).hexdigest().upper()
+
+    def test_explicit_solo_remilly_requires_steam_and_keeps_host_features_off(self):
+        for selector in (("--test-map",), ("--map", MAP_NAME)):
+            args = self.options("--solo", "--vr", "--store", "steam", *selector)
+            self.assertTrue(args.test_map)
+            self.assertFalse(args.host)
+            self.assertEqual(([], 0, False, False),
+                             (args.mods, args.test_map_players, args.inventory_focus, args.multiplayer_grabs))
+            for store in ("auto", "epic"):
+                with self.subTest(store=store), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    friends.parse_options(["--solo", "--vr", "--store", store, *selector])
+        for extra in (("--host",), ("--test-map-players", "6"), ("--inventory-focus",), ("--replay-teammate",)):
+            with self.subTest(extra=extra), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                friends.parse_options(["--solo", "--store", "steam", "--test-map", *extra])
+
+    def test_solo_cache_validation_never_imports_or_downloads_missing_or_changed_map(self):
+        with patch.object(workshop_map.shutil, "copy2") as copy, \
+                patch.object(workshop_map.subprocess, "run") as run:
+            with self.assertRaises(RuntimeError):
+                workshop_map.cached_solo_map(self.root / "cache")
+            self.assertFalse((self.root / "cache").exists())
+            path, expected = self.cached_remilly_fixture()
+            before = path.stat().st_mtime_ns
+            with patch.object(workshop_map, "SOLO_MAP_SHA256", expected):
+                self.assertEqual(path, workshop_map.cached_solo_map(self.root / "cache"))
+                self.assertEqual(before, path.stat().st_mtime_ns)
+                path.write_bytes(path.read_bytes()[:-1] + b"X")
+                with self.assertRaisesRegex(RuntimeError, "differs"):
+                    workshop_map.cached_solo_map(self.root / "cache")
+                path.write_bytes(b"wrong header" * 100)
+                with self.assertRaisesRegex(RuntimeError, "Unreal package"):
+                    workshop_map.cached_solo_map(self.root / "cache")
+            copy.assert_not_called()
+            run.assert_not_called()
+
+    def test_solo_remilly_uses_isolated_paths_and_stock_local_game_without_auto_cheats(self):
+        self.save_profile(map="KF-Outpost")
+        path, expected = self.cached_remilly_fixture()
+        original_map = path.read_bytes()
+        user = self.root / "user"
+        user.mkdir()
+        (user / "KFEngine.ini").write_text("[Core.System]\nPaths=stock\nScriptPaths=stock\nSeekFreePCPaths=stock\nBrewedPCPaths=stock\n")
+        (user / "KFGame.ini").write_text("[Engine.AccessControl]\n")
+        before = config_hashes(user)
+        args = self.options("--solo", "--vr", "--store", "steam", "--test-map")
+        with patch.object(workshop_map, "SOLO_MAP_SHA256", expected):
+            launch_menu.resolve_solo_map(args, [])
+        self.assertEqual((MAP_NAME, True, path), (args.map, args.test_map, args.test_map_path))
+        role = friends.configure_role(self.root / "run", "driver", user, self.root / "game", args)
+        self.assertTrue(role["args"][0].startswith(MAP_NAME + "?Game=KFGameContent.KFGameInfo_Survival"))
+        self.assertIn("VRNormalGame=1", role["args"][0])
+        self.assertNotIn("-kf2vr-network", role["args"])
+        self.assertNotIn("enablecheats", " ".join(role["args"]).lower())
+        config = read_ini(Path(role["config_root"]) / "KFEngine.ini")
+        for key in ("Paths", "SeekFreePCPaths", "BrewedPCPaths"):
+            self.assertIn(f"{key}={path.parent}", config)
+            self.assertIn(f"{key}=stock", config)
+        self.assertEqual(before, config_hashes(user))
+        self.assertEqual(original_map, path.read_bytes())
+        loadout.save_preferences(args)
+        self.assertEqual("KF-Outpost", json.loads((self.profile / "launcher.json").read_text())["map"])
+        self.assertFalse((self.root / "server").exists())
+
     def test_normal_launch_does_not_restore_practice_or_request_cheats(self):
         user = self.root / "user"
         user.mkdir()
@@ -239,10 +312,15 @@ class SoloLauncherTests(unittest.TestCase):
         for name in ("server", "driver"):
             role = friends.configure_role(self.root / name, name, user, self.root / "game", args)
             engine = read_ini(Path(role["config_root"]) / "KFEngine.ini")
-            self.assertEqual(("40000", "40000"), tuple(values(engine, "Engine.Player")[key]
+            self.assertEqual(("150000", "150000"), tuple(values(engine, "Engine.Player")[key]
                              for key in ("ConfiguredInternetSpeed", "ConfiguredLanSpeed")))
             net = values(engine, "IpDrv.TcpNetDriver")
-            self.assertEqual(("40000", "40000"), (net["MaxClientRate"], net["MaxInternetClientRate"]))
+            self.assertEqual(("150000", "150000"), (net["MaxClientRate"], net["MaxInternetClientRate"]))
+            if name == "server":
+                self.assertEqual(("120", "120"), (net["NetServerMaxTickRate"], net["LanServerMaxTickRate"]))
+            else:
+                self.assertNotIn("NetServerMaxTickRate", net)
+                self.assertNotIn("LanServerMaxTickRate", net)
             self.assertEqual(2, len(re.findall(r"(?m)^DownloadManagers=", engine)))
         self.assertEqual(before, config_hashes(user))
 

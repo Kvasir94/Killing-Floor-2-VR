@@ -400,6 +400,15 @@ simulated function bool RequestNetworkGrabDamage(Pawn Victim, float Amount, vect
     return true;
 }
 
+simulated function bool RequestNetworkGrabImpact(Actor Source, name Bone, Actor Target,
+    vector Point, vector Direction, float Speed, float BaseDamage)
+{
+    if (!ZedGrabAllowed()) return false;
+    KF2VRNetPlayerController(PC).ServerGrabImpact(Source,Bone,Target,Point,Direction,Speed,BaseDamage,
+        KF2VRNetPlayerController(PC).NetChannel.PawnEpoch,KF2VRNetPlayerController(PC).NetChannel.GrabPolicyEpoch);
+    return true;
+}
+
 simulated function bool UsesNetworkDualWeapons()
 {
     local KF2VRNetPlayerController NetPC;
@@ -416,6 +425,78 @@ simulated function bool RequestNetworkHands(KFWeapon Left, KFWeapon Right)
 simulated function bool ReadNetworkHands(out KFWeapon Left, out KFWeapon Right)
 {
     return UsesNetworkDualWeapons() && KF2VRNetPlayerController(PC).NetChannel.GetDesiredHeldWeapons(Left, Right);
+}
+
+simulated function bool PairedReloadAvailable()
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    return C != None && C.NetChannel != None && C.NetChannel.PairedReloadAvailable();
+}
+
+simulated function int PairedReloadBegin(KFWeapon W, int Hand, optional bool bStock)
+{
+    if (!PairedReloadAvailable()) return 0;
+    return KF2VRNetPlayerController(PC).NetChannel.PairedReloadBegin(W, Hand, bStock);
+}
+
+simulated function bool PairedReloadRead(KFWeapon W, int BeginRequest, out int Session,
+    out byte Status, out int Ammo, out int Reserve)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    return C != None && C.NetChannel != None
+        && C.NetChannel.PairedReloadRead(W, BeginRequest, Session, Status, Ammo, Reserve);
+}
+
+simulated function bool PairedReloadCommit(KFWeapon W, int BeginRequest, int Session)
+{
+    return PairedReloadAvailable()
+        && KF2VRNetPlayerController(PC).NetChannel.PairedReloadCommit(W, BeginRequest, Session);
+}
+
+simulated function PairedReloadCancel(KFWeapon W, int BeginRequest, int Session)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    if (C != None && C.NetChannel != None) C.NetChannel.PairedReloadCancel(W, BeginRequest, Session);
+}
+
+simulated function bool VampireAvailable()
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    return C != None && C.NetChannel != None && C.NetChannel.VampireAvailable();
+}
+
+simulated function bool VampireManaged()
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    return C != None && C.NetChannel != None && C.NetChannel.VampireManaged();
+}
+
+simulated function int VampireBegin(KFWeapon W, int Hand, bool bStock)
+{
+    if (!VampireAvailable()) return 0;
+    return KF2VRNetPlayerController(PC).NetChannel.VampireBegin(W, Hand, bStock);
+}
+
+simulated function bool VampireRead(KFWeapon W, int BeginRequest, out int Session,
+    out byte Status, out int Ammo, out int Reserve)
+{
+    if (!VampireAvailable()) return false;
+    return KF2VRNetPlayerController(PC).NetChannel.VampireRead(W, BeginRequest, Session, Status, Ammo, Reserve);
+}
+
+simulated function bool VampireCommit(KFWeapon W, int BeginRequest, int Session)
+{
+    return VampireAvailable() && KF2VRNetPlayerController(PC).NetChannel.VampireCommit(W, BeginRequest, Session);
+}
+
+simulated function VampireCancel(KFWeapon W, int BeginRequest, int Session)
+{
+    if (VampireAvailable()) KF2VRNetPlayerController(PC).NetChannel.VampireCancel(W, BeginRequest, Session);
 }
 
 simulated function bool RequestNetworkGrenade(KFWeapon ProjectileOwner, class<KFProj_Grenade> GrenadeClass,
@@ -506,6 +587,10 @@ simulated function bool NetworkPracticeAvailable()
 simulated function bool NetworkPracticeActive()
 {
     return NetworkPracticeAvailable() && KF2VRNetPlayerController(PC).bVRPracticeActive;
+}
+simulated function bool NetworkSandboxActive()
+{
+    return NetworkPracticeAvailable() && KF2VRNetPlayerController(PC).bVRSandboxActive;
 }
 
 simulated function bool NetworkPracticeInvulnerable()

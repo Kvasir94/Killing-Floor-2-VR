@@ -262,7 +262,8 @@ function EmitCue(int Cue, vector At)
     At = NearField(Owner.Bridge, At);
     // The magazine release clicks under the thumb just ahead of the drop.
     if (Cue == 1) PlayCues(6, At);
-    if (PlayCues(Cue, At) && Cue == 1 && !Owner.BreakAction.bSpeedloader) OpenEffects();
+    if (PlayCues(Cue, At) && Cue == 1 && !Owner.BreakAction.bSpeedloader
+        && Owner.Gun.Class != class'KFWeap_GrenadeLauncher_HX25') OpenEffects();
     if (Cue == 3) SeatEffects();
 }
 

@@ -382,6 +382,8 @@ function ApplyChargedHit(VRHandsBridge Bridge, int Hand, KFPawn Victim, ImpactIn
     Direction = VSizeSq(Impact.RayDir) > 0.01 ? Normal(Impact.RayDir) : PunchDir;
     Direction = Normal(Direction + vect(0,0,1) * Lift);
     Momentum = Direction * Force;
+    class'VRBreacherPhysics'.static.EmpowerPunch(Bridge.Human.Controller,Victim,Impact.HitLocation,
+        Impact.HitInfo.BoneName,Damage,Momentum,HitType);
     Victim.TakeDamage(Damage, Bridge.Human.Controller, Impact.HitLocation, Momentum,
         HitType, Impact.HitInfo, Bridge.Human);
     if (Bridge.Human.Role < ROLE_Authority)

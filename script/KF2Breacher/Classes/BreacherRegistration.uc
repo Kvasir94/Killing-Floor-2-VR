@@ -5,15 +5,36 @@ class BreacherRegistration extends ReplicationInfo;
 
 
 var repnotify int TraderSlot;
+// Trader entries in slot order; TraderSlot is the first one's ItemID.
+var array< class<KFWeaponDefinition> > WeaponDefinitions;
+// Development perk level/build from the mutator; 0 keeps the ordinary level-0 perk.
+var repnotify int DevLevel;
+var repnotify int DevBuild;
 var KFGameReplicationInfo CatalogGRI;
 var KFGFxObject_TraderItems OriginalCatalog, OwnedCatalog;
 var array<KFPlayerController> RegisteredPlayers;
 var array<byte> PreviousPerkChoices;
 var bool bReportedMismatch;
+var array<BreacherArcFence> ArcTools;
 
 replication
 {
-    if (bNetDirty) TraderSlot;
+    if (bNetDirty) TraderSlot, DevLevel, DevBuild;
+}
+
+function BreacherArcFence ArcTool(KFPlayerController PC)
+{
+    local int I;
+    local BreacherArcFence Tool;
+    for (I = ArcTools.Length - 1; I >= 0; --I)
+    {
+        if (ArcTools[I] == None || ArcTools[I].bDeleteMe) ArcTools.Remove(I, 1);
+        else if (ArcTools[I].Owner == PC) return ArcTools[I];
+    }
+    if (Role != ROLE_Authority || PC == None) return None;
+    Tool = Spawn(class'BreacherArcFence', PC);
+    if (Tool != None) ArcTools.AddItem(Tool);
+    return Tool;
 }
 
 simulated event PostBeginPlay()
@@ -25,7 +46,7 @@ simulated event PostBeginPlay()
 
 simulated event ReplicatedEvent(name VarName)
 {
-    if (VarName == 'TraderSlot') RegisterContent();
+    if (VarName == 'TraderSlot' || VarName == 'DevLevel' || VarName == 'DevBuild') RegisterContent();
     else Super.ReplicatedEvent(VarName);
 }
 
@@ -33,10 +54,10 @@ simulated function bool RegisterTrader()
 {
     local array<KFGFxObject_TraderItems.STraderItem> Added;
     local KFGFxObject_TraderItems.STraderItem Entry;
-    local int Index;
+    local int Index, I;
     CatalogGRI = KFGameReplicationInfo(WorldInfo.GRI);
     if (CatalogGRI == None || CatalogGRI.TraderItems == None) return false;
-    Index = CatalogGRI.TraderItems.SaleItems.Find('WeaponDef', class'BreacherDeadboltDefinition');
+    Index = CatalogGRI.TraderItems.SaleItems.Find('WeaponDef', WeaponDefinitions[0]);
     if (Index != INDEX_NONE) return true;
     if (WorldInfo.NetMode == NM_Client)
     {
@@ -51,7 +72,7 @@ simulated function bool RegisterTrader()
             return false;
         }
     }
-    if (CatalogGRI.TraderItems.SaleItems.Length >= 255) return false;
+    if (CatalogGRI.TraderItems.SaleItems.Length + WeaponDefinitions.Length > 255) return false;
     // KFGameReplicationInfo replicates TraderItems on initial connection. A
     // runtime-created Object cannot replace that package-backed reference on
     // the server: joining clients receive None and lose both buy/sell lists.
@@ -69,11 +90,17 @@ simulated function bool RegisterTrader()
         OwnedCatalog.KnifeStats = OriginalCatalog.KnifeStats;
         OwnedCatalog.OffPerkIconPath = OriginalCatalog.OffPerkIconPath;
     }
-    Entry.WeaponDef = class'BreacherDeadboltDefinition';
-    Added.AddItem(Entry);
+    for (I = 0; I < WeaponDefinitions.Length; ++I)
+    {
+        Entry.WeaponDef = WeaponDefinitions[I];
+        Added.AddItem(Entry);
+    }
     OwnedCatalog.SetItemsInfo(Added);
-    Added[0].ItemID = OwnedCatalog.SaleItems.Length;
-    OwnedCatalog.SaleItems.AddItem(Added[0]);
+    for (I = 0; I < Added.Length; ++I)
+    {
+        Added[I].ItemID = OwnedCatalog.SaleItems.Length;
+        OwnedCatalog.SaleItems.AddItem(Added[I]);
+    }
     CatalogGRI.TraderItems = OwnedCatalog;
     if (Role == ROLE_Authority)
     {
@@ -81,7 +108,7 @@ simulated function bool RegisterTrader()
         bNetDirty = true;
         bForceNetUpdate = true;
     }
-    `log("BREACHER trader registered slot=" $ Added[0].ItemID
+    `log("BREACHER trader registered slot=" $ Added[0].ItemID @ "entries=" $ Added.Length
         @ "total=" $ OwnedCatalog.SaleItems.Length @ "netmode=" $ WorldInfo.NetMode);
     return true;
 }
@@ -111,14 +138,19 @@ simulated function RegisterContent()
                 PreviousPerkChoices.AddItem(PC.SavedPerkIndex < PC.PerkList.Length ? PC.SavedPerkIndex : 0);
             }
             Entry.PerkClass = class'BreacherPerk';
-            Entry.PerkLevel = 0;
+            Entry.PerkLevel = DevLevel;
             Entry.PrestigeLevel = 0;
             Entry.PerkArchetype = Spawn(class'BreacherPerk', PC);
             PC.PerkList.AddItem(Entry);
+            ApplyDevLevel(PC);
             if (PC.MyGFxManager != None && PC.MyGFxManager.PerksMenu != None
                 && PC.MyGFxManager.PerksMenu.SelectionContainer != None)
                 PC.MyGFxManager.PerksMenu.SelectionContainer.UpdatePerkSelection(PC.SavedPerkIndex);
         }
+        ApplyDevLevel(PC);
+        if (Role == ROLE_Authority) ArcTool(PC); // every player can detach from a field
+        if (Role == ROLE_Authority && BreacherPerk(PC.CurrentPerk) != None
+            && BreacherPerk(PC.CurrentPerk).SkillActive(9)) class'BreacherOverpressure'.static.ForPlayer(PC);
         // Keep the selected experimental perk session-local. Stock menus persist
         // their selected numeric index, which would be invalid in an OFF session.
         PlayerIndex = RegisteredPlayers.Find(PC);
@@ -134,12 +166,35 @@ simulated function RegisterContent()
     }
 }
 
+// Hold the menu entry, the archetype and the selected perk at the development
+// level on every pass, since native selection can reset a custom perk to 0.
+simulated function ApplyDevLevel(KFPlayerController PC)
+{
+    local int Index;
+    local BreacherPerk Perk;
+    local bool bLevelChanged;
+    if (DevLevel <= 0) return;
+    Index = PC.PerkList.Find('PerkClass', class'BreacherPerk');
+    if (Index == INDEX_NONE) return;
+    bLevelChanged = PC.PerkList[Index].PerkLevel != DevLevel;
+    PC.PerkList[Index].PerkLevel = DevLevel;
+    Perk = BreacherPerk(PC.PerkList[Index].PerkArchetype);
+    if (Perk != None && (Perk.GetLevel() != DevLevel || Perk.DevLevel != DevLevel
+        || Perk.DevBuild != DevBuild || Perk.GetSavedBuild() == 0)) Perk.ApplyDevLevel(DevLevel, DevBuild);
+    Perk = BreacherPerk(PC.CurrentPerk);
+    if (Perk != None && (Perk.GetLevel() != DevLevel || Perk.DevLevel != DevLevel
+        || Perk.DevBuild != DevBuild || Perk.GetSavedBuild() == 0)) Perk.ApplyDevLevel(DevLevel, DevBuild);
+    if (bLevelChanged) PC.UpdatePerkLevelMenu(class'BreacherPerk');
+}
+
 simulated event Destroyed()
 {
     local KFPlayerController PC;
     local KFAutoPurchaseHelper Purchase;
     local int I, Index;
     ClearTimer('RegisterContent');
+    for (I = 0; I < ArcTools.Length; ++I)
+        if (ArcTools[I] != None) ArcTools[I].Destroy();
     for (I = 0; I < RegisteredPlayers.Length; ++I)
     {
         PC = RegisteredPlayers[I];
@@ -160,10 +215,10 @@ simulated event Destroyed()
     // the shared archetype cannot retain Breacher on a later OFF map.
     if (OwnedCatalog != None && OwnedCatalog == OriginalCatalog)
     {
-        Index = OwnedCatalog.SaleItems.Find('WeaponDef', class'BreacherDeadboltDefinition');
+        Index = OwnedCatalog.SaleItems.Find('WeaponDef', WeaponDefinitions[0]);
         if (Index != INDEX_NONE)
         {
-            OwnedCatalog.SaleItems.Remove(Index, 1);
+            OwnedCatalog.SaleItems.Remove(Index, WeaponDefinitions.Length);
             for (I = Index; I < OwnedCatalog.SaleItems.Length; ++I)
                 OwnedCatalog.SaleItems[I].ItemID = I;
         }
@@ -173,6 +228,8 @@ simulated event Destroyed()
 
 defaultproperties
 {
+    WeaponDefinitions(0)=class'BreacherDeadboltDefinition'
+    WeaponDefinitions(1)=class'BreacherRipcordDefinition'
     TraderSlot=-1
     bAlwaysRelevant=true
     bOnlyRelevantToOwner=false

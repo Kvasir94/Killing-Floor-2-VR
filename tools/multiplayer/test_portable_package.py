@@ -4,13 +4,41 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
-from package import check_portable_launchers, copy_launcher_tools, select_candidate, frozen_inputs, copy_frozen_runtime_extras, player_document_root, release_audience
+from package import check_portable_launchers, copy_launcher_tools, select_candidate, frozen_inputs, copy_frozen_runtime_extras, player_document_root, release_audience, write_desktop_companions
 from release_state import digest
 
 
 class PortablePackageTests(unittest.TestCase):
+    def test_desktop_companions_use_exact_full_release_and_packages(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "candidate"
+            for name in ("Packages/KF2VR.u", "Packages/KF2VRNet.u", "Packages/KF2VRHands.upk",
+                         "docs/EPIC-DESKTOP.md", "docs/LINUX-DESKTOP.md", "tools/multiplayer/linux-desktop.sh"):
+                path = output / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(name.encode())
+            manifest = {"build_id": "current-build", "git_head": "current-source", "protocol_version": 2, "package_revision": 19}
+            (output / "release.json").write_text(json.dumps(manifest))
+            full_zip = Path(str(output) + ".zip")
+            full_zip.write_bytes(b"matching full release bytes")
+            linux_zip, epic_zip = write_desktop_companions(output, full_zip, manifest)
+            with zipfile.ZipFile(linux_zip) as archive:
+                self.assertEqual(full_zip.read_bytes(), archive.read(full_zip.name))
+                self.assertEqual((output / "docs/LINUX-DESKTOP.md").read_bytes(), archive.read("LINUX-DESKTOP.md"))
+            with zipfile.ZipFile(epic_zip) as archive:
+                record = json.loads(archive.read("companion.json"))
+                self.assertEqual("current-build", record["build_id"])
+                self.assertEqual(19, record["package_revision"])
+                self.assertEqual(digest(output / "release.json"), record["release_manifest_sha256"])
+                self.assertEqual(set(record["files_sha256"]) | {"companion.json"}, set(archive.namelist()))
+                import hashlib
+                for name, expected in record["files_sha256"].items():
+                    self.assertEqual(expected, hashlib.sha256(archive.read(name)).hexdigest().upper())
+                self.assertNotIn("KF2VR/KF2VRNetClient.u", archive.namelist())
+
     def test_public_documents_and_audience_use_reviewed_overlays_without_changing_private_docs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

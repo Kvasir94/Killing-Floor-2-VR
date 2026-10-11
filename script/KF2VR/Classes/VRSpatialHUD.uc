@@ -46,6 +46,7 @@ var bool bWatchText;
 var float WatchAspect;
 var Font WatchFont, WatchDigitFont;
 var Texture2D WatchGlass, WatchGlow;
+var Texture2D ReadoutSmoke;
 var float LastPlacement, LastValues, SessionRevealUntil;
 // The pouch counter lingers briefly after the look or reach ends.
 var float PouchVisibleUntil;
@@ -95,6 +96,7 @@ var bool bDamagePopupAuthorityFeed;
 var color Ink, Muted, Accent, Amber, Red, Track, Backing;
 // Money reads in dosh green on every readout.
 var color DoshGreen, ReadoutBacking;
+var color ReadoutInk, ReadoutMuted, ReadoutRed;
 // Watch phosphor palette: warm lettering and brass bezels to sit in the
 // gunmetal/ember case; teal and blue keep health and armor apart at a glance.
 var color WatchInk, WatchMuted, WatchTrack, WatchHealth, WatchArmor, Brass, Plate;
@@ -457,16 +459,35 @@ simulated function PlaceWeaponReadout(int HandIndex)
     bVisible = GetWeaponReadoutTransform(HandIndex, Position, Orientation);
     // A concealed/no-ammo item must not bring back the desktop backpack.
     Panels[HandIndex + 1].PlacePanel(Position, Orientation,
-        vect(12,4.8,0) * FClamp(Bridge.WeaponAmmoReadoutScale, 0.5, 2.0), bVisible);
+        vect(15,6,0) * FClamp(Bridge.WeaponAmmoReadoutScale, 0.5, 2.0), bVisible);
 }
 
-// Reserve ammo lives on the ammo pouch, one count per held gun in a single
-// row, left hand first (AS2 shows its look-down pool counts as one row).
-// Stock dualies are one weapon with one shared reserve, so they count once.
+simulated function VRWeaponRuntime PouchRuntime(int HandIndex)
+{
+    local VRInteractiveReload R;
+    if (Bridge == None || Bridge.HandInventory == None || Bridge.HandInventory.Input == None) return None;
+    R = Bridge.HandInventory.Input.Reloads;
+    if (R == None || R.BeltShells == None) return None;
+    return R.BeltShells.RuntimeForHand(HandIndex);
+}
+
+// One entry per actual gun hand. A stock aggregate has one actor and cannot
+// appear twice; split paired members read their one shared reserve accessor.
 simulated function bool PouchEntry(int HandIndex)
 {
+    local VRWeaponRuntime R;
     if (Ammo[HandIndex].Weapon == None || !Ammo[HandIndex].bUsesAmmo) return false;
-    return HandIndex == 0 || Ammo[0].Weapon != Ammo[1].Weapon;
+    R = PouchRuntime(HandIndex);
+    return R != None && R.PrimaryHand == HandIndex && R.Item == Ammo[HandIndex].Weapon;
+}
+
+simulated function bool SharedPouchReserve()
+{
+    local VRWeaponPair Pair;
+    if (!PouchEntry(0) || !PouchEntry(1)) return false;
+    Pair = class'VRWeaponPair'.static.ForMember(Ammo[0].Weapon);
+    return Pair != None && Pair.PairState == 2
+        && class'VRWeaponPair'.static.ForMember(Ammo[1].Weapon) == Pair;
 }
 
 // Read the reload system's existing hover decision, including hand occupancy
@@ -481,38 +502,53 @@ simulated function bool PouchHovered(int HandIndex)
 
 simulated function string PouchKey()
 {
-    return string(Ammo[0].Weapon) @ PouchEntry(0) @ Ammo[0].Reserve @ Ammo[0].Capacity @ string(Ammo[0].WeaponImage) @ PouchHovered(0)
-        @ string(Ammo[1].Weapon) @ PouchEntry(1) @ Ammo[1].Reserve @ Ammo[1].Capacity @ string(Ammo[1].WeaponImage) @ PouchHovered(1);
+    local VRInteractiveReload R;
+    local string Key;
+    local int Hand;
+    if (Bridge.HandInventory == None || Bridge.HandInventory.Input == None) return "";
+    R = Bridge.HandInventory.Input.Reloads;
+    if (R == None || R.BeltShells == None) return "";
+    for (Hand = 0; Hand < 2; ++Hand)
+        Key @= string(Ammo[Hand].Weapon) @ PouchEntry(Hand) @ Ammo[Hand].WeaponLabel
+            @ Ammo[Hand].Reserve @ Ammo[Hand].Capacity @ string(Ammo[Hand].WeaponImage)
+            @ PouchHovered(Hand) @ R.BeltShells.UsesHip(Hand) @ string(R.BeltShells.HipSession(Hand));
+    return Key @ SharedPouchReserve();
 }
 
 // Shown while the player looks down at the pouch or brings a hand to it.
 simulated function PlacePouchCounter()
 {
+    local VRInteractiveReload R;
     local vector Pouch, Position;
     local vector HeadForward, HeadRight, HeadUp, PanelNormal, PanelRight, PanelUp;
-    local int H;
+    local int H, Count, GunHand;
     local bool bNear;
+    Count = (PouchEntry(0) ? 1 : 0) + (PouchEntry(1) ? 1 : 0);
     if (!Bridge.bWeaponAmmoReadouts || Bridge.NativeHeadTracked == 0
-        || (!PouchEntry(0) && !PouchEntry(1)))
+        || Count == 0)
     {
         PouchVisibleUntil = 0;
-        Panels[5].PlacePanel(vect(0,0,0), rot(0,0,0), vect(10,4,0), false);
+        Panels[5].PlacePanel(vect(0,0,0), rot(0,0,0), vect(16,6.4,0), false);
         return;
     }
-    Pouch = Bridge.AmmoPouchPosition(1 - Clamp(Bridge.PreferredWeaponHand, 0, 1),
-        class'VRInteractiveReload'.default.BeltOffset);
+    R = Bridge.HandInventory.Input.Reloads;
+    for (GunHand = 0; GunHand < 2; ++GunHand)
+        if (PouchEntry(GunHand)) Pouch += R.BeltShells.PositionForHand(GunHand);
+    Pouch /= Count;
     // Use the same fresh, calibrated world headset frame as the card's roll.
     // The stock camera can lag or clamp controller pitch; stereo retains the
     // residual HMD pose, so its gaze is not necessarily GetPlayerViewPoint's.
     GetAxes(Bridge.NativeHeadRotation, HeadForward, HeadRight, HeadUp);
-    // Keep the card forward of the pouch, above its props. Pulling it toward
-    // the eyes moved it behind the neck when looking straight down.
-    Position = Pouch + vector(Bridge.BodyYaw()) * 8 + vect(0,0,9);
+    // AS2's resource label sits about 7.75 cm above the visible magazine.
+    Position = Pouch + vect(0,0,7.75);
     // Within about 35 degrees of the visible card, or a palm at the pouch.
     // Looking at the readout must reveal it even before reaching for ammo.
     bNear = (HeadForward dot Normal(Position - Bridge.HeadPosition)) > 0.82;
-    for (H = 0; H < 2 && !bNear; ++H)
-        bNear = (Bridge.NativeValidMask & (1 << H)) != 0 && VSize(Bridge.PalmPosition(H) - Pouch) < 22;
+    for (GunHand = 0; GunHand < 2 && !bNear; ++GunHand)
+        if (PouchEntry(GunHand))
+            for (H = 0; H < 2 && !bNear; ++H)
+                bNear = (Bridge.NativeValidMask & (1 << H)) != 0
+                    && VSize(Bridge.PalmPosition(H) - R.BeltShells.PositionForHand(GunHand)) < 22;
     if (bNear) PouchVisibleUntil = WorldInfo.RealTimeSeconds + 0.4;
     // Cube's front is -X, text runs across +Y and up +Z. A direction-only
     // rotator fixes roll against world up, which becomes ambiguous looking
@@ -522,8 +558,9 @@ simulated function PlacePouchCounter()
     if (VSizeSq(PanelRight) < 0.0001) PanelRight = HeadUp cross PanelNormal;
     PanelRight = Normal(PanelRight);
     PanelUp = Normal(PanelNormal cross PanelRight);
+    // Keep icon and digit size stable when the other gun is stowed.
     Panels[5].PlacePanel(Position, OrthoRotation(PanelNormal, PanelRight, PanelUp),
-        vect(10,4,0) * FClamp(Bridge.WeaponAmmoReadoutScale, 0.5, 2.0), WorldInfo.RealTimeSeconds < PouchVisibleUntil);
+        vect(16,6.4,0) * FClamp(Bridge.WeaponAmmoReadoutScale, 0.5, 2.0), WorldInfo.RealTimeSeconds < PouchVisibleUntil);
 }
 
 // Stock KF2 draws teammate name, health, armor and perk with Canvas at a
@@ -562,12 +599,13 @@ simulated function PlaceTeammateTags()
             if (Used >= TeammateSlots) break;
             if (P == PC.Pawn || !P.IsAliveAndWell() || P.Mesh.SkeletalMesh == None || !P.Mesh.bAnimTreeInitialised
                 || KFPlayerReplicationInfo(P.PlayerReplicationInfo) == None
-                || WorldInfo.TimeSeconds - P.Mesh.LastRenderTime >= 0.2) continue;
+                || WorldInfo.TimeSeconds - P.Mesh.LastRenderTime >= 0.4) continue;
             At = TeammateTagLocation(P);
             if ((Normal(At - ViewLocation) dot vector(ViewRotation)) <= 0) continue;
             if (Teammates[Used] != P)
             {
                 Teammates[Used] = P;
+                ContentKey[TeammateFirst + Used] = "";
                 Panels[TeammateFirst + Used].bDrawn = false;
             }
             Dirty(TeammateFirst + Used, TeammateKey(P));
@@ -615,6 +653,8 @@ simulated function UpdateDisplay()
         Panels[0].PlacePanel(Bridge.HudStatusPosition, Bridge.HudStatusRotation, Bridge.HudStatusSize, (Bridge.NativeHudMask & 1) != 0);
     PlaceWeaponReadout(0);
     PlaceWeaponReadout(1);
+    // Hip/free-hand session mapping can change without an ownership change.
+    Dirty(5, PouchKey());
     PlacePouchCounter();
     PlaceTeammateTags();
     // With the watch, wave, zeds left, boss health, trader time/direction and
@@ -988,6 +1028,8 @@ simulated function float ChargeFraction(KFWeapon W)
 simulated function bool LoadStockArt()
 {
     local int I;
+    // Share the radial selector's soft smoke mask without requiring new art.
+    ReadoutSmoke = Texture2D(DynamicLoadObject("KF2VRHands.VRHorzineWheelSpray", class'Texture2D', true));
     StockArt[HA_Frame] = Texture2D(DynamicLoadObject("UI_Objective_Tex.UI_Obj_Background_Short", class'Texture2D', true));
     StockArt[HA_Health] = Texture2D(DynamicLoadObject("UI_Objective_Tex.UI_Obj_Healing_Loc", class'Texture2D', true));
     StockArt[HA_Armor] = Texture2D(DynamicLoadObject("UI_HUD.InGameHUD_SWF_I22C", class'Texture2D', true));
@@ -1024,7 +1066,7 @@ simulated function CacheArt(string Path, out string PreviousPath, out Texture2D 
 // Labels truncate rather than shrink, preserving their angular size. Numbers
 // pass bFit: a five-digit dosh total must shrink, never lose digits.
 simulated function Text(Canvas C, string Value, float X, float Y, float Width, float Height, color Tint,
-    optional bool bFit, optional bool bRight, optional bool bDigits)
+    optional bool bFit, optional bool bRight, optional bool bDigits, optional bool bSinglePass)
 {
     local float XL, YL, Scale, XScale, Fit;
     local string ShortValue;
@@ -1048,9 +1090,12 @@ simulated function Text(Canvas C, string Value, float X, float Y, float Width, f
         Value = ShortValue $ "...";
         C.TextSize(Value, XL, YL);
     }
-    C.SetPos((bRight ? X + Width - XL * XScale : X) + 2, Y + 2);
-    C.DrawColor = MakeColor(0,0,0,Tint.A);
-    C.DrawText(Value, false, XScale, Scale);
+    if (!bSinglePass)
+    {
+        C.SetPos((bRight ? X + Width - XL * XScale : X) + 2, Y + 2);
+        C.DrawColor = MakeColor(0,0,0,Tint.A);
+        C.DrawText(Value, false, XScale, Scale);
+    }
     X = bRight ? X + Width - XL * XScale : X;
     C.DrawColor = Tint;
     C.SetPos(X, Y);
@@ -1497,77 +1542,125 @@ simulated function RenderStatusPanel(Canvas C)
     RenderWatchFace(C);
 }
 
-simulated function RenderWeaponReadout(Canvas C, HUDWeaponReadout A)
+simulated function ReadoutBackground(Canvas C, float X, float Y, float Width, float Height, optional float Opacity = 1.0)
 {
     local color Tint;
+    Opacity = FClamp(Opacity, 0, 1);
+    if (ReadoutSmoke != None)
+    {
+        C.SetPos(X, Y);
+        C.DrawColor = MakeColor(0,0,0,int(255 * Opacity));
+        C.DrawTile(ReadoutSmoke, Width, Height, 0, 256, 256, 256,
+            MakeLinearColor(0,0,0,Opacity), false, BLEND_Translucent);
+    }
+    else
+    {
+        Tint = ReadoutBacking;
+        Tint.A = int(float(Tint.A) * Opacity);
+        Box(C, X, Y, Width, Height, Tint);
+    }
+}
+
+simulated function RenderWeaponReadout(Canvas C, HUDWeaponReadout A)
+{
+    local color Tint, DetailTint;
     local string Detail, CountLabel;
-    local float XL, YL, CountWidth;
+    local float CountWidth, DetailWidth, GroupWidth, PanelWidth, PanelLeft, PanelHeight;
+    local bool bSecondaryIcon, bCharge;
     if (A.Weapon == None || (!A.bUsesAmmo && A.AmmoLabel == "")) return;
     CountLabel = A.bUsesAmmo ? string(A.Magazine) : A.AmmoLabel;
-    C.Font = class'KFGameEngine'.static.GetKFCanvasFont();
-    if (C.Font == None) C.Font = class'Engine'.static.GetLargeFont();
-    C.TextSize(CountLabel, XL, YL);
-    // Match the existing 192 px digit height and 372 px fit limit. The old
-    // 776 px backing still reserved a second column for the removed reserve.
-    CountWidth = FMin(372, XL * 192 / FMax(1, YL));
-    // A translucent dark backer keeps the digits readable against bright
-    // world surfaces, with the existing 24 px padding on each side.
-    Box(C, 12, 12, CountWidth + 48, 296, ReadoutBacking);
-    Tint = A.bReloading ? Amber : ((A.bUsesAmmo && A.Magazine == 0) ? Red : Ink);
-    Text(C, CountLabel, 36, 32, 372, 192, Tint, true);
     // Magazine only: the reserve is not shown on the gun.
     if (A.bReloading) Detail = "RELOADING";
     else if (A.bUsesAmmo && A.Magazine == 0) Detail = A.Reserve > 0 ? "RELOAD" : "EMPTY";
     else if (A.bSecondary) Detail = string(A.Secondary) $ (A.SecondaryReserve > 0 ? " / " $ A.SecondaryReserve : "");
     else Detail = A.ModeLabel;
     if (A.Charge >= 0 && !A.bReloading) Detail = A.Charge >= 0.999 ? "FULL CHARGE" : "CHARGE " $ int(A.Charge * 100) $ "%";
-    if (A.bSecondary && !A.bReloading && A.Magazine > 0)
-        Art(C, A.SecondaryImage, 36, 248, 44, 44, Muted);
-    Text(C, Detail, 94, 248, 654, 44, (A.bReloading || A.Magazine == 0) ? Tint : Muted, true);
-    if (A.Charge >= 0 && !A.bReloading)
-        Bar(C, 36, 224, 720, A.Charge, A.Charge >= 0.999 ? Amber : Ink, 10);
-    else if (A.bUsesAmmo && (A.bReloading || A.Magazine <= A.Capacity * 0.25))
-        Bar(C, 36, 224, 720, float(A.Magazine) / Max(1,A.Capacity), Tint, 6);
+    bSecondaryIcon = A.bSecondary && !A.bReloading && A.Magazine > 0 && A.SecondaryImage != None;
+    bCharge = A.Charge >= 0 && !A.bReloading;
+    Tint = ReadoutInk;
+    if (A.bUsesAmmo && A.Magazine <= A.Capacity * 0.25) Tint = Amber;
+    if (A.bUsesAmmo && A.Magazine == 0) Tint = ReadoutRed;
+    if (A.bReloading) Tint = Amber;
+    DetailTint = (A.bReloading || A.Magazine == 0) ? Tint : ReadoutMuted;
+    // One centred stack, sized from both rows. EMPTY and RELOADING belong to
+    // the count rather than an absent reserve/icon column. Keep wide special
+    // ammo labels and secondary resources inside the same readable footprint.
+    CountWidth = FMin(640, TextWidth(C, CountLabel, 224));
+    DetailWidth = FMin(bSecondaryIcon ? 576 : 640, TextWidth(C, Detail, 48));
+    GroupWidth = DetailWidth + (bSecondaryIcon ? 64 : 0);
+    PanelWidth = FMax(320, FMax(CountWidth, GroupWidth) + 80);
+    PanelLeft = (800 - PanelWidth) * 0.5;
+    PanelHeight = (Detail != "" || bCharge) ? 304 : 248;
+    ReadoutBackground(C, PanelLeft, 8, PanelWidth, PanelHeight);
+    // Native HudTextAlpha supplies coverage, as on the wheel: one glyph pass
+    // avoids an offset duplicate. Larger digits remain the primary reading.
+    Text(C, CountLabel, (800 - CountWidth) * 0.5, 12, CountWidth, 224, Tint, true, false, false, true);
+    if (bSecondaryIcon)
+        Art(C, A.SecondaryImage, (800 - GroupWidth) * 0.5, 260, 48, 48, ReadoutMuted);
+    Text(C, Detail, (800 - GroupWidth) * 0.5 + (bSecondaryIcon ? 64 : 0), 260,
+        DetailWidth, 48, DetailTint, true, false, false, true);
+    // Charge is a real changing resource. Low magazines use amber digits and
+    // empty ones add a red word; their old track read as a stray line.
+    if (bCharge)
+        Bar(C, PanelLeft + 40, 244, PanelWidth - 80, A.Charge,
+            A.Charge >= 0.999 ? Amber : ReadoutInk, 10);
 }
 
-// Exposed KF2 ammo props carry identity in 3D. White reserve digits lead;
-// small stock gun art and a status rule support them without a large card.
+// Gun silhouettes identify independent pools; paired members share one
+// visually grouped count. Highlight the usable pouch without action jargon.
 simulated function RenderPouchPanel(Canvas C)
 {
-    local int H, Count;
-    local float X, Width;
+    local int Hand, Count;
+    local float X, Width, ValueWidth;
+    local string Value;
+    local color Tint;
     Count = (PouchEntry(0) ? 1 : 0) + (PouchEntry(1) ? 1 : 0);
     if (Count == 0) return;
-    Width = 776.0 / Count;
-    X = 12;
-    for (H = 0; H < 2; ++H)
+    if (SharedPouchReserve())
     {
-        if (!PouchEntry(H)) continue;
-        DrawPouchEntry(C, Ammo[H], X, Width, PouchHovered(H));
+        ReadoutBackground(C, 112, 24, 576, 272, 0.65);
+        for (Hand = 0; Hand < 2; ++Hand)
+        {
+            Tint = MakeColor(ReadoutInk.R,ReadoutInk.G,ReadoutInk.B,210);
+            Art(C, Ammo[Hand].WeaponImage, 160 + Hand * 264, 52, 216, 96, Tint);
+        }
+        Value = string(Ammo[0].Reserve);
+        ValueWidth = FMin(TextWidth(C, Value, 160), 512);
+        Text(C, Value, 400 - ValueWidth * 0.5, 148, ValueWidth + 1, 160,
+            Ammo[0].Reserve <= 0 ? ReadoutRed : ReadoutInk, true, false, false, true);
+        return;
+    }
+    // One centered card or two side-by-side cards at the same physical scale.
+    Width = 388;
+    X = Count == 2 ? 12 : 206;
+    for (Hand = 0; Hand < 2; ++Hand)
+    {
+        if (!PouchEntry(Hand)) continue;
+        DrawPouchEntry(C, Ammo[Hand], X, Width, PouchHovered(Hand));
         X += Width;
     }
 }
 
 simulated function DrawPouchEntry(Canvas C, HUDWeaponReadout A, float X, float Width, bool bHovered)
 {
-    local color Tint;
-    local string Value, ReserveLabel;
-    local float ValueWidth;
-    Tint = A.Reserve <= 0 ? Red : (A.Reserve < A.Capacity ? Amber : Muted);
-    ReserveLabel = A.Reserve <= 0 ? "EMPTY" : (bHovered ? "GRIP" : "RESERVE");
-    // Separate count backers leave clear space between independently owned pools.
-    Box(C, X + 16, 38, Width - 32, 208, ReadoutBacking);
+    local color Tint, HoverTint;
+    local string Value;
+    local float ValueWidth, ColumnWidth, IconWidth;
+    HoverTint = MakeColor(90,200,255,170);
+    Tint = bHovered ? MakeColor(90,200,255,230) : MakeColor(ReadoutInk.R,ReadoutInk.G,ReadoutInk.B,210);
+    ReadoutBackground(C, X + 20, 24, Width - 40, 272, 0.65);
+    ColumnWidth = Width - 64;
+    IconWidth = FMin(260, ColumnWidth);
+    Art(C, A.WeaponImage, X + (Width - IconWidth) * 0.5, 52, IconWidth, 96, Tint);
     Value = string(A.Reserve);
-    ValueWidth = FMin(TextWidth(C, Value, 176), Width - 64);
-    Text(C, Value, X + (Width - ValueWidth) * 0.5, 48, ValueWidth + 1, 176, Ink, true);
-    Box(C, X + 32, 234, Width - 64, bHovered ? 8 : 3, bHovered ? MakeColor(90,200,255,255) : Tint);
-    Art(C, A.WeaponImage, X + 24, 252, 96, 48, Muted);
-    Text(C, ReserveLabel, X + 132, 254, Width - 156, 36, A.Reserve <= 0 ? Red : Muted, true);
+    ValueWidth = FMin(TextWidth(C, Value, 160), ColumnWidth);
+    Text(C, Value, X + (Width - ValueWidth) * 0.5, 148, ValueWidth + 1, 160,
+        A.Reserve <= 0 ? ReadoutRed : ReadoutInk, true, false, false, true);
     if (bHovered)
     {
-        // Brackets and a verb accompany the cyan rule: colour is not the only cue.
-        Box(C, X + 16, 38, 8, 38, MakeColor(90,200,255,255));
-        Box(C, X + Width - 24, 38, 8, 38, MakeColor(90,200,255,255));
+        // A restrained shape cue accompanies colour; no changing vocabulary.
+        Box(C, X + 20, 58, 4, 22, HoverTint);
+        Box(C, X + Width - 24, 58, 4, 22, HoverTint);
     }
 }
 
@@ -1744,6 +1837,9 @@ defaultproperties
     Amber=(R=232,G=174,B=69,A=255)
     DoshGreen=(R=118,G=200,B=74,A=255)
     ReadoutBacking=(R=10,G=11,B=12,A=120)
+    ReadoutInk=(R=230,G=231,B=227,A=255)
+    ReadoutMuted=(R=151,G=157,B=158,A=255)
+    ReadoutRed=(R=188,G=38,B=34,A=255)
     Red=(R=242,G=49,B=50,A=255)
     Track=(R=58,G=57,B=59,A=96)
     Backing=(R=13,G=13,B=15,A=205)

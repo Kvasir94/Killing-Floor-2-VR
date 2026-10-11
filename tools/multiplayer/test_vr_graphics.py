@@ -73,6 +73,29 @@ class VrGraphicsTests(unittest.TestCase):
             self.assertEqual("0.25", self.values(following, "KFGame.ini", "Engine.WorldInfo")["EmitterPoolScale"])
             self.assertEqual("8", self.values(following, "KFGame.ini", "KFGame.KFGoreManager")["MaxDeadBodies"])
 
+    def test_singlepass_screen_effects_and_blood_choices_reach_all_steam_vr_modes(self):
+        for mode in ('solo','host','join'):
+            configs,role=self.configure('singlepass-'+mode,mode,
+                ('--single-pass','--hbao','--reflections','--no-hide-blood-lens','--frame-timings'))
+            self.assertIn('-kf2vr-single-pass',role['args'])
+            self.assertNotIn('-kf2vr-eye-capture',role['args'])
+            settings=self.values(configs)
+            for key in ('AmbientOcclusion','HBAO','AllowScreenSpaceReflections'):
+                self.assertEqual(settings[key],'True')
+            self.assertEqual(settings['LensFlares'],'False')
+            self.assertEqual(settings['ImageGrainScaler'],'0.000000')
+            self.assertEqual(self.values(configs,'KFGame.ini','KF2VR.VRHandsBridge')['bVRScreenEffects'],'True')
+            self.assertFalse(role['hide_blood_lens'])
+            configs,role=self.configure('default-'+mode,mode)
+            self.assertIn('-kf2vr-single-pass',role['args'])
+            self.assertTrue(role['hide_blood_lens'])
+            for key in ('AmbientOcclusion','HBAO','AllowScreenSpaceReflections'):
+                self.assertEqual(self.values(configs)[key],'True')
+            configs,role=self.configure('ordinary-'+mode,mode,('--no-single-pass','--no-hbao','--no-reflections'))
+            self.assertNotIn('-kf2vr-single-pass',role['args'])
+            self.assertTrue(role['hide_blood_lens'])
+            self.assertEqual(self.values(configs)['HBAO'],'False')
+
     def test_solo_and_network_share_graphics_and_do_not_export_unchanged_defaults(self):
         configs, _ = self.configure("first")
         self.export(configs)

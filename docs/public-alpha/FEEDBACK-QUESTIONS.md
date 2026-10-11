@@ -57,7 +57,7 @@ Short, specific answers beat long ones:
 
 ## 5. Performance
 
-- With the default Performance tier at 75% render scale, what frame rate did
+- With the default Performance tier at 100% render scale, what frame rate did
   you get, and on what GPU and headset? Did you raise or lower either setting?
 - Which maps or situations tanked frame rate (big waves, fire, boss)?
 - Quest users: Link, Air Link, Virtual Desktop or Steam Link, and did one
@@ -74,7 +74,7 @@ Short, specific answers beat long ones:
 
 ## 7. Open design questions (opinions welcome)
 
-- Should Performance / 75% stay the default, or should first launch pick a
+- Should Performance / 100% stay the default, or should first launch pick a
   preset per headset?
 - Should the VR menu open on the Menu button, the two-stick chord, or both?
 - Is anything here that we should drop entirely rather than polish?

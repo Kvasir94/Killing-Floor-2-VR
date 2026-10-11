@@ -85,6 +85,10 @@ def items(text, section):
 
 
 def normalized(key, value, default):
+    # A missing/malformed placement discriminator must never reinterpret a
+    # stored mesh-pivot calibration as a visible-centre offset.
+    if key == "bChestGrenadeCentered":
+        return "True" if str(value).strip().lower() == "true" else "False"
     if key in POSITIVE:
         try:
             lo, hi = POSITIVE[key]
@@ -99,11 +103,6 @@ def normalized(key, value, default):
         return default
     if key == "EyeRenderPercent":
         return str(int(float(value)))
-    # Upgrade only the previous shipped chest default; keep personal calibration.
-    if key == "ChestGrenadeOffset" and value.replace(" ", "").lower() in (
-            "(x=12,y=0,z=0)", "(x=10,y=-18,z=-6)", "(x=10,y=-18,z=-29)", "(x=20,y=-16,z=-8)",
-            "(x=10,y=-20,z=-18)"):
-        return default
     return value
 
 
@@ -126,6 +125,10 @@ def merged(defaults, *sources):
         # turn the player's next ordinary session into a diagnostic one.
         selected.update({key: value for key, value in source.items()
                          if key in defaults or not diagnostic(key)})
+        # Offset and interpretation belong to the same source. An old saved
+        # offset overrides any centre-mode seed from an earlier/default source.
+        if "ChestGrenadeOffset" in source and "bChestGrenadeCentered" not in source:
+            selected["bChestGrenadeCentered"] = "False"
     # Teleport reach and recharge are shipped tuning, never a preference (no
     # menu sets them). A saved value is always an older preset -- the 650 UU
     # sprint-parity hop outlived three retunes this way -- so it never wins.
@@ -169,7 +172,8 @@ def apply_preferences(text, saved="", *, eye_percent=None):
         if section.endswith("VRSessionUI") and eye_percent is not None:
             selected["EyeRenderPercent"] = str(eye_percent)
         text = set_ini(text, section, selected)
-        text = set_ini(text, ALIASES[section], selected)
+        if section in ALIASES:
+            text = set_ini(text, ALIASES[section], selected)
     return stamp_revision(text)
 
 
@@ -196,11 +200,12 @@ def export_preferences(config_root, root=None, *, network=True):
     selected_session = merged(DEFAULTS["KF2VR.VRSessionUI"], items(result, "KF2VR.VRSessionUI"),
                               items(text, ALIASES["KF2VR.VRSessionUI"] if network else "KF2VR.VRSessionUI"))
     for section, defaults in DEFAULTS.items():
-        selected = merged(defaults, items(result, section), items(text, ALIASES[section] if network else section))
+        selected = merged(defaults, items(result, section), items(text, ALIASES.get(section, section) if network else section))
         if section == "KF2VR.VRHandsBridge":
             selected.update({key: selected_session[key] for key in ("SpatialMenuDistance", "SpatialMenuHeight", "SpatialMenuScale")})
         result = set_ini(result, section, selected)
-        result = set_ini(result, ALIASES[section], selected)
+        if section in ALIASES:
+            result = set_ini(result, ALIASES[section], selected)
     result = stamp_revision(result)
     temporary = target.with_suffix(".ini.tmp")
     temporary.write_text(result, encoding="utf-16")

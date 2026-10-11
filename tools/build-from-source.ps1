@@ -55,6 +55,15 @@ try {
             Invoke-Checked $Python @('tools/generate_reload_props.py', '--check')
         }
         if (-not (Test-Path 'build/hand-meshes/VRTomahawk.json')) { Invoke-Generator 'tools/generate_tomahawk.py' }
+        if (-not (Test-Path 'build/hand-meshes/VRDeadbolt.json')) {
+            if (-not (Test-Path 'assets/weapons/deadbolt/decal_atlas.png') -or
+                -not (Test-Path 'assets/weapons/deadbolt/decal_metal.png')) {
+                New-Item -ItemType Directory -Path 'assets/weapons/deadbolt' -Force | Out-Null
+                Invoke-Checked $Python @('tools/deadbolt/make_decals.py')
+            }
+            Invoke-Generator 'tools/deadbolt/export_deadbolt.py'
+        }
+        if (-not (Test-Path 'build/hand-meshes/VRRipcord.json')) { Invoke-Generator 'tools/ripcord/export_ripcord.py' }
         Invoke-Checked $Python @('tools/extract_portal_assets.py', $Portal2Root, 'extract/portal')
         if (-not (Test-Path 'build/portal/meshes.json')) { Invoke-Generator 'tools/build_portal_meshes.py' }
         Invoke-Checked $Python @('tools/prepare_portal_asset_config.py')

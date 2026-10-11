@@ -21,6 +21,9 @@ var TestJob Job;
 var array<KFPawn_Monster> TestZeds;
 var array<string> ActionIDs, ActionWires, ActionReceipts;
 var float BeganAt, LastAcceptedAt;
+var VRLocalTestDiagnostic Diagnostic;
+var transient int NativeDiagnosticEnabled, NativeDiagnosticVerified;
+var transient int NativeDiagnosticTriggerMask, NativeDiagnosticButtonMask;
 var bool bAcceptedAction;
 const MaxLiveZeds = 12;
 const MaxSessionActions = 256;
@@ -61,6 +64,12 @@ function InitMutator(string Options, out string ErrorMessage)
     Game.SetGameUnranked(true);
     Game.UpdateGameSettings();
     NativeTestEnabled = 1;
+    if (Game.ParseOption(Options, "KF2VRLocalDiagnostic") == "1")
+    {
+        NativeDiagnosticEnabled = 1;
+        Diagnostic = new(self) class'VRLocalTestDiagnostic';
+        Diagnostic.Initialize(self);
+    }
     BeganAt = WorldInfo.RealTimeSeconds;
     SetTimer(0.1, true, 'AdvanceLocalTest');
     `log("KF2VR_LOCAL_TEST enabled=1 test_unranked=1 capacityBypass=" $ bCapacityBypass
@@ -131,6 +140,9 @@ function string Status()
         $ Chr(9) $ "capacity_bypass=" $ int(bCapacityBypass) $ Chr(9) $ "cheats=unchanged"
         $ Chr(9) $ "job_active=" $ int(bJobActive) $ Chr(9) $ "live_test_zeds=" $ PruneTestZeds();
     Result $= Chr(9) $ "native_polls=" $ NativeTestPolls
+        $ Chr(9) $ "diagnostic_object=" $ int(Diagnostic != None)
+        $ Chr(9) $ "diagnostic_enabled=" $ NativeDiagnosticEnabled
+        $ Chr(9) $ "diagnostic_verified=" $ NativeDiagnosticVerified
         $ Chr(9) $ "registry_verified=" $ Registry.Weapons.Length
         $ Chr(9) $ "registry_missing=" $ Registry.Missing.Length;
     foreach WorldInfo.AllControllers(class'KFPlayerController', PC)
@@ -203,6 +215,17 @@ function SubmitTestAction(string Wire)
     if (Fields[2] == "status" && Fields[4] == "-" && Fields[5] == "0") LastTestReceipt = Status();
     else if (Fields[2] == "catalog" && Fields[5] == "0" && Registry.ValidPerk(Fields[4]))
         LastTestReceipt = Registry.Catalog(Fields[4]);
+    else if (Fields[2] == "diagnostic" && Fields[5] == "0")
+    {
+        if (Diagnostic == None)
+            LastTestReceipt = "error" $ Chr(9) $ "diagnostic_launch_optin_required" $ Chr(9) $ "first_failed=object_missing";
+        else if (NativeDiagnosticEnabled != 1)
+            LastTestReceipt = "error" $ Chr(9) $ "diagnostic_launch_optin_required" $ Chr(9) $ "first_failed=launch_disabled";
+        else if (NativeDiagnosticVerified != 1)
+            LastTestReceipt = "error" $ Chr(9) $ "diagnostic_launch_optin_required" $ Chr(9) $ "first_failed=live_XR_unverified";
+        else if (bJobActive || Diagnostic.bBusy) LastTestReceipt = "error" $ Chr(9) $ "job_busy";
+        else LastTestReceipt = Diagnostic.Begin(Fields[1], Fields[4], int(Fields[3]));
+    }
     else if (Fields[2] == "give-all" || Fields[2] == "give-one" || Fields[2] == "spawn-zeds")
     {
         PC = LocalPlayerByID(int(Fields[3]));
@@ -210,7 +233,7 @@ function SubmitTestAction(string Wire)
         if (PC == None) LastTestReceipt = "error" $ Chr(9) $ "local_player_not_found";
         else if (Human == None || Human.Health <= 0 || KFPawn_Customization(Human) != None || Human.InvManager == None)
             LastTestReceipt = "error" $ Chr(9) $ "living_test_pawn_required";
-        else if (bJobActive) LastTestReceipt = "error" $ Chr(9) $ "job_busy";
+        else if (bJobActive || (Diagnostic != None && Diagnostic.bBusy)) LastTestReceipt = "error" $ Chr(9) $ "job_busy";
         else
         {
             Job.Weapons.Length = 0; Job.Results.Length = 0;
@@ -344,6 +367,9 @@ function FinishJob(optional string Reason)
 
 function DisableLocalTest(string Reason)
 {
+    if (Diagnostic != None) Diagnostic.Cancel(Reason);
+    NativeDiagnosticEnabled = 0;
+    NativeDiagnosticTriggerMask = 0; NativeDiagnosticButtonMask = 0;
     FinishJob("cancelled_" $ Reason);
     NativeTestEnabled = 0; bClosed = true;
     `log("KF2VR_LOCAL_TEST enabled=0 reason=" $ Reason @ "session_stays_unranked=1 inventory_and_zeds_retained=1");
@@ -356,6 +382,8 @@ function AdvanceLocalTest()
     if (!Authorized()) { ClearTimer('AdvanceLocalTest'); return; }
     if (WorldInfo.RealTimeSeconds - BeganAt >= 1800)
     { DisableLocalTest("lifetime_limit"); NativeLocalTestPoll(); ClearTimer('AdvanceLocalTest'); return; }
+    if (Diagnostic != None && WorldInfo.RealTimeSeconds - BeganAt >= 300)
+    { DisableLocalTest("diagnostic_lifetime_limit"); NativeLocalTestPoll(); ClearTimer('AdvanceLocalTest'); return; }
     // Keep the test-only byte counter saturated after drops/pickups too.
     foreach WorldInfo.AllControllers(class'KFPlayerController', PC)
     {
@@ -377,6 +405,18 @@ function AdvanceLocalTest()
         }
     }
     NativeLocalTestPoll();
+}
+
+simulated event Tick(float DeltaTime)
+{
+    Super.Tick(DeltaTime);
+    if (Diagnostic != None)
+    {
+        Diagnostic.Advance();
+        // Refresh the bounded native input snapshot each simulation tick;
+        // file requests retain their existing 500 ms channel poll limit.
+        NativeLocalTestPoll();
+    }
 }
 
 event Destroyed()

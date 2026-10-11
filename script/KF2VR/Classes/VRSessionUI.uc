@@ -26,6 +26,7 @@ var int NativeSessionTicks;
 var int NativeConnection, NativeMenuActive, NativeMenuContextValid;
 var int NativeMenuRenderStage, NativeShellActive, NativeMenuBackdrop;
 var int NativeRecenterRequested, NativeMenuHand, NativeSnapTurn, NativeToggleRequested, NativeTravelPending;
+var int NativeAllowGrabTurn;
 var Object NativeMenuTarget;
 var float NativePointerU, NativePointerV;
 var int NativePointerPressed, NativePointerReleased, NativePointerCancelled;
@@ -98,7 +99,7 @@ enum MenuAction
     MA_PointerHand, MA_Backdrop, MA_Placement, MA_ResetPlacement, MA_Recenter,
     MA_RenderScale, MA_Quality, MA_Gamma, MA_Calibration, MA_ResetChest,
     MA_Practice, MA_EndPractice, MA_Inspection, MA_Map, MA_MapSelect, MA_MapPage, MA_Difficulty,
-    MA_Length, MA_Confirm, MA_Cancel
+    MA_Length, MA_Confirm, MA_Cancel, MA_Sandbox, MA_GrabTurn, MA_GrenadePose
 };
 
 struct MenuRow
@@ -202,6 +203,7 @@ function Update(float DeltaTime)
         bTravelPending = false;
         NativeTravelPending = 0;
     }
+    UpdateGrabTurn();
     BuildMenuRows();
     NativeSessionUpdate();
     if (!LocalContext()) { CancelStockResume(); ResetComfortEffects(); NativeMenuContextValid = 0; return; }
@@ -264,12 +266,31 @@ function Update(float DeltaTime)
     RefreshMenuState();
     if (NativeShellActive != 0 && ComfortCamera != None)
     {
-        ComfortCamera.EndVictory();
+        ComfortCamera.Shutdown();
         NativeSelfViewActive = 0; NativeSelfViewOffset = vect(0,0,0);
     }
     CompletePendingCalibration();
     UpdateRecenterReceipt();
     BuildMenuRows();
+}
+
+// Refresh from the live stock option, including changes made in the stock UI.
+// Re-arm the current weak grab when turning is enabled midway through it.
+function UpdateGrabTurn()
+{
+    local KFPawn_Human Human;
+    local KFSM_GrappleVictim Move;
+    local int Previous;
+    Previous = NativeAllowGrabTurn;
+    NativeAllowGrabTurn = 0;
+    if (!LocalContext()) return;
+    Human = KFPawn_Human(PC.Pawn);
+    if (!class'VRPhysicalInteraction'.static.Restrained(Human)) return;
+    Move = KFSM_GrappleVictim(Human.SpecialMoves[Human.SpecialMove]);
+    NativeAllowGrabTurn = int(class'VRGrabTurnPreference'.static.AllowsTurn(
+        PC.bSkipNonCriticalForceLookAt, true, Move.bDisableLook));
+    if (NativeAllowGrabTurn != 0 && Previous == 0) PC.SetForceLookAtPawn(Move.Leader);
+    else if (NativeAllowGrabTurn == 0 && Previous != 0 && !Move.bDisableLook) PC.SetForceLookAtPawn(None);
 }
 
 // Intercepted on the viewport tick even when there is no living pawn. Native
@@ -292,8 +313,9 @@ function EnforceCameraComfort()
 
 function BeginTravel()
 {
+    NativeAllowGrabTurn = 0;
     bCalibrationPending = false;
-    if (ComfortCamera != None) ComfortCamera.EndVictory();
+    if (ComfortCamera != None) ComfortCamera.Shutdown();
     ComfortCamera = None;
     NativeSelfViewActive = 0; NativeSelfViewOffset = vect(0,0,0);
     CancelStockResume();
@@ -668,6 +690,7 @@ function float HandValue(name Key)
         case 'bWristwatchHUD': return int(Hands != None ? Hands.bWristwatchHUD : C.default.bWristwatchHUD);
         case 'bDamagePopups': return int(Hands != None ? Hands.bDamagePopups : C.default.bDamagePopups);
         case 'bSightLineConvergence': return int(Hands != None ? Hands.bSightLineConvergence : C.default.bSightLineConvergence);
+        case 'bSightPointAim': return int(Hands != None ? Hands.bSightPointAim : C.default.bSightPointAim);
         case 'bWeaponLasers': return int(Hands != None ? Hands.bWeaponLasers : C.default.bWeaponLasers);
         case 'bMeleeHitStop': return int(Hands != None ? Hands.bMeleeHitStop : C.default.bMeleeHitStop);
         case 'bBoxingGloves': return int(Hands != None ? Hands.bBoxingGloves : C.default.bBoxingGloves);
@@ -760,6 +783,10 @@ function SetHandValue(name Key, float Value)
         case 'bSightLineConvergence':
             if (Hands != None) Hands.bSightLineConvergence = Value != 0;
             else C.default.bSightLineConvergence = Value != 0;
+            break;
+        case 'bSightPointAim':
+            if (Hands != None) Hands.bSightPointAim = Value != 0;
+            else C.default.bSightPointAim = Value != 0;
             break;
         case 'bWeaponLasers':
             if (Hands != None)
@@ -865,7 +892,7 @@ function BuildMenuRows()
         AddRow(1, "MOVEMENT HAND: " $ (HandValue('MovementHand') == 0 ? "LEFT" : "RIGHT"), MA_MoveHand, 0, 1);
         AddRow(2, "MOVEMENT DIRECTION: " $ (HandValue('bControllerRelativeMovement') != 0 ? "CONTROLLER" : "HEAD"), MA_HandToggle, 0, 1, 'bControllerRelativeMovement');
         AddRow(3, "TURNING: " $ (bSnapTurn ? "SNAP" : "SMOOTH"), MA_Turning, 0, 1);
-        // Snap angle and smooth sensitivity never apply together: they share rows 4-5.
+        // Snap angle and smooth sensitivity never apply together: they share row 4.
         if (bSnapTurn)
         {
             AddRow(4, "SNAP ANGLE: " $ int(SnapTurnDegrees) $ " DEGREES", MA_SnapAngle, 15, 5);
@@ -876,6 +903,7 @@ function BuildMenuRows()
         }
         AddRow(6, "TELEPORT BLINK: " $ OnOff('BlinkScale'), MA_Blink, 0, 1);
         AddRow(7, "STICK CROUCH (DOWN): " $ OnOff('bStickCrouch'), MA_HandToggle, 0, 1, 'bStickCrouch');
+        AddRow(8, "CLOT GRAB TURNING: " $ ((PC != None && !PC.bSkipNonCriticalForceLookAt) ? "ON" : "OFF"), MA_GrabTurn, 0, 1);
         AddBack(PAGE_SETTINGS);
         break;
     case PAGE_INTERACTION:
@@ -933,6 +961,10 @@ function BuildMenuRows()
         AddRow(2, "RECENTER / CAPTURE CURRENT HEIGHT", MA_Recenter);
         AddRow(3, "RESET CHEST GRENADE ZONE", Hands != None ? MA_ResetChest : MA_None, 0, Hands != None ? 0 : 4);
         AddRow(4, "GLOBAL FIT APPLIES TO ALL HELD FIREARMS", MA_None, 0, 4);
+        AddRow(5, "SIGHT-LINE CONVERGENCE (20M): " $ OnOff('bSightLineConvergence'), MA_HandToggle, 0, 1, 'bSightLineConvergence');
+        AddRow(6, "AIM AT SIGHT POINT (OVERRIDES 20M): " $ OnOff('bSightPointAim'), MA_HandToggle, 0, 1, 'bSightPointAim');
+        AddRow(7, "GRENADE GRIP: " $ ((Hands != None && Hands.FreeHandPose != None && Hands.FreeHandPose.bAuthoredGrenadeGrip) ? "AUTHORED" : "TRACKED CURL"),
+            (Hands != None && Hands.FreeHandPose != None) ? MA_GrenadePose : MA_None, 0, (Hands != None && Hands.FreeHandPose != None) ? 1 : 4);
         AddBack(PAGE_SETTINGS);
         break;
     case PAGE_GRAPHICS:
@@ -941,8 +973,8 @@ function BuildMenuRows()
         AddRow(2, "RENDER SCALE +: " $ EyeRenderPercent $ "%", EyeRenderPercent < 100 ? MA_RenderScale : MA_None, 5, EyeRenderPercent < 100 ? 1 : 4);
         AddRow(3, "GAME QUALITY", MA_Page, PAGE_QUALITY);
         AddRow(4, "LIGHTING", MA_Page, PAGE_LIGHTING);
-        AddRow(5, "VR LOCKED: BLUR / DOF / AA / AO / REFLECTIONS OFF", MA_None, 0, 4);
-        AddRow(6, "VR LOCKED: VSYNC / GRAIN / LENS FLARES OFF", MA_None, 0, 4);
+        AddRow(5, "VR LOCKED: BLUR / DOF / VSYNC OFF", MA_None, 0, 4);
+        AddRow(6, "SCREEN EFFECTS FOLLOW LAUNCH SETTINGS", MA_None, 0, 4);
         AddRow(7, "ADJUST GAMMA", MA_Gamma);
         AddBack(PAGE_SETTINGS);
         break;
@@ -960,6 +992,7 @@ function BuildMenuRows()
         AddBack(PAGE_ROOT);
         break;
     case PAGE_TOOLS:
+        AddRow(5, "REMILLY SANDBOX / UNRANKED / NO XP", (LivingView() && Hands != None) ? MA_Sandbox : MA_None, 0, 3);
         AddRow(0, "OPEN / START VR PRACTICE", (LivingView() && Hands != None) ? MA_Practice : MA_None, 0, (LivingView() && Hands != None) ? 0 : 4);
         AddRow(1, "END PRACTICE / RESUME WAVES", PracticeActive() ? MA_EndPractice : MA_None, 0, PracticeActive() ? 3 : 4);
         AddCalibration(2, "CALIBRATION", 1);
@@ -1029,7 +1062,7 @@ function SetPage(int NextPage, optional bool bRememberParent)
     }
     PressedRow = -1;
     Notice = "Point and release trigger to select. Changes save immediately.";
-    if (Page == PAGE_LOCOMOTION) Notice = "Movement-hand click sprints; in teleport it cancels the arc. The other click offers the welder.";
+    if (Page == PAGE_LOCOMOTION) Notice = "Movement click sprints or cancels teleport. Other click offers a door welder or toggles the movement wheel.";
     if (Page == PAGE_INTERACTION) Notice = "Dominant hand sets default drawing and body/HUD sides. Y/B still select their own hand.";
     if (Page == PAGE_EXPERIMENTAL) Notice = "Experimental server grabbing is the host's launch setting and applies to every player. Fists stay active.";
     if (Page == PAGE_GRAPHICS) Notice = "Lower render scale improves performance and reduces clarity. Quality changes apply immediately.";
@@ -1095,6 +1128,13 @@ function OpenPractice()
     if (!Hands.CalibrationPanel.StartPractice())
     { Notice = "Practice needs a living player during a normal Survival wave, outside the boss wave."; return; }
     OpenCalibration(4);
+}
+
+function OpenSandbox()
+{
+    if (!LivingView() || Hands == None || Hands.CalibrationPanel == None) return;
+    // Opening controls is harmless; the explicit START tile opts into cheats.
+    OpenCalibration(10);
 }
 
 function EndPractice()
@@ -1222,6 +1262,18 @@ function ActivateRow(int Row)
         Notice = "BUTTON > PHYSICAL > PHYSICAL + PUMP. X/A starts reload; physical modes use supported weapons.";
         return;
     case MA_Turning: bSnapTurn = !bSnapTurn; SavePreferences(); return;
+    case MA_GrenadePose:
+        if (Hands != None && Hands.FreeHandPose != None)
+            Hands.FreeHandPose.SetAuthoredGrenadeGrip(!Hands.FreeHandPose.bAuthoredGrenadeGrip);
+        return;
+    case MA_GrabTurn:
+        if (PC != None && class'VRGrabTurnPreference'.static.SetEnabled(PC, PC.bSkipNonCriticalForceLookAt))
+        {
+            UpdateGrabTurn();
+            Notice = "Synced with No Auto Turn On Clot Grab (opposite ON/OFF).";
+        }
+        else Notice = "Stock player profile is not ready; setting unchanged.";
+        return;
     case MA_SnapAngle: SnapTurnDegrees = FClamp(SnapTurnDegrees + Selected.Argument, 15, 90); SavePreferences(); return;
     case MA_SmoothSpeed: SmoothTurnScale = FClamp(SmoothTurnScale + Selected.Argument * 0.01, 0.1, 2); SavePreferences(); return;
     case MA_PointerHand: MenuHand = 1 - Clamp(MenuHand, 0, 1); SavePreferences(); return;
@@ -1251,12 +1303,14 @@ function ActivateRow(int Row)
         if (Hands != None)
         {
             Hands.ChestGrenadeOffset = vect(11.6,4.4,7.3);
+            Hands.bChestGrenadeCentered = true;
             Hands.SaveConfig();
             Notice = "Chest grenade zone reset to the shipped position.";
         }
         else Notice = "Reset the chest zone while alive in a match.";
         return;
     case MA_Practice: OpenPractice(); return;
+    case MA_Sandbox: OpenSandbox(); return;
     case MA_EndPractice: EndPractice(); return;
     case MA_Inspection: ActivateInspection(); return;
     case MA_Map: CycleMap(Selected.Argument); SavePreferences(); return;

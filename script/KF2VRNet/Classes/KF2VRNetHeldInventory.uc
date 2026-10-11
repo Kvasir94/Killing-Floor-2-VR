@@ -36,6 +36,10 @@ var private KFWeapon ActiveLeft, ActiveRight;
 // brackets FireAmmunition, Zed TakeDamage and UpdateGroundSpeed with it.
 var VRPerkContext PerkContext;
 
+// Optional transaction cleanup runs at native stock-removal ingress, before
+// Owner changes, so polling cannot miss a drop and immediate reacquisition.
+delegate OnItemRemoved(KFWeapon W) {}
+
 function KFPawn_Human GetHuman()
 {
     return Human;
@@ -92,6 +96,7 @@ function NotifyRemoved(KFWeapon W)
     local int I;
     I = FindItem(W);
     if (I < 0) return;
+    OnItemRemoved(W);
     RetireItem(I);
 }
 

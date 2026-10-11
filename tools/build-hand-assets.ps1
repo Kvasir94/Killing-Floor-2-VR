@@ -122,14 +122,57 @@ $propMeshes = @(@(Get-ChildItem -LiteralPath $propRoot -Filter 'VRTomahawk.fbx')
     @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRAmmo_*.fbx' -ErrorAction SilentlyContinue) +
     @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRAmmoEmpty*_*.fbx' -ErrorAction SilentlyContinue) +
     @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRGlow*_*.fbx' -ErrorAction SilentlyContinue) +
-    @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRReloadRing.fbx' -ErrorAction SilentlyContinue) | Sort-Object Name)
+    @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRReloadRing.fbx' -ErrorAction SilentlyContinue) +
+    @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRDeadbolt*.fbx' -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'VRDeadboltRig.fbx' }) +
+    @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRRipcord*.fbx' -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'VRRipcordRig.fbx' }) | Sort-Object Name)
 $propHashes = [ordered]@{}
 foreach ($prop in $propMeshes) { $propHashes[$prop.BaseName] = (Get-FileHash -LiteralPath $prop.FullName -Algorithm SHA256).Hash }
 # Imported by the commandlet beside the VRTomahawk prop, not as static props.
 $propHashes['VRTomahawkRig'] = (Get-FileHash -LiteralPath (Join-Path $propRoot 'VRTomahawkRig.fbx') -Algorithm SHA256).Hash
 $propHashes['VRTomahawk3P'] = (Get-FileHash -LiteralPath (Join-Path $propRoot 'VRTomahawk3P.fbx') -Algorithm SHA256).Hash
 $propHashes['VRTomahawk.json'] = (Get-FileHash -LiteralPath $hawkReport -Algorithm SHA256).Hash
+# Deadbolt rig: imported beside the VRDeadbolt prop when the export wrote one (tools/deadbolt/export_deadbolt.py).
+$deadboltReport = Join-Path $propRoot 'VRDeadbolt.json'
+$deadboltRig = $null
+if ((Test-Path -LiteralPath (Join-Path $propRoot 'VRDeadboltRig.fbx')) -and (Test-Path -LiteralPath $deadboltReport)) {
+    $deadboltRig = (Get-Content -LiteralPath $deadboltReport -Raw | ConvertFrom-Json).rig
+    if ($deadboltRig) {
+        $propHashes['VRDeadboltRig'] = (Get-FileHash -LiteralPath (Join-Path $propRoot 'VRDeadboltRig.fbx') -Algorithm SHA256).Hash
+        $propHashes['VRDeadbolt.json'] = (Get-FileHash -LiteralPath $deadboltReport -Algorithm SHA256).Hash
+    }
+}
+# Ripcord rig: imported beside the VRRipcord prop when the export wrote one (tools/ripcord/export_ripcord.py).
+$ripcordReport = Join-Path $propRoot 'VRRipcord.json'
+$ripcordRig = $null
+if ((Test-Path -LiteralPath (Join-Path $propRoot 'VRRipcordRig.fbx')) -and (Test-Path -LiteralPath $ripcordReport)) {
+    $ripcordRig = (Get-Content -LiteralPath $ripcordReport -Raw | ConvertFrom-Json).rig
+    if ($ripcordRig) {
+        $propHashes['VRRipcordRig'] = (Get-FileHash -LiteralPath (Join-Path $propRoot 'VRRipcordRig.fbx') -Algorithm SHA256).Hash
+        $propHashes['VRRipcord.json'] = (Get-FileHash -LiteralPath $ripcordReport -Algorithm SHA256).Hash
+    }
+}
 $textureRoot = Split-Path $InputMesh -Parent
+# Deadbolt trader/selector icon: rendered from the exported rig props whenever they are newer.
+$deadboltIcon = Join-Path $propRoot 'VRDeadboltIcon.tga'
+$deadboltIconTool = Join-Path $projectRoot 'tools/deadbolt/make_icon.py'
+if ($deadboltRig) {
+    $iconTime = if (Test-Path -LiteralPath $deadboltIcon) { (Get-Item -LiteralPath $deadboltIcon).LastWriteTimeUtc } else { [DateTime]::MinValue }
+    if ($iconTime -lt (Get-Item -LiteralPath $deadboltIconTool).LastWriteTimeUtc -or $iconTime -lt (Get-Item -LiteralPath $deadboltReport).LastWriteTimeUtc) {
+        $iconMutex = [Threading.Mutex]::new($false, 'Local\KF2VR_DevelopmentFixture')
+        $iconLocked = $false
+        try {
+            try { $iconLocked = $iconMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $iconLocked = $true }
+            if (-not $iconLocked) { throw 'Another KF2-VR development fixture is active.' }
+            $blender = 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe'
+            if (-not (Test-Path -LiteralPath $blender -PathType Leaf)) { throw "Blender is required to render the Deadbolt icon: $blender" }
+            & $blender --background --factory-startup --python-exit-code 1 --python $deadboltIconTool | Out-Null
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $deadboltIcon)) { throw 'Could not render the Deadbolt icon.' }
+        } finally {
+            if ($iconLocked) { $iconMutex.ReleaseMutex() }
+            $iconMutex.Dispose()
+        }
+    }
+}
 # Deterministic display backing; serialize this pre-cache asset generation too.
 $glassMutex = [Threading.Mutex]::new($false, 'Local\KF2VR_DevelopmentFixture')
 $glassLocked = $false
@@ -145,7 +188,9 @@ try {
     $glassMutex.Dispose()
 }
 $textureFiles = @(@(Get-ChildItem -LiteralPath $textureRoot -Filter 'VRHorzine*.tga' -ErrorAction SilentlyContinue) +
-    @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRTomahawk*.tga') | Sort-Object Name)
+    @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRTomahawk*.tga') +
+    @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRDeadbolt*.tga' -ErrorAction SilentlyContinue) +
+    @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRRipcord*.tga' -ErrorAction SilentlyContinue) | Sort-Object Name)
 $textureHashes = [ordered]@{}
 foreach ($texture in $textureFiles) { $textureHashes[$texture.Name] = (Get-FileHash -LiteralPath $texture.FullName).Hash }
 $sourcePath = Join-Path $projectRoot 'script/HandAssetTools/Classes/VRHandAssetCommandlet.uc'
@@ -250,6 +295,20 @@ try {
             $editorIni += "TomahawkAttachmentYaw=$($hawkRig.attachment_grip_yaw_uu)`r`n"
             foreach ($take in $hawkRig.rig_takes) { $editorIni += "TomahawkTakes=$take`r`n" }
             foreach ($seconds in $hawkRig.rig_take_seconds) { $editorIni += "TomahawkTakeSeconds=$seconds`r`n" }
+            if ($deadboltRig) {
+                foreach ($take in $deadboltRig.takes) { $editorIni += "DeadboltTakes=$take`r`n" }
+                # Imported sequences share one padded length (export_deadbolt.py); script ends each take at its own time.
+                foreach ($seconds in $deadboltRig.sequence_seconds) { $editorIni += "DeadboltTakeSeconds=$seconds`r`n" }
+                foreach ($frames in $deadboltRig.take_frames) { $editorIni += "DeadboltTakeFrames=$frames`r`n" }
+                $editorIni += "DeadboltBones=$(@($deadboltRig.bones).Count)`r`n"
+            }
+            if ($ripcordRig) {
+                foreach ($take in $ripcordRig.takes) { $editorIni += "RipcordTakes=$take`r`n" }
+                # Imported sequences share one padded length (export_ripcord.py); script ends each take at its own time.
+                foreach ($seconds in $ripcordRig.sequence_seconds) { $editorIni += "RipcordTakeSeconds=$seconds`r`n" }
+                foreach ($frames in $ripcordRig.take_frames) { $editorIni += "RipcordTakeFrames=$frames`r`n" }
+                $editorIni += "RipcordBones=$(@($ripcordRig.bones).Count)`r`n"
+            }
             [IO.File]::WriteAllText($editorIniPath, $editorIni, [Text.Encoding]::ASCII)
             $fbxOptions = "`r`n[UnrealEd.FbxImportUI]`r`nMeshTypeToImport=FBXIT_SkeletalMesh`r`nbImportMaterials=False`r`nbImportTextures=False`r`nbImportAnimations=False`r`nbImportMeshLODs=False`r`nbImportMorphTargets=False`r`nbUseT0AsRefPose=False`r`nbOverrideFullName=True`r`n"
             foreach ($optionsIni in @('EDITOR.ini','EDITORUSERSETTINGS.ini')) {
@@ -298,6 +357,9 @@ try {
             foreach ($prop in $propMeshes) {
                 if ($logText -notmatch ('VR_HAND_ASSET prop_imported=' + [regex]::Escape($prop.BaseName) + '\b')) { throw "Importer did not produce KF2VRHands.$($prop.BaseName). See $logPath" }
             }
+            if ($deadboltRig -and $logText -notmatch 'VR_HAND_ASSET rig_imported=VRDeadboltRig') { throw "Importer did not produce KF2VRHands.VRDeadboltRig. See $logPath" }
+            if ($deadboltRig -and $logText -notmatch 'VR_HAND_ASSET deadbolt_icon=') { throw "Importer did not produce KF2VRHands.VRDeadboltIcon. See $logPath" }
+            if ($ripcordRig -and $logText -notmatch 'VR_HAND_ASSET rig_imported=VRRipcordRig') { throw "Importer did not produce KF2VRHands.VRRipcordRig. See $logPath" }
         }
     }
     if ((Get-FileHash -LiteralPath $InputMesh -Algorithm SHA256).Hash -ne $inputHash -or

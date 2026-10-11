@@ -257,8 +257,9 @@ function UpdateHand()
     }
     if (!Motion.Check(LocalHandPosition(), Owner.Now()))
     {
-        if (Hand == GunHand) CancelHand(Hand);
-        else Motion.Begin(LocalHandPosition(), Owner.Now());
+        // Neither hand may finish an old action from a rejected return sample.
+        // Keep its physical pose and spent chamber, then require a fresh grip.
+        CancelHand(Hand);
         return;
     }
     if (!bGrip) { bEngaged = false; Motion.Reset(); return; }

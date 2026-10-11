@@ -1,7 +1,10 @@
 // Weapon-independent empty-hand presentation. The mesh's relaxed reference
 // pose supplies the base; local finger rotations curl it toward a fist.
 // This object never requests a grab, support attachment, fire or inventory action.
-class VRFreeHandPose extends Object;
+class VRFreeHandPose extends Object config(Game);
+
+// Donor authored poses are the default for supported held stock grenades.
+var config bool bAuthoredGrenadeGrip;
 
 struct FingerJoint
 {
@@ -22,6 +25,13 @@ var vector LocalForward[2], LocalThumb[2], LocalPalm[2];
 var float Amount[2];
 var bool bReady;
 var VRHandsBridge BoundBridge;
+
+function SetAuthoredGrenadeGrip(bool bEnabled)
+{
+    bAuthoredGrenadeGrip = bEnabled;
+    SaveConfig();
+    Apply();
+}
 
 function name FingerBone(int Hand, int Finger, int Joint)
 {
@@ -151,10 +161,10 @@ function Apply()
     if (!bReady) return;
     GrenadeProfile[0] = -1;
     GrenadeProfile[1] = -1;
-    if (BoundBridge != None && BoundBridge.HandInventory != None
+    if (bAuthoredGrenadeGrip && BoundBridge != None && BoundBridge.HandInventory != None
         && BoundBridge.HandInventory.Input != None)
         Grenade = BoundBridge.HandInventory.Input.Grenade;
-    if (Grenade != None)
+    if (Grenade != None && Grenade.HeldClass != None)
         for (Hand = 0; Hand < 2; ++Hand)
             if (Grenade.IsHeld(Hand))
                 GrenadeProfile[Hand] = class'VRGrenadeGripPose'.static.ProfileFor(Grenade.HeldClass.Name);
@@ -166,8 +176,7 @@ function Apply()
         if (Joints[I].OppositionDegrees != 0)
             Curl = QuatProduct(QuatFromAxisAndAngle(Joints[I].OppositionAxis,
                 Joints[I].OppositionDegrees * Pi / 180.0 * Alpha), Curl);
-        // A held stock grenade uses its reviewed pose at full strength. Grip
-        // pressure still owns the ordinary free fist and gameplay admission.
+        // Only exact stock classes in the catalog receive an authored pose.
         if (class'VRGrenadeGripPose'.static.Read(GrenadeProfile[Joints[I].Hand],
             Joints[I].Hand, I % 15, Authored)) Curl = Authored;
         Joints[I].Control.BoneRotation = QuatToRotator(Curl);
@@ -196,4 +205,8 @@ function Advance(VRHandsBridge B, float DeltaTime)
 function quat WristRotation(int Hand, rotator ControllerRotation)
 {
     return QuatProduct(QuatFromRotator(ControllerRotation), WristBasis[Hand]);
+}
+
+defaultproperties
+{
 }

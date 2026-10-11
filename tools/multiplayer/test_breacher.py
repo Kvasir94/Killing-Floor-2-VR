@@ -33,6 +33,10 @@ class BreacherTests(unittest.TestCase):
         locale = self.folder / "Localization/INT/KF2Breacher.int"
         locale.parent.mkdir(parents=True)
         locale.write_text("[BreacherPerk]\nPerkName=Breacher\n")
+        self.args.game_root = self.root / "game"
+        stock = self.args.game_root / "KFGame/Localization/INT/KFGame.int"
+        stock.parent.mkdir(parents=True)
+        stock.write_text("[KFPerk_Support]\nPerkName=Support\nStockArray[0]=Preserved\n", encoding="utf-16")
 
     def test_disabled_does_not_need_or_expose_optional_content(self):
         args = SimpleNamespace(breacher=False)
@@ -127,6 +131,37 @@ class BreacherTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             breacher.add_mutator("KF-Outpost?Mutator=A?mutator=B", self.args)
 
+    def test_development_perk_level_switches_and_mutator_config(self):
+        args = friends.parse_options(["--solo", "--breacher-level", "25", "--breacher-skills", "12121"])
+        self.assertTrue(args.breacher)
+        self.assertEqual((args.breacher_level, args.breacher_skills), (25, "12121"))
+        self.assertTrue(friends.parse_options(["--host", "--breacher-level", "5"]).breacher)
+        for argv in (["--solo", "--breacher-level", "26"], ["--solo", "--breacher-level", "0"],
+                     ["--solo", "--breacher-level", "5", "--breacher-skills", "123"],
+                     ["--solo", "--breacher-skills", "11111"],
+                     ["--solo", "--no-breacher", "--breacher-level", "5"],
+                     ["--breacher-level", "5"]):
+            with self.assertRaises(SystemExit):
+                friends.parse_options(argv)
+        saved = friends.parse_options(["--solo"])
+        self.assertIsNone(saved.breacher_level)
+        configs = self.root / "configs"
+        configs.mkdir()
+        path = configs / "KFGame.ini"
+        path.write_text("[Engine.GameInfo]\nValue=preserved\n", encoding="utf-16")
+        breacher.configure_dev_level(configs, SimpleNamespace(breacher=True, breacher_level=25, breacher_skills="12121"))
+        text = path.read_text(encoding="utf-16")
+        self.assertIn("[KF2Breacher.BreacherMutator]", text)
+        self.assertIn("DevPerkLevel=25", text)
+        self.assertIn("DevSkills=12121", text)
+        self.assertIn("Value=preserved", text)
+        breacher.configure_dev_level(configs, SimpleNamespace(breacher=True, breacher_level=None, breacher_skills=None))
+        text = path.read_text(encoding="utf-16")
+        self.assertIn("DevPerkLevel=0", text)
+        self.assertNotIn("DevPerkLevel=25", text)
+        breacher.configure_dev_level(configs, SimpleNamespace(breacher=False, breacher_level=25, breacher_skills="12121"))
+        self.assertIn("DevPerkLevel=0", path.read_text(encoding="utf-16"))
+
     def test_role_content_paths_are_idempotent_and_leave_existing_content(self):
         breacher.prepare(self.args, self.root, self.release)
         configs = self.root / "configs"
@@ -147,6 +182,50 @@ class BreacherTests(unittest.TestCase):
         self.assertNotIn(str(self.folder.resolve()), disabled)
         self.assertIn("Paths=stock", disabled)
         self.assertIn("Value=preserved", disabled)
+        self.assertNotIn("KF2VRBreacherLocalization", disabled)
+
+    def test_native_localization_preserves_stock_and_uses_authored_keys_in_both_languages(self):
+        breacher.prepare(self.args, self.root, self.release)
+        locale = self.folder / "Localization/INT/KF2Breacher.int"
+        locale.write_text('[BreacherPerk]\nPerkName=Breacher\nTempering=Tempering\n'
+                          'TemperingDescription=Stronger rods.\nSkillCatagories[0]=Weapons\n'
+                          'Passives[0]=(Title="Damage",Description="Breacher damage")\n')
+        stock = self.args.game_root / "KFGame/Localization"
+        french = stock / "FRA/KFGame.fra"
+        french.parent.mkdir()
+        french.write_text('[KFPerk_Support]\nPerkName=Soutien amélioré\n[BreacherPerk]\n'
+                          'PerkName=Stale\n', encoding="utf-16")
+        originals = {p: p.read_bytes() for p in stock.rglob('*') if p.is_file()}
+        configs = self.root / 'localized'
+        configs.mkdir()
+        engine = configs / 'KFEngine.ini'
+        engine.write_text('[Engine.Engine]\nLanguage=FRA\n[Core.System]\n'
+                          'LocalizationPaths=stock-locale\n', encoding="utf-16")
+        breacher.configure_content(configs, self.args)
+        generated = configs / 'KF2VRBreacherLocalization'
+        for code in ('INT', 'FRA'):
+            text = read_ini(generated / code / ('KFGame.' + code.lower()))
+            self.assertEqual(text.count('[BreacherPerk]'), 1)
+            self.assertIn('TemperingDescription=Stronger rods.', text)
+            self.assertIn('SkillCatagories[0]=Weapons', text)
+            self.assertIn('Passives[0]=(Title="Damage",Description="Breacher damage")', text)
+        self.assertIn('PerkName=Soutien amélioré', read_ini(generated / 'FRA/KFGame.fra'))
+        self.assertIn('StockArray[0]=Preserved', read_ini(generated / 'INT/KFGame.int'))
+        paths = [line.partition('=')[2] for line in read_ini(engine).splitlines()
+                 if line.startswith('LocalizationPaths=')]
+        self.assertEqual(paths[0], str(generated.resolve()))
+        self.assertEqual(paths[-1], 'stock-locale')
+        self.assertEqual(originals, {p: p.read_bytes() for p in originals})
+
+    def test_native_localization_missing_language_uses_int_and_missing_stock_fails(self):
+        breacher.prepare(self.args, self.root, self.release)
+        configs = self.root / 'localized'
+        folder = breacher.native_localization(configs, self.args.breacher_content,
+                                               '[Engine.Engine]\nLanguage=DEU\n', self.args.game_root)
+        self.assertTrue((folder / 'INT/KFGame.int').is_file())
+        self.assertFalse((folder / 'DEU/KFGame.deu').exists())
+        with self.assertRaisesRegex(RuntimeError, 'installed KFGame'):
+            breacher.native_localization(configs, self.args.breacher_content, '', self.root / 'missing')
 
     def test_optional_packaging_rejects_stale_script_sources(self):
         import shutil

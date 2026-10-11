@@ -1,0 +1,1 @@
+class BreacherChainDamage extends BreacherStoredExplosion abstract hidedropdown;

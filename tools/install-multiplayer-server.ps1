@@ -39,6 +39,8 @@ try {
     Write-Output "Installing dedicated server (Steam app 232130): $ServerRoot"
     Write-Output "Download log: $log"
     $owned = Start-Process -FilePath $steamExe -ArgumentList $arguments -WorkingDirectory $steamRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $log -RedirectStandardError $errors
+    # Open the handle before waiting so Windows PowerShell retains ExitCode.
+    $null = $owned.Handle
     if (-not $owned.WaitForExit($TimeoutSeconds*1000)) { throw 'Dedicated server installation timed out.' }
     $owned.Refresh()
     $record['exit_code'] = $owned.ExitCode
@@ -52,6 +54,7 @@ try {
         $errors = Join-Path $steamRoot "install-$stamp-retry-errors.log"
         $record['log'] = $log; $record['error_log'] = $errors
         $owned = Start-Process -FilePath $steamExe -ArgumentList $arguments -WorkingDirectory $steamRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $log -RedirectStandardError $errors
+        $null = $owned.Handle
         if (-not $owned.WaitForExit($TimeoutSeconds*1000)) { throw 'Dedicated server installation retry timed out.' }
         $owned.Refresh()
         $record['exit_code'] = $owned.ExitCode

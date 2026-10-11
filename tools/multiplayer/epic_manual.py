@@ -83,6 +83,8 @@ def validate_options(args):
         return
     if not args.solo or not args.vr or args.host or args.address:
         raise RuntimeError('Epic currently supports menu-first Solo VR only. Epic Host, Join and Desktop are unverified and unavailable.')
+    if getattr(args, 'single_pass', False):
+        raise RuntimeError('Single-pass stereo is Steam-only. Turn it OFF for Epic Solo VR.')
     if args.record_motion or args.promo_events:
         raise RuntimeError('Epic motion recording and highlight logging are unavailable in this alpha. Turn both OFF; Steam supports them.')
     if args.local_test_control or args.replay_teammate or args.avatar_preview or args.locomotion_preview or args.duration:
@@ -111,6 +113,8 @@ def configure_menu_first(role, args):
 def run_session(args, manifest, install):
     friends.load_preferences(args)
     validate_options(args)
+    if not args.recover_epic:
+        friends.validate_dlss_package(args, manifest)
     if not args.recover_epic:
         resolve_target(install)
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -183,7 +187,8 @@ def run_session(args, manifest, install):
             save(output, record)
         broker = EpicBroker(ticket, Path(role['log']).parent, on_claim=claim,
                             eye_percent=role['eye_render_percent'], dlss=role.get('dlss', 'off'),
-                            dlss_sharpness=role.get('dlss_sharpness', 0), hide_bile_lens=role.get('hide_bile_lens', True))
+                            dlss_sharpness=role.get('dlss_sharpness', 0), hide_bile_lens=role.get('hide_bile_lens', True),
+                            hide_blood_lens=role.get('hide_blood_lens', True))
         plan = prepare_session('', role['args'], broker)
         option_path = run/'Launch Options.txt'
         option_path.write_text(plan.prepared, encoding='utf-8')

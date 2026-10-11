@@ -1,8 +1,9 @@
 """Offline authored grenade grips on the existing floating-hand skeleton.
 
 Run inside the existing Blender MCP (runpy, then inspect()) or Blender CPU.
-Reads original PSK and cooked surfaces; writes only an isolated ignored build
-folder. These fixed authoring angles become runtime local quaternion tables.
+Reads original PSK and cooked surfaces; saves reviews to an isolated ignored
+build folder. --editable-profile saves the original rig, weights and keyed
+pose; --emit-runtime exports its fixed bone-local quaternions to script.
 No runtime contact solver, asset mutation, gameplay or installation.
 """
 import json, math, runpy
@@ -13,7 +14,9 @@ from mathutils.bvhtree import BVHTree
 DIGITS = ('Thumb', 'Index', 'Middle', 'Ring', 'Pinky')
 # Fifteen authored flexion angles followed by thumb opposition, in degrees.
 PROFILES = {
-    'Compact': [[35,-30,-20],[-10,70,0],[-15,55,0],[-20,45,0],[-30,40,-5],35],
+    # HE/frag: spread closure over the joints rather than a sharp middle-joint
+    # hook; retain the stock relaxed bind pose and existing held-body placement.
+    'Compact': [[20,-20,-10],[-5,45,15],[-5,40,15],[-10,35,10],[-20,30,5],20],
     'Canister': [[35,-30,-20],[-10,75,0],[-10,55,0],[-20,50,0],[-30,50,-5],35],
     'Wide': [[75,-30,-20],[-5,5,-5],[-5,5,-5],[-20,15,-10],[-35,20,-15],20],
     'Stick': [[15,-30,-20],[0,70,0],[0,65,0],[-5,65,0],[-15,65,0],45],
@@ -73,7 +76,7 @@ def hand(ctx, side, values):
     if frame.determinant()<0:tris=[t[::-1] for t in tris]
     groups={f:[i for i in range(len(points)) if sum(weights[i].get(finger(f,j),0) for j in range(1,4))>.8] for f in DIGITS}
     tips={f:[i for i in groups[f] if weights[i].get(finger(f,3),0)>.8] for f in DIGITS}
-    return dict(vertices=skin,triangles=tris,groups=groups,tips=tips,Y=frame@(T.cross(F)),deltas=[deltas[finger(f,j)] for f in DIGITS for j in range(1,4)],joints={names[i]:list(frame@(pp[i]-p0[wrist])) for i in deltas})
+    return dict(vertices=skin,triangles=tris,groups=groups,tips=tips,Y=frame@(T.cross(F)),frame=frame,deltas=[deltas[finger(f,j)] for f in DIGITS for j in range(1,4)],joints={names[i]:list(frame@(pp[i]-p0[wrist])) for i in deltas})
 
 def grenade(mesh, h, offset):
     scale=5.699153/13.671265 if mesh['label']=='EMP' else 1
@@ -131,7 +134,97 @@ def inspect(root, hand_path, output, *, build_scene=False, emit_runtime=False):
 
 
 
-def emit_runtime(root, ctx):
+def editable_scene(ctx, output, profile='Compact'):
+    """Keep the original bind hierarchy and skin weights in an editable Blender pose.
+
+    The posed bones use the same bone-local rotations exported to UE3. Display
+    transforms place each anatomical hand in the review frame only; no edited
+    mesh, wrist transform or negative scale is exported to the game.
+    """
+    import bpy
+    bones,names,points,wedges,faces,weights,p0,q0=(ctx[k] for k in ('bones','names','points','wedges','faces','weights','p0','q0'))
+    output=Path(output)
+    meshes=json.loads((output/'meshes.json').read_text())
+    scene=bpy.data.scenes.new('Editable '+profile+' grenade grip')
+    previous=bpy.context.window.scene
+    bpy.context.window.scene=scene
+    exported={}
+    try:
+        for side in ('Left','Right'):
+            h=hand(ctx,side,PROFILES[profile])
+            wrist=names.index(side+'Hand_1stP')
+            members=ctx['g']['descendants'](bones,wrist)
+            rig=bpy.data.objects.new(side+' original hand rig',bpy.data.armatures.new(side+' original bind skeleton'))
+            scene.collection.objects.link(rig)
+            bpy.context.view_layer.objects.active=rig
+            rig.select_set(True)
+            bpy.ops.object.mode_set(mode='EDIT')
+            for i,b in enumerate(bones):
+                eb=rig.data.edit_bones.new(names[i])
+                if i: eb.parent=rig.data.edit_bones[names[b[3]]]
+                eb.use_connect=False
+                eb.head=p0[i]
+                eb.tail=p0[i]+q0[i]@Vector((0,1,0))
+                eb.align_roll(q0[i]@Vector((0,0,1)))
+            bpy.ops.object.mode_set(mode='OBJECT')
+            rig.show_in_front=True
+            frame=h['frame'].to_4x4()
+            frame.translation=-(h['frame']@p0[wrist])+Vector((0,25 if side=='Right' else 0,0))
+            rig.matrix_world=frame
+            # PSK triangles are clockwise. Keep the raw bind coordinates and
+            # original vertex groups, letting the armature perform all skinning.
+            tris=[[wedges[w][0] for w in reversed(face[:3])] for face in faces
+                  if max(weights[wedges[face[0]][0]],key=weights[wedges[face[0]][0]].get) in members]
+            me=bpy.data.meshes.new(side+' unchanged hand skin')
+            me.from_pydata(points,[],tris);me.update()
+            ob=bpy.data.objects.new(me.name,me);scene.collection.objects.link(ob)
+            ob.matrix_world=frame
+            groups=[ob.vertex_groups.new(name=n) for n in names]
+            for i,skin in enumerate(weights):
+                for bone,weight in skin.items():groups[bone].add([i],weight,'REPLACE')
+            mod=ob.modifiers.new('Original hand weights','ARMATURE');mod.object=rig
+            for poly in me.polygons:poly.use_smooth=True
+            material=bpy.data.materials.new(side+' review skin');material.diffuse_color=(.42,.3,.22,1)
+            me.materials.append(material)
+            rig.animation_data_create()
+            rig.animation_data.action=bpy.data.actions.new('Grenade_'+profile+'_'+side)
+            for bone,q in zip((side+'Hand'+digit+str(j)+'_1stP' for digit in DIGITS for j in range(1,4)),h['deltas']):
+                pb=rig.pose.bones[bone];pb.rotation_mode='QUATERNION';pb.rotation_quaternion=q
+                pb.keyframe_insert('rotation_quaternion',frame=1,group=bone)
+            exported[(profile,side)]=[rig.pose.bones[side+'Hand'+digit+str(j)+'_1stP'].rotation_quaternion.copy()
+                                     for digit in DIGITS for j in range(1,4)]
+            # An editable review must show the exact deformation exported to
+            # the game, including the original bone rolls and skin weights.
+            bpy.context.view_layer.update()
+            evaluated=ob.evaluated_get(bpy.context.evaluated_depsgraph_get())
+            evaluated_mesh=evaluated.to_mesh()
+            shift=Vector((0,25 if side=='Right' else 0,0))
+            error=max(((ob.matrix_world@evaluated_mesh.vertices[i].co)-(h['vertices'][i]+shift)).length
+                      for i,skin in enumerate(weights) if max(skin,key=skin.get) in members)
+            evaluated.to_mesh_clear()
+            if error>.001:raise ValueError(side+' editable rig differs from exported grip skin')
+            scene[side+'_skinning_error_uu']=error
+            for mesh in meshes:
+                if SHAPES[mesh['label']][0]!=profile:continue
+                # Keep both stock compact bodies available; HE is shown first.
+                v,t=grenade(mesh,h,SHAPES[mesh['label']][1])
+                gm=bpy.data.meshes.new(side+' '+mesh['label']+' stock body');gm.from_pydata(v,[],t);gm.update()
+                go=bpy.data.objects.new(gm.name,gm);scene.collection.objects.link(go)
+                go.location=(0,25 if side=='Right' else 0,0)
+                go.hide_render=mesh['label']!='HE';go.hide_set(mesh['label']!='HE')
+                mat=bpy.data.materials.new(go.name);mat.diffuse_color=(.12,.32,.14,1);gm.materials.append(mat)
+            rig.select_set(False)
+        scene.frame_set(1)
+        scene['runtime_rotation_space']='Additive bone-local, BCS_BoneSpace'
+        scene['held_offsets_changed']=False
+        scene['profile_recipe']=json.dumps(PROFILES[profile])
+        bpy.ops.wm.save_as_mainfile(filepath=str(output/(profile+'-editable.blend')))
+    finally:
+        bpy.context.window.scene=previous
+    return exported
+
+
+def emit_runtime(root, ctx, authored=None):
     """Export the reviewed local rotations; no geometry-dependent runtime code."""
     names=list(PROFILES)
     # Keep one table per actual grip family, including both anatomical hands.
@@ -162,7 +255,7 @@ def emit_runtime(root, ctx):
         text.append('    // '+profile)
         for side in ('Left','Right'):
             h=hand(ctx,side,PROFILES[profile])
-            for q in h['deltas']:
+            for q in (authored or {}).get((profile,side),h['deltas']):
                 assert abs(q.magnitude-1)<.00001
                 text.append('    Rotations(%d)=(X=%.9f,Y=%.9f,Z=%.9f,W=%.9f)'%(index,q.x,q.y,q.z,q.w));index+=1
     text+=['}','']
@@ -201,7 +294,9 @@ if __name__=='__main__':
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--scene',action='store_true')
     p.add_argument('--emit-runtime',action='store_true')
+    p.add_argument('--editable-profile',choices=tuple(PROFILES))
     argv=sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else sys.argv[1:]
     args=p.parse_args(argv);root=Path(__file__).resolve().parents[1]
     ctx,_=inspect(root,args.hand,args.output,build_scene=args.scene)
-    if args.emit_runtime:print('Exported',emit_runtime(root,ctx),'fixed local quaternions')
+    authored=editable_scene(ctx,args.output,args.editable_profile) if args.editable_profile else None
+    if args.emit_runtime:print('Exported',emit_runtime(root,ctx,authored),'fixed local quaternions')

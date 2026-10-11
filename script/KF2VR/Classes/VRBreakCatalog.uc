@@ -39,9 +39,24 @@ struct BreakProfile
 };
 var array<BreakProfile> Profiles;
 
+// A split pair keeps the single gun's rig and physical action. Restrict the
+// inheritance lookup to our paired members; other variants remain exact.
+static function class<KFWeapon> ProfileClass(class<KFWeapon> W)
+{
+    local int I, Best;
+    if (W == None || !(Left(string(W.Name), 13) ~= "VRWeap_Paired")) return W;
+    Best = -1;
+    for (I = 0; I < default.Profiles.Length; ++I)
+        if (default.Profiles[I].WeaponClass != None && ClassIsChildOf(W, default.Profiles[I].WeaponClass)
+            && (Best < 0 || ClassIsChildOf(default.Profiles[I].WeaponClass, default.Profiles[Best].WeaponClass)))
+            Best = I;
+    return Best >= 0 ? default.Profiles[Best].WeaponClass : W;
+}
+
 static function int FindClass(class<KFWeapon> W)
 {
     local int I;
+    W = ProfileClass(W);
     for (I = 0; I < default.Profiles.Length; ++I)
         if (default.Profiles[I].WeaponClass == W) return I;
     return -1;
@@ -54,10 +69,13 @@ static function bool Covers(KFWeapon W)
 
 static function bool CylinderReload(KFWeapon W)
 {
-    return W != None && (W.Class == class'KFWeap_Revolver_Rem1858'
-        || W.Class == class'KFWeap_Revolver_SW500' || W.Class == class'KFWeap_Pistol_ChiappaRhino'
-        || W.Class == class'KFWeap_HRG_Revolver_Buckshot' || W.Class == class'KFWeap_Pistol_Flare'
-        || W.Class == class'KFWeap_Pistol_HRGWinterbite');
+    local class<KFWeapon> C;
+    if (W == None) return false;
+    C = ProfileClass(W.Class);
+    return C == class'KFWeap_Revolver_Rem1858'
+        || C == class'KFWeap_Revolver_SW500' || C == class'KFWeap_Pistol_ChiappaRhino'
+        || C == class'KFWeap_HRG_Revolver_Buckshot' || C == class'KFWeap_Pistol_Flare'
+        || C == class'KFWeap_Pistol_HRGWinterbite';
 }
 
 static function name ShellBone(class<KFWeapon> W, int Slot)

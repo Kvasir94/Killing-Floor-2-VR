@@ -17,6 +17,16 @@ struct VRDualHandState
     var bool bSelectorTriggerArmed;
     var bool bSelectorConfirmPending;
     var bool bAxisArmed, bVerticalArmed, bSecondaryAction;
+    // A deliberate Deadbolt reload tap during shot recovery survives the
+    // normal one-frame stock pulse, tied to this exact actor and ownership.
+    var KFWeapon AuthoredReloadWeapon;
+    var int AuthoredReloadOwnership;
+    var float AuthoredReloadDeadline;
+    var VRWeaponRuntime StockReloadRuntime;
+    var KFWeapon StockReloadWeapon, StockReloadFinishedWeapon;
+    var int StockReloadOwnership, StockReloadRequest, StockReloadSession, StockReloadCalibration;
+    var float StockReloadDeadline;
+    var bool bStockReloadStarted, bStockReloadInteractive;
 };
 
 var VRHandInventory Inventory;
@@ -44,10 +54,15 @@ var VRDoshWallet Wallet;
 var VRDeployableHold Deployables;
 var VRDoorWelding Welding;
 var VRInteractiveReload Reloads;
+var VRArcFenceInput ArcFence;
 var int NativeFocusRequested;
 var float SprintResumeTime;
+var float NextFireDiagTime[2];
 // Raw turn-stick deflection that counts as the outer rim for a jump.
 const JumpRimMagnitude = 0.95;
+// Forty degrees to either side of up owns jump, including the approach to
+// the rim. Use the same boundary for turn exclusion and jump admission.
+const JumpUpSlope = 0.839100;
 
 // A tap waits briefly before it swaps, so a second tap can deliberately open
 // the hand instead of swapping once and then immediately stowing the result.
@@ -78,7 +93,8 @@ function bool HandCarrying(int Hand)
 }
 
 // A hand beside the head, not in front of the face, so a pistol raised to the
-// eye never counts. Y/B pressed here is the head lamp, for any weapon.
+// eye never counts. Y/B pressed here is the head lamp, for any weapon; an
+// empty hand can also squeeze its grip here without taking another item.
 function bool HandAtTemple(int Hand)
 {
     local vector Offset, X, Y, Z;
@@ -161,6 +177,58 @@ function bool OpenHand(int Hand)
     return Accepted;
 }
 
+// The turn-stick click opens the movement hand's latched wheel.
+function OpenSelector(int Hand)
+{
+    if ((Bridge.NativeValidMask & (1 << Hand)) == 0 || Inventory.HasWorldGrab(Hand)
+        || (Reloads != None && Reloads.OwnsHand(Hand))) return;
+    InputState[Hand].bUpperTapPending = false;
+    Inventory.CancelTransfer();
+    StopWeapon(Hand);
+    Bridge.Hands[Hand].bTriggerArmed = false;
+    InputState[Hand].bSelectorOpen = true;
+    InputState[Hand].bSelectorTriggerArmed = false;
+    InputState[Hand].bSelectorConfirmPending = false;
+    InputState[Hand].bSelectorInitAttempted = false;
+    EnsureSelectors();
+    if (Selectors[Hand] != None) Selectors[Hand].OpenSelection();
+    Bridge.NativeSelectorCapture = Bridge.NativeSelectorCapture | (1 << Hand);
+    NativeFocusRequested = 1;
+    ModeFeedback(Hand, true);
+}
+
+function CloseSelector(int Hand)
+{
+    InputState[Hand].bSelectorOpen = false;
+    InputState[Hand].bSelectorTriggerArmed = false;
+    InputState[Hand].bSelectorConfirmPending = false;
+    Bridge.Hands[Hand].bTriggerArmed = false;
+}
+
+// A real trigger edge reports existing fire gates, at most twice per second.
+function LogBlockedTrigger(int Hand, VRWeaponRuntime R, KFWeapon W, bool bEdge)
+{
+    local bool bReady, bArmed, bReload, bState;
+    if (!bEdge || W == None || W.bDeleteMe || W.IsA('KFWeap_MeleeBase')
+        || Bridge.WorldInfo.RealTimeSeconds < NextFireDiagTime[Hand]) return;
+    bReady = R != None && R.Presenter != None && R.Presenter.bCalibrated && R.Presenter.NativeWeaponReady != 0;
+    bArmed = Bridge.Hands[Hand].bTriggerArmed;
+    bReload = Reloads != None && Reloads.BlocksFire(W);
+    bState = W.IsInState('Active') || W.IsInState('WeaponFiring') || W.IsInState('WeaponSingleFiring')
+        || W.IsInState('WeaponBurstFiring') || W.IsInState('Reloading');
+    if (bReady && bArmed && !bReload && bState && W.AmmoCount[0] > 0) return;
+    NextFireDiagTime[Hand] = Bridge.WorldInfo.RealTimeSeconds + 0.5;
+    `log("KF2VR_FIRE_BLOCKED hand=" $ Hand @ "weapon=" $ W.Class @ "state=" $ W.GetStateName()
+        @ "ammo=" $ W.AmmoCount[0] @ "primary=" $ (R != None)
+        @ "calibrated=" $ (R != None && R.Presenter != None && R.Presenter.bCalibrated)
+        @ "ready=" $ ((R != None && R.Presenter != None) ? R.Presenter.NativeWeaponReady : -1)
+        @ "armed=" $ bArmed @ "reload_blocks=" $ bReload
+        @ "hip=" $ (Reloads != None && Reloads.DualCylinderOwns(W))
+        @ "break=" $ (Reloads != None && Reloads.BreakAction != None && Reloads.BreakAction.Gun == W)
+        @ "pump=" $ (Reloads != None && Reloads.Pump != None && Reloads.Pump.Gun == W)
+        @ "reload_active=" $ (Reloads != None && Reloads.bActive && Reloads.Gun == W));
+}
+
 function bool IsSelectorOpen(int Hand)
 {
     return Hand >= 0 && Hand < 2 && InputState[Hand].bSelectorOpen;
@@ -235,6 +303,9 @@ function StopWeapon(int Hand)
 {
     local KFWeapon W;
     local VRWeaponRuntime R;
+    ClearStockPairedReload(Hand, true);
+    InputState[Hand].AuthoredReloadWeapon = None;
+    InputState[Hand].AuthoredReloadDeadline = 0;
     W = LastWeapon[Hand];
     if (W != None && !W.bDeleteMe && Inventory != None && Inventory.Registry != None
         && Inventory.Registry.IsOwned(W))
@@ -322,6 +393,22 @@ function bool BodySlotNearer(int Hand, vector Other, optional float OtherReach)
     return PrefersTarget(Hand, Slots.Positions[Slots.Hover[Hand]], Slots.SlotRadius, Other, OtherReach);
 }
 
+// Reload reach may overlap a configured body contact. Compare only contacts
+// that the hand actually reaches, using the same AS2 choice as body holsters.
+function bool BodyContactPreferred(int Hand, vector Other, float OtherReach)
+{
+    local vector P;
+    P = Bridge.PalmPosition(Hand);
+    if (BodySlotNearer(Hand, Other, OtherReach)) return true;
+    if (Pouch != None && Pouch.Eligible(Hand)
+        && VSize(P - Pouch.PouchPosition()) <= Pouch.GrabRadius()
+        && PrefersTarget(Hand, Pouch.PouchPosition(), Pouch.GrabRadius(), Other, OtherReach)) return true;
+    if (Wallet != None && VSize(P - Wallet.PocketPosition(Hand)) <= Wallet.PocketRadius
+        && PrefersTarget(Hand, Wallet.PocketPosition(Hand), Wallet.PocketRadius, Other, OtherReach)) return true;
+    return Grenade != None && Grenade.Retrievable(Hand) && Grenade.InGrabZone(Hand)
+        && PrefersTarget(Hand, Grenade.SlotGrabPosition(), Grenade.ChestGrabRadius(), Other, OtherReach);
+}
+
 function bool TryBodyAnchor(int Hand)
 {
     local VRBodySlots Slots;
@@ -383,6 +470,7 @@ function CancelHand(int Hand)
 // sample returns; toggle-grip items stay owned until a deliberate new press.
 function Cancel()
 {
+    if (ArcFence != None) ArcFence.Cancel();
     if (bInteracting && Bridge != None && Bridge.PC != None && KFPlayerInput(Bridge.PC.PlayerInput) != None)
         Bridge.WorldInfo.TimerHelper.ClearTimer('InteractTimer', Bridge.PC.PlayerInput);
     bInteracting = false;
@@ -392,7 +480,7 @@ function Cancel()
     EndSprint();
     if (Welding != None) Welding.Cancel();
     NativeFocusRequested = 0;
-    if (Teleport != None) Teleport.Cancel();
+    if (Teleport != None) Teleport.CancelTransaction();
     if (PhysicalCrouch != None) PhysicalCrouch.Cancel(Bridge);
     // Context loss returns before the equipment helpers' next update. Hide
     // their presentation here so an old tracked pose cannot remain in view.
@@ -452,6 +540,9 @@ function Update(float DeltaTime)
     // Ahead of the hands: a reload that takes the off hand this frame must own
     // it before UpdateHand reads its trigger as a use press.
     Reloads.Update(InputDelta);
+    UpdateStockPairedReloads();
+    if (ArcFence == None) ArcFence = new(self) class'VRArcFenceInput';
+    ArcFence.Update(self, InputDelta);
     UpdateLocomotion(InputDelta);
     // Selector gestures follow real time, including during KF2 Zed Time.
     for (Hand = 0; Hand < 2; ++Hand) UpdateHand(Hand, InputDelta);
@@ -478,15 +569,18 @@ function UpdateLocomotion(float RealDelta)
     // throughout an aim, so a destination and an arrival facing stay separate
     // choices made with separate thumbs.
     bTeleportMode = Bridge.LocomotionMode == 1 && Teleport != None;
-    // Start neutral each frame. A selector consumes only the stick that owns
-    // it; the other hand keeps its ordinary move/turn role.
+    // This caller stops updating the teleport helper in smooth mode, so clear
+    // its transaction here rather than waiting for the helper's mode gate.
+    if (!bTeleportMode && Teleport != None) Teleport.CancelTransaction();
+    // Start neutral each frame. A turn-hand selector consumes its stick;
+    // the movement stick can walk while its hand points at the wheel.
     Bridge.NativeMoveX = 0;
     Bridge.NativeMoveY = 0;
     Bridge.NativeTurnX = 0;
     for (Hand = 0; Hand < 2; ++Hand)
     {
         Bit = 1 << Hand;
-        if (IsSelectorOpen(Hand))
+        if (IsSelectorOpen(Hand) && Hand != MoveHand)
         {
             // Releasing a latched selector with its stick still displaced
             // must not turn into a movement or turn edge.
@@ -535,10 +629,9 @@ function UpdateLocomotion(float RealDelta)
             Bridge.NativeTurnX = 0;
             if (InputState[Hand].bAxisArmed)
             {
-                // Reserve a narrow +/-10 degree cone around straight up for
-                // jump, including the push toward the rim. Keep turn neutral
-                // there without enlarging the centre deadzone.
-                if (Y <= 0 || Abs(X) > Y * 0.176327)
+                // The entire upward jump sector owns the approach and rim
+                // push, so lateral thumb drift cannot also rotate the player.
+                if (Y <= 0 || Abs(X) > Y * JumpUpSlope)
                 {
                     if (bSmoothTurn)
                     {
@@ -557,7 +650,8 @@ function UpdateLocomotion(float RealDelta)
                 // ordinary play. Down toggles a crouch for seated players; up
                 // stands from it before it jumps.
                 if (InputState[Hand].bVerticalArmed && Magnitude >= JumpRimMagnitude
-                    && Abs(Y) >= Magnitude * 0.85 && Abs(Y) > Abs(X))
+                    && ((Y > 0 && Abs(X) <= Y * JumpUpSlope)
+                        || (Y < 0 && Abs(Y) >= Magnitude * 0.85 && Abs(Y) > Abs(X))))
                 {
                     if (Y < 0) { if (Bridge.bStickCrouch) PhysicalCrouch.ToggleButtonCrouch(Bridge); }
                     else if (PhysicalCrouch.bButtonCrouch) PhysicalCrouch.StandUp(Bridge);
@@ -567,21 +661,27 @@ function UpdateLocomotion(float RealDelta)
             }
         }
     }
-    // The non-movement click offers the welder. The movement click belongs to
-    // sprint/cancel in either handedness; it cannot also equip a tool.
+    // The turn click offers the welder at a door; elsewhere it toggles the
+    // movement hand's wheel. The movement click still owns sprint/cancel.
     Hand = 1 - MoveHand;
     Bit = 1 << Hand;
     if ((Bridge.NativeValidMask & Bridge.NativeStickClickActiveMask & Bridge.NativeStickClickMask & Bit) != 0
-        && !InputState[Hand].bStickWasDown && InputState[Hand].bStickArmed
-        && !IsSelectorOpen(0) && !IsSelectorOpen(1)) Welding.StickClick();
+        && !InputState[Hand].bStickWasDown && InputState[Hand].bStickArmed)
+    {
+        if (IsSelectorOpen(MoveHand)) CloseSelector(MoveHand);
+        else if (!IsSelectorOpen(0) && !IsSelectorOpen(1))
+        {
+            if (Welding != None && Welding.WantsStickClick()) Welding.StickClick();
+            else OpenSelector(MoveHand);
+        }
+    }
     if (bTeleportMode)
     {
         // VRTeleportLocomotion reads the movement stick directly. Do not let a
         // latched wheel on that hand preview, buffer or commit a teleport.
         if (IsSelectorOpen(MoveHand))
         {
-            Teleport.ClearBuffer();
-            if (Teleport.Phase == 0) Teleport.Cancel();
+            Teleport.CancelTransaction();
             return;
         }
         Teleport.Update(RealDelta);
@@ -866,6 +966,27 @@ function UpdateHand(int Hand, float DeltaTime)
     }
     if (Lower && InputState[Hand].bLowerWasDown) LowerTime[Hand] += DeltaTime;
     GripEdge = Grip && !InputState[Hand].bGripWasDown && Bridge.Hands[Hand].bGripArmed;
+    if (ArcFence != None && ArcFence.Handle(self, Hand, Lower, TriggerEdge, GripEdge))
+    {
+        StopWeapon(Hand);
+        InputState[Hand].bGripWasDown = Grip;
+        InputState[Hand].bLowerWasDown = Lower;
+        return;
+    }
+    // The temple gesture owns only a fresh squeeze of a genuinely free hand.
+    // Reload and world holds returned above; body contacts and transfers keep
+    // their existing priority. Spend the edge until a real grip release.
+    if (GripEdge && !HadSelector && Inventory.Registry.GetPrimary(Hand) == None
+        && Inventory.Registry.GetSupport(Hand) == None && !Inventory.HasGauntletHand(Hand)
+        && !Inventory.IsTransferPending(Hand) && !HandCarrying(Hand)
+        && (Deployables == None || !Deployables.IsHeld(Hand))
+        && !InBodyZone(Hand) && HandAtTemple(Hand))
+    {
+        Bridge.Human.ToggleEquipment();
+        ModeFeedback(Hand, true);
+        Bridge.Hands[Hand].bGripArmed = false;
+        GripEdge = false;
+    }
     // A fresh squeeze decides the world grab once, before the generic weapon,
     // body-slot and chest-grenade fallbacks below -- unless the hand is in one
     // of the player's own body zones, where the zone wins.
@@ -943,6 +1064,7 @@ function UpdateHand(int Hand, float DeltaTime)
     if (R == None) R = Inventory.Registry.GetSupport(Hand);
     R = Inventory.Registry.GetPrimary(Hand);
     W = LastWeapon[Hand];
+    LogBlockedTrigger(Hand, R, W, TriggerEdge);
     if (R == None || W == None || R.Presenter == None
         || !R.Presenter.bCalibrated || R.Presenter.NativeWeaponReady == 0)
     {
@@ -964,7 +1086,7 @@ function UpdateHand(int Hand, float DeltaTime)
         // The default Brawlers trigger is the ammo-consuming shotgun sequence.
         // Untriggered punches still use their physical contacts.
         && KFWeap_HRG_BlastBrawlers(W) == None;
-    EffectiveTrigger = Trigger && Bridge.Hands[Hand].bTriggerArmed;
+    EffectiveTrigger = Trigger && Bridge.Hands[Hand].bTriggerArmed && InputState[Hand].StockReloadWeapon == None;
     if (Lower && InputState[Hand].bLowerArmed && !InputState[Hand].bLowerConsumed
         && LowerTime[Hand] >= 0.25)
     {
@@ -993,6 +1115,8 @@ function UpdateHand(int Hand, float DeltaTime)
             InputState[Hand].bSecondaryAction = true;
             if (Reloads != None && Reloads.BlocksFire(W, true))
             { FireMode[Hand] = -1; Reloads.Pulse(1 << Hand, 0.08, 0.01); }
+            else if (Reloads != None && Reloads.Vampire != None
+                && Reloads.Vampire.TryEmptyFire(W, FireMode[Hand])) FireMode[Hand] = -1;
             else if (VRTrackedWeapon(W) == None) R.StartAction(byte(FireMode[Hand]));
         }
         if (InputState[Hand].bSecondaryAction)
@@ -1064,10 +1188,16 @@ function UpdateHand(int Hand, float DeltaTime)
         && !InputState[Hand].bLowerConsumed && LowerTime[Hand] < 0.25;
     bReloadWasRunning = Bridge.PC.bRun != 0 && !EffectiveTrigger;
     if ((EffectiveTrigger && !InputState[Hand].bTriggerWasDown) || WantParry) CancelSprint();
+    UpdateAuthoredReload(R, Hand);
     if (VRTrackedWeapon(W) != None) UpdateTrackedItem(R, Hand, EffectiveTrigger, Reload);
-    else if (Reload && (Reloads == None
-        || (!Reloads.TryBreakAction(R, Hand) && !Reloads.TrySlideRelease(R, Hand))))
-    { R.StartAction(2); InputState[Hand].bReloadPulse = true; }
+    else if (Reload && !QueueAuthoredReload(R, Hand) && (Reloads == None
+        || ((Reloads.Vampire == None || !Reloads.Vampire.TryBegin(R, Hand))
+            && !Reloads.TryDualCylinder(R, Hand)
+            && !Reloads.TryBreakAction(R, Hand) && !Reloads.TrySlideRelease(R, Hand))))
+    {
+        if (!TryStockPairedReload(R, Hand))
+        { R.StartAction(2); InputState[Hand].bReloadPulse = true; }
+    }
     if (Reload)
     {
         // Preflight now so a button reload preserves sprint only after the
@@ -1094,6 +1224,144 @@ function UpdateHand(int Hand, float DeltaTime)
     InputState[Hand].bTriggerWasDown = EffectiveTrigger;
     InputState[Hand].bLowerWasDown = Lower;
     Bridge.Hands[Hand].bTrigger = EffectiveTrigger;
+}
+
+// Stock paired fallbacks also use the authority fence: an issued physical
+// transaction must never be bypassed by a later ordinary reload RPC.
+function bool TryStockPairedReload(VRWeaponRuntime R, int Hand)
+{
+    local int Request;
+    local VRWeaponPair Pair;
+    if (R == None || !class'VRInteractiveReload'.static.PairedAuthorityNeeded(R.Item)) return false;
+    if (InputState[Hand].StockReloadWeapon != None) return true;
+    Pair = class'VRWeaponPair'.static.ForMember(R.Item);
+    if (Pair == None || !Pair.IsMember(R.Item) || !ContextValid() || !Bridge.PairedReloadAvailable()
+        || !R.IsCurrent() || R.PrimaryHand != Hand || Inventory.Registry.GetPrimary(Hand) != R
+        || (Bridge.NativeValidMask & Bridge.NativeGripActiveMask & (1 << Hand)) == 0
+        || (Reloads != None && (Reloads.DualCylinderOwns(R.Item) || Reloads.HoldsPose(R.Item)))) return true;
+    Request = Bridge.PairedReloadBegin(R.Item, Hand, true);
+    if (Request <= 0) return true;
+    R.Item.StopFire(0); R.Item.StopFire(1);
+    InputState[Hand].StockReloadRuntime = R;
+    InputState[Hand].StockReloadWeapon = R.Item;
+    InputState[Hand].StockReloadOwnership = R.OwnershipRevision;
+    InputState[Hand].StockReloadRequest = Request;
+    InputState[Hand].StockReloadSession = 0;
+    InputState[Hand].StockReloadCalibration = Bridge.NativeCalibrationEpoch;
+    InputState[Hand].bStockReloadInteractive = Bridge.bInteractiveReloads;
+    InputState[Hand].bStockReloadStarted = false;
+    InputState[Hand].StockReloadDeadline = Bridge.WorldInfo.RealTimeSeconds + 5;
+    return true;
+}
+
+function ClearStockPairedReload(int Hand, bool bCancel)
+{
+    local KFWeapon W;
+    W = InputState[Hand].StockReloadWeapon;
+    if (W != None) InputState[Hand].StockReloadFinishedWeapon = W;
+    if (W != None && bCancel)
+    {
+        if (Bridge != None) Bridge.PairedReloadCancel(W, InputState[Hand].StockReloadRequest, InputState[Hand].StockReloadSession);
+        if (!W.bDeleteMe && W.IsInState('Reloading')) W.AbortReload();
+    }
+    InputState[Hand].StockReloadWeapon = None;
+    InputState[Hand].StockReloadRuntime = None;
+    InputState[Hand].StockReloadRequest = 0;
+    InputState[Hand].StockReloadSession = 0;
+    InputState[Hand].bStockReloadStarted = false;
+    InputState[Hand].StockReloadDeadline = 0;
+}
+
+function UpdateStockPairedReloads()
+{
+    local int Hand, Session, Ammo, Reserve;
+    local byte Status;
+    local KFWeapon W;
+    local VRWeaponRuntime R;
+    for (Hand = 0; Hand < 2; ++Hand)
+    {
+        W = InputState[Hand].StockReloadWeapon;
+        R = InputState[Hand].StockReloadRuntime;
+        if (W != None)
+        {
+            if (W.bDeleteMe || R == None || R.Item != W || !R.IsCurrent() || R.PrimaryHand != Hand
+                || Inventory.Registry.GetPrimary(Hand) != R || R.OwnershipRevision != InputState[Hand].StockReloadOwnership
+                || !ContextValid() || !Bridge.PairedReloadAvailable() || IsSelectorOpen(Hand)
+                || Bridge.NativeCalibrationEpoch != InputState[Hand].StockReloadCalibration
+                || Bridge.bInteractiveReloads != InputState[Hand].bStockReloadInteractive
+                || (Bridge.NativeValidMask & Bridge.NativeGripActiveMask & (1 << Hand)) == 0
+                || Bridge.WorldInfo.RealTimeSeconds >= InputState[Hand].StockReloadDeadline)
+            { ClearStockPairedReload(Hand, true); continue; }
+            Session = 0; Status = 0;
+            if (Bridge.PairedReloadRead(W, InputState[Hand].StockReloadRequest, Session, Status, Ammo, Reserve))
+            {
+                InputState[Hand].StockReloadSession = Session;
+                // Status and weapon ammo replicate independently. Keep the
+                // fire gate until the authoritative magazine has arrived.
+                if ((Status == 2 && W.AmmoCount[0] == Ammo) || Status == 3)
+                { ClearStockPairedReload(Hand, Status == 3); continue; }
+                if (Status == 4 && !InputState[Hand].bStockReloadStarted
+                    && (W.IsInState('Active') || W.IsInState('Reloading')))
+                {
+                    InputState[Hand].bStockReloadStarted = true;
+                    InputState[Hand].StockReloadDeadline = Bridge.WorldInfo.RealTimeSeconds + 50;
+                    // The server already owns stock timers and ammo. This
+                    // pulse starts only the matching local presentation.
+                    if (W.IsInState('Active')) { R.StartAction(2); InputState[Hand].bReloadPulse = true; }
+                }
+            }
+            continue;
+        }
+        // Automatic stock reloads need the same fence when no physical
+        // mechanism owns this member. Never adopt an active physical pose.
+        R = Inventory.Registry.GetPrimary(Hand);
+        if (InputState[Hand].StockReloadFinishedWeapon != None
+            && (InputState[Hand].StockReloadFinishedWeapon.bDeleteMe
+                || !InputState[Hand].StockReloadFinishedWeapon.IsInState('Reloading')))
+            InputState[Hand].StockReloadFinishedWeapon = None;
+        if (R != None && R.IsCurrent() && class'VRInteractiveReload'.static.PairedAuthorityNeeded(R.Item)
+            && R.Item != InputState[Hand].StockReloadFinishedWeapon
+            && class'VRInteractiveReload'.static.MagazineReloading(R.Item)
+            && (Reloads == None || (!Reloads.DualCylinderOwns(R.Item) && !Reloads.HoldsPose(R.Item))))
+            TryStockPairedReload(R, Hand);
+    }
+}
+
+// Deadbolt's authored forge is a button reload in either global setting. A
+// tap during its single-shot interval cannot be a one-frame PendingFire: the
+// ordinary pulse clears that before Active. Retain only explicit intent;
+// stock InitializeReload/PerformReload remain the ammunition authority.
+function bool QueueAuthoredReload(VRWeaponRuntime R, int Hand)
+{
+    if (R == None || R.Item == None || !R.Item.IsA('BreacherDeadbolt')
+        || !R.IsCurrent() || R.PrimaryHand != Hand
+        || !R.Item.IsInState('WeaponSingleFiring') || !R.Item.CanReload()) return false;
+    if (InputState[Hand].AuthoredReloadWeapon != R.Item)
+    {
+        InputState[Hand].AuthoredReloadWeapon = R.Item;
+        InputState[Hand].AuthoredReloadOwnership = R.OwnershipRevision;
+        // World time follows stock's fire timer, including Zed Time.
+        InputState[Hand].AuthoredReloadDeadline = Bridge.WorldInfo.TimeSeconds + 1.5;
+    }
+    return true;
+}
+
+function UpdateAuthoredReload(VRWeaponRuntime R, int Hand)
+{
+    local KFWeapon W;
+    W = InputState[Hand].AuthoredReloadWeapon;
+    if (W == None) return;
+    if (W.bDeleteMe || R == None || R.Item != W || !R.IsCurrent() || R.PrimaryHand != Hand
+        || R.OwnershipRevision != InputState[Hand].AuthoredReloadOwnership
+        || Bridge.WorldInfo.TimeSeconds > InputState[Hand].AuthoredReloadDeadline
+        || (!W.IsInState('Active') && !W.IsInState('WeaponSingleFiring')))
+    { InputState[Hand].AuthoredReloadWeapon = None; return; }
+    if (!W.IsInState('Active')) return;
+    InputState[Hand].AuthoredReloadWeapon = None;
+    if (!W.CanReload()) return;
+    CancelSprint();
+    R.StartAction(class'KFWeapon'.const.RELOAD_FIREMODE);
+    W.StopFire(class'KFWeapon'.const.RELOAD_FIREMODE);
 }
 
 // Legacy tracked tools receive an item-local presentation context and action

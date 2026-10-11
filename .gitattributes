@@ -1,2 +1,3 @@
 # Preserve evidence checksums across Windows/Linux checkouts.
 history/** -text
+tools/multiplayer/linux-desktop.sh text eol=lf

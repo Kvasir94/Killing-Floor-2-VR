@@ -14,6 +14,43 @@ import workshop_loadout
 
 
 class PlayerLauncherTests(unittest.TestCase):
+    def test_host_form_preserves_saved_password_and_blank_requests_public_host(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'settings.json').write_text(json.dumps({'server_name': 'Saved server', 'host_password': 'saved-secret'}))
+            with patch.object(gui, 'ROOT', root), patch.object(workshop_loadout, 'profile_root', return_value=root/'profile'), \
+                    patch.object(gui, 'LOGS', root/'logs'):
+                window = gui.Launcher(art=False)
+                window.withdraw()
+                try:
+                    for vr in (False, True):
+                        window.vr.set(vr)
+                        launched, start = [], []
+                        with patch.object(window, 'need_game', return_value=root/'game'), \
+                                patch('launch_menu.installed_maps', return_value=['KF-Outpost']), \
+                                patch.object(window, 'footer', side_effect=lambda frame, **kw: start.append(kw['start'])), \
+                                patch.object(window, 'run', side_effect=lambda args, title: launched.append(args)):
+                            window.options('host')
+                            def descendants(widget):
+                                for child in widget.winfo_children():
+                                    yield child
+                                    yield from descendants(child)
+                            widgets = list(descendants(window.body))
+                            entries = [w for w in widgets if isinstance(w, gui.ttk.Entry) and not isinstance(w, gui.ttk.Combobox)]
+                            self.assertEqual([e.get() for e in entries], ['Saved server', 'saved-secret'])
+                            start[0]()
+                            args = friends.parse_options(launched[-1])
+                            self.assertEqual((args.server_name, args.password, args.open_server), ('Saved server', 'saved-secret', False))
+                            entries[0].delete(0, 'end'); entries[0].insert(0, 'Our game')
+                            entries[1].delete(0, 'end')
+                            start[0]()
+                            args = friends.parse_options(launched[-1])
+                            self.assertEqual((args.server_name, args.password, args.open_server), ('Our game', None, True))
+                            self.assertFalse(args.workshop_desktop)
+                    self.assertFalse((root/'profile/launcher.json').exists())
+                finally:
+                    window.destroy()
+
     def test_prelaunch_pages_show_progression_and_unavailable_vac_without_saving_it(self):
         for store in ('steam', 'epic'):
             with self.subTest(store=store), tempfile.TemporaryDirectory() as temporary:
@@ -21,6 +58,7 @@ class PlayerLauncherTests(unittest.TestCase):
                 context = gui.parse_context(['--workspace', 'checkout', '--initial-arguments',
                                              json.dumps(['--solo', '--vr', '--store', store])])
                 with patch.object(workshop_loadout, 'profile_root', return_value=root/'profile'), \
+                        patch('vr_config.profile_root', return_value=root/'profile'), \
                         patch.object(gui, 'LOGS', root/'logs'), \
                         patch.object(gui.game_install, 'select_for_launch', side_effect=ValueError('no install')), \
                         patch.object(gui.game_install, 'discover', return_value=[]):
@@ -120,6 +158,91 @@ class PlayerLauncherTests(unittest.TestCase):
                             self.assertIsNone(friends.parse_options(launched[-1]).vr_quality_requested)
                     finally:
                         window.destroy()
+
+    def test_real_settings_default_and_saved_render_scale_round_trip(self):
+        from session import read_ini
+        from vr_config import apply_preferences, values
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = root/'profile'
+            profile.mkdir()
+            path = profile/'KFGame.ini'
+            path.write_text(apply_preferences('[KF2VR.VRHandsBridge]\nCustomGripOffset=(X=1,Y=2,Z=3)\n'), encoding='utf-16')
+            with patch.object(workshop_loadout, 'profile_root', return_value=profile), \
+                    patch('vr_config.profile_root', return_value=profile), \
+                    patch.object(gui, 'ROOT', root), \
+                    patch.object(gui.game_install, 'select_for_launch', side_effect=ValueError('no install')), \
+                    patch.object(gui.game_install, 'discover', return_value=[]):
+                window = gui.Launcher(art=False)
+                window.withdraw()
+                try:
+                    fields, start = {}, []
+                    original_combo = window.combo
+                    def combo(frame, controls, label, labels, selected):
+                        original_combo(frame, controls, label, labels, selected)
+                        fields[label] = controls[label]
+                    with patch.object(window, 'combo', side_effect=combo), \
+                            patch.object(window, 'footer', side_effect=lambda frame, **kw: start.append(kw['start'])):
+                        window.settings()
+                        self.assertEqual(fields['Render scale'][0].get(), '100%')
+                        fields['Render scale'][0].set('75%')
+                        start[0]()
+                    text = read_ini(path)
+                    hands, session = values(text, 'KF2VR.VRHandsBridge'), values(text, 'KF2VR.VRSessionUI')
+                    self.assertEqual(session['EyeRenderPercent'], '75')
+                    self.assertEqual(hands['CustomGripOffset'], '(X=1,Y=2,Z=3)')
+                    self.assertEqual(values(text, 'KF2VRNetClient.KF2VRNetSessionUI')['EyeRenderPercent'], '75')
+                    fields.clear()
+                    with patch.object(window, 'combo', side_effect=combo):
+                        window.settings()
+                    self.assertEqual(fields['Render scale'][0].get(), '75%')
+                    self.assertFalse((profile/'launcher.json').exists())
+                finally:
+                    window.update_idletasks()
+                    window.destroy()
+
+    def test_gui_premium_preset_keeps_development_level_and_respects_breacher_off(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            initial = ['--solo', '--vr', '--store', 'steam', '--breacher-level', '25',
+                       '--breacher-skills', '12121', '--vr-quality', 'quality',
+                       '--eye-render-percent', '100', '--dlss', 'quality',
+                       '--no-threaded-render', '--hbao', '--reflections', '--single-pass']
+            context = gui.parse_context(['--workspace', str(root), '--initial-arguments', json.dumps(initial)])
+            with patch.object(workshop_loadout, 'profile_root', return_value=root/'profile'), \
+                    patch.object(gui, 'LOGS', root/'logs'):
+                window = gui.Launcher(art=False, context=context)
+                window.withdraw()
+                try:
+                    launched, start = [], []
+                    with patch.object(window, 'need_game', return_value=root/'game'), \
+                            patch('launch_menu.installed_solo_maps', return_value=['KF-Outpost']), \
+                            patch.object(window, 'footer', side_effect=lambda frame, **kw: start.append(kw['start'])), \
+                            patch.object(window, 'run', side_effect=lambda args, title: launched.append(
+                                gui.contextual_arguments(args, window.saved, context))):
+                        window.options('solo')
+                        start[0]()
+                        args = friends.parse_options(launched[-1])
+                        self.assertEqual((args.breacher_level, args.breacher_skills), (25, '12121'))
+                        self.assertEqual((args.vr_quality, args.eye_render_percent, args.dlss), ('quality', 100, 'quality'))
+                        self.assertFalse(args.threaded_render)
+                        self.assertTrue(args.hbao and args.reflections and args.single_pass)
+                        def children(widget):
+                            for child in widget.winfo_children():
+                                yield child
+                                yield from children(child)
+                        toggle = next(w for w in children(window.body) if isinstance(w, gui.ttk.Checkbutton)
+                                      and w.cget('text').startswith('Breacher'))
+                        toggle.invoke()
+                        start[0]()
+                        args = friends.parse_options(launched[-1])
+                        self.assertFalse(args.breacher)
+                        self.assertIsNone(args.breacher_level)
+                    joined = gui.contextual_arguments(['--vr', '--address', 'host.example'], window.saved, context)
+                    self.assertNotIn('--breacher-level', joined)
+                    self.assertFalse((root/'profile'/'launcher.json').exists())
+                finally:
+                    window.destroy()
 
     def test_long_page_scrolls_with_footer_outside_content(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,7 +1,7 @@
 // Session-owned camera anchor: stock cinematics must never move the VR viewer.
 //
-// Living: boss intros retain the player's first-person view and freely tracked
-// head. The player's Dead state and victory camera hold the last living eye,
+// Living: boss intros use a fixed, blinked vantage with freely tracked head
+// look. Dead and victory hold the last living eye,
 // with headset look still applied through the controller rotation.
 //
 // Spectating (after the stock 5 s dead timer until respawn): stock KF2 uses a
@@ -36,6 +36,15 @@ var float SpectateAnchorTime, SpectateLosLostSince, BlinkStartTime;
 var bool bLosLost, bNextHeld, bPrevHeld;
 
 var float SpectateBehind, SpectateAbove, SpectateRelocateDistance, SpectateLosGrace, SpectateMinInterval;
+var Pawn BossTarget, BossHuman;
+var KFPlayerController BossPC;
+var VRHandsBridge BossHands;
+var vector BossVantage;
+var float BossStart, BossDistance, BossMaxSeconds, BossMinSeconds;
+var int BossYawShift;
+var int BossWrittenYaw;
+var float BossWriteTime;
+var bool bBossReturnFrame;
 var float BlinkOutSeconds, BlinkHoldSeconds, BlinkInSeconds;
 
 function Reset()
@@ -109,6 +118,104 @@ function Relocate(KFPlayerController PC, Pawn P)
     BlinkStartTime = PC.WorldInfo.RealTimeSeconds;
 }
 
+function vector ChooseBossVantage(KFPlayerController PC, Pawn Boss)
+{
+    local vector Head, Facing, Candidate, HitLocation, HitNormal;
+    Head = Boss.Location + vect(0,0,1) * FMax(Boss.BaseEyeHeight, 40);
+    Facing = vector(Boss.Rotation);
+    Facing.Z = 0;
+    if (VSizeSq(Facing) < 0.01) Facing = vect(1,0,0);
+    Candidate = Head + Normal(Facing) * BossDistance;
+    if (PC.Trace(HitLocation, HitNormal, Candidate, Head, false, vect(16,16,16)) != None)
+        Candidate = HitLocation + HitNormal * 8;
+    return Candidate;
+}
+
+// Game-camera roll must not tilt the world during death or cinematics.
+function rotator LevelRotation(KFPlayerController PC)
+{
+    local rotator R;
+    R = PC.Rotation;
+    if (R.Roll != 0) { R.Roll = 0; PC.SetRotation(R); }
+    return R;
+}
+
+function EndBossView(optional bool bBlink)
+{
+    local rotator R;
+    local bool bOwnYaw;
+    if (BossPC != None && !BossPC.bDeleteMe && BossPC.Pawn == BossHuman)
+    {
+        R = BossPC.Rotation;
+        // Native head deltas are already in PC yaw. Undo only our relative
+        // shift, and yield if stock/server ownership supplied a new heading.
+        bOwnYaw = (BossHands != None && !BossHands.bDeleteMe && BossHands.PC == BossPC
+            && BossHands.Human == BossHuman && BossHands.NativeHeadTracked != 0
+            && Abs(NormalizeRotAxis(R.Yaw - BossHands.NativeHeadRotation.Yaw)) <= 1)
+            || (BossPC.WorldInfo.RealTimeSeconds == BossWriteTime
+                && NormalizeRotAxis(R.Yaw - BossWrittenYaw) == 0);
+        if (bOwnYaw)
+        {
+            R.Yaw -= BossYawShift;
+            R.Roll = 0;
+            BossPC.SetRotation(R);
+        }
+        else `log("KF2VR_BOSS_YAW_RESTORE_SKIPPED heading ownership changed");
+        // The last stock cache can still contain our vantage on this frame.
+        if (BossPC.PlayerCamera != None && bHaveEye)
+        {
+            BossPC.PlayerCamera.CameraCache.POV.Location = StableEye;
+            BossPC.PlayerCamera.CameraCache.POV.Rotation = R;
+            BossPC.PlayerCamera.CameraCache.POV.FOV = StableFOV;
+        }
+        if (bBlink) BlinkStartTime = BossPC.WorldInfo.RealTimeSeconds;
+        bBossReturnFrame = true;
+    }
+    BossTarget = None; BossHuman = None; BossPC = None; BossHands = None; BossYawShift = 0;
+}
+
+// True while a live stock boss introduction owns this stable viewpoint.
+function bool UpdateBossView(KFPlayerController PC, Pawn Boss, VRHandsBridge Hands)
+{
+    local float Now;
+    local rotator R;
+    Now = PC.WorldInfo.RealTimeSeconds;
+    if (Boss != None && !Boss.bDeleteMe && Boss.Health > 0 && BossTarget == None)
+    {
+        BossTarget = Boss; BossPC = PC; BossHuman = PC.Pawn; BossHands = Hands;
+        if (!bHaveEye)
+        {
+            StableEye = TargetEye(BossHuman); StableFOV = PC.DefaultFOV; bHaveEye = true;
+        }
+        BossStart = Now;
+        BossVantage = ChooseBossVantage(PC, Boss);
+        R = LevelRotation(PC);
+        BossYawShift = NormalizeRotAxis(rotator(Boss.Location - BossVantage).Yaw - R.Yaw);
+        R.Yaw += BossYawShift;
+        PC.SetRotation(R);
+        BossWrittenYaw = R.Yaw; BossWriteTime = Now;
+        BlinkStartTime = Now;
+    }
+    if (BossTarget == None) return false;
+    if (BossPC != PC || BossHuman != PC.Pawn || BossTarget.bDeleteMe || BossTarget.Health <= 0
+        || Now - BossStart > BossMaxSeconds || (!PC.bCinematicMode && Now - BossStart > BossMinSeconds))
+    { EndBossView(true); return false; }
+    PC.bGamePlayDOFActive = false;
+    PC.PlayerCamera.CameraCache.POV.Location = BossVantage;
+    PC.PlayerCamera.CameraCache.POV.Rotation = LevelRotation(PC);
+    PC.PlayerCamera.CameraCache.POV.FOV = bHaveEye ? StableFOV : PC.DefaultFOV;
+    return true;
+}
+
+// Session teardown must return the heading before discarding this object.
+function Shutdown()
+{
+    EndBossView();
+    EndVictory();
+    Reset();
+    bBossReturnFrame = false;
+}
+
 // Trigger edges from the stock input (the virtual gamepad keeps feeding it
 // with no pawn). Both are idle while a menu holds the pointer.
 function PollSpectateInput(KFPlayerController PC)
@@ -129,7 +236,7 @@ function PollSpectateInput(KFPlayerController PC)
     bPrevHeld = bPrev;
 }
 
-function UpdateSpectating(KFPlayerController PC)
+function UpdateSpectating(KFPlayerController PC, optional bool bMenuOpen)
 {
     local Actor Target;
     local Pawn P;
@@ -169,9 +276,10 @@ function UpdateSpectating(KFPlayerController PC)
                 Relocate(PC, P);
         }
     }
-    PollSpectateInput(PC);
+    if (bMenuOpen) { bNextHeld = true; bPrevHeld = true; }
+    else PollSpectateInput(PC);
     PC.PlayerCamera.CameraCache.POV.Location = SpectateAnchor;
-    PC.PlayerCamera.CameraCache.POV.Rotation = PC.Rotation;
+    PC.PlayerCamera.CameraCache.POV.Rotation = LevelRotation(PC);
     PC.PlayerCamera.CameraCache.POV.FOV = bHaveEye ? StableFOV : PC.DefaultFOV;
 }
 
@@ -266,13 +374,17 @@ function Update(KFPlayerController PC, optional VRHandsBridge Hands, optional bo
 {
     local KFPawn_Human Human;
     local bool bHold, bBossFirstPerson;
+    local Pawn Boss;
 
-    if (PC == None || !PC.IsLocalController() || PC.PlayerCamera == None) { EndVictory(); return; }
+    if (PC == None || !PC.IsLocalController() || PC.PlayerCamera == None) { Shutdown(); return; }
+    bBossReturnFrame = false;
+    if (BossPC != None && (BossPC != PC || BossHuman != PC.Pawn || bMenuOpen)) EndBossView();
     UpdateVictory(PC, Hands, bMenuOpen);
     Human = KFPawn_Human(PC.Pawn);
     if (PC.IsInState('Spectating') && Human == None)
     {
-        UpdateSpectating(PC);
+        EndBossView();
+        UpdateSpectating(PC, bMenuOpen);
         return;
     }
     if (bSpectating) Reset();
@@ -286,16 +398,22 @@ function Update(KFPlayerController PC, optional VRHandsBridge Hands, optional bo
         && !PC.IsInState('Dead') && !PC.IsInState('Spectating');
     if (bBossFirstPerson)
     {
+        Boss = Pawn(PC.PlayerCamera.ViewTarget.Target);
+        if (Boss == Human || KFPawn_Monster(Boss) == None) Boss = None;
         PC.SetViewTarget(Human);
         Human.SetMeshVisibility(false);
         PC.PlayerCamera.CameraStyle = 'FirstPerson';
     }
+    if (!bMenuOpen && Human != None && Human.Health > 0
+        && !Human.bDeleteMe && !PC.IsInState('Dead') && !bVictoryActive
+        && UpdateBossView(PC, Boss, Hands)) return;
+    if (Human == None || Human.Health <= 0 || Human.bDeleteMe || PC.IsInState('Dead') || bVictoryActive) EndBossView();
     // Hold the old eye for the transition frame: its stock cache still contains
     // the boss camera. The next stock update computes the first-person eye.
     // Boss requests without a living player, the corpse and victory chase camera
     // (ServerCamera('ThirdPerson') with the pawn still the target; the F8
     // inspection uses its own avatar camera actor and never matches) all hold.
-    bHold = bBossFirstPerson || PC.PlayerCamera.CameraStyle == 'Boss' || PC.IsInState('Dead')
+    bHold = bBossReturnFrame || bBossFirstPerson || PC.PlayerCamera.CameraStyle == 'Boss' || PC.IsInState('Dead')
         || (Human != None && Human.Health <= 0)
         || (PC.PlayerCamera.CameraStyle == 'ThirdPerson' && Human != None
             && PC.PlayerCamera.ViewTarget.Target == Human);
@@ -311,7 +429,7 @@ function Update(KFPlayerController PC, optional VRHandsBridge Hands, optional bo
             bHaveEye = true;
         }
         PC.PlayerCamera.CameraCache.POV.Location = StableEye;
-        PC.PlayerCamera.CameraCache.POV.Rotation = PC.Rotation;
+        PC.PlayerCamera.CameraCache.POV.Rotation = LevelRotation(PC);
         PC.PlayerCamera.CameraCache.POV.FOV = StableFOV;
         return;
     }
@@ -327,6 +445,9 @@ function Update(KFPlayerController PC, optional VRHandsBridge Hands, optional bo
 
 defaultproperties
 {
+    BossDistance=420.0
+    BossMaxSeconds=20.0
+    BossMinSeconds=3.0
     SpectateBehind=280.0
     SpectateAbove=60.0
     SpectateRelocateDistance=650.0

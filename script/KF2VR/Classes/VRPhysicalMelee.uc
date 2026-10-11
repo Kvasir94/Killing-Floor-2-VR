@@ -211,12 +211,10 @@ simulated function bool Eligible(optional bool bAllowGuard)
         || StrikeHand < 0 || StrikeHand > 1 || Weapon.bHidden || Weapon.MySkelMesh.HiddenGame
         || (Presenter.NativeValidMask & Presenter.NativeGripActiveMask & (1 << StrikeHand)) == 0
         || Presenter.NativeMenuActive != 0
-        || (!Weapon.IsInState('Active') && !(bAllowGuard && bGuarding && Weapon.IsInState('MeleeBlocking')))
+        || (!Weapon.IsInState('Active') && !(bAllowGuard && bGuarding && Weapon.IsInState('MeleeBlocking'))
+            && !(Weapon.IsInState('WeaponDownSimple') && class'VRPhysicalInteraction'.static.Restrained(Presenter.Human)))
         || !Presenter.PC.UsingFirstPersonCamera()
-        // A zed holding the player sets bNoWeaponFiring, but a tracked melee
-        // strike is explicitly allowed to fight that grapple. Other engine
-        // firing locks (menus, death and special moves) retain this gate.
-        || (Presenter.Human.bNoWeaponFiring && !Presenter.Human.IsDoingSpecialMove(SM_GrappleVictim))) return false;
+        || !class'VRPhysicalInteraction'.static.Allowed(Presenter.Human)) return false;
     // A retained sampler is inert if a role/profile transition made this item
     // ordinary again. This is both a lifecycle guard and a second barrier
     // against an old weapon damaging through a newly drawn one.

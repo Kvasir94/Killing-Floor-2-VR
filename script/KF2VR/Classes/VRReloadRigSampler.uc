@@ -414,12 +414,14 @@ function SampleFollower(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
 // ordinary clip notifies after it). Find the final approach to the real idle
 // seat; the notify remains the stock ammo timer, never a spatial target.
 function bool SampleBoxInsert(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
-    name Anim, name Root, name Ammo, name Hand, optional bool bLateBoxNotify)
+    name Anim, name Root, name Ammo, name Hand, optional bool bLateBoxNotify,
+    optional bool bProjectilePlateau)
 {
     local AnimSequence Clip;
     local InsertPose Point;
-    local int I;
-    local float T;
+    local int I, J, Steps;
+    local float T, Candidate, EntryWindow;
+    local bool bMoved, bStable, bFoundPlateau;
     local vector PlateauLocal;
     local quat PlateauLocalQ;
     Reset();
@@ -440,12 +442,49 @@ function bool SampleBoxInsert(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     // Minigun notifies after the box has stopped and the hand has withdrawn.
     // Its reload plateau differs slightly from Idle. Use that plateau only
     // to find the approach timing; the final prop still seats at Idle.
-    if (bLateBoxNotify)
+    if (bProjectilePlateau)
+    {
+        // Rail elite seats before its ammo marker, then spins the seated
+        // round; the bow's half clip settles its arrow rotation after it.
+        // Find the first stable loaded pose after the real approach. Rail's
+        // authored seat is 1.47 degrees from Idle: allow two, then retain
+        // the one-degree plateau test and the final Idle seat below.
+        Steps = int(Clip.SequenceLength * 60.0);
+        for (I = 0; I <= Steps; ++I)
+        {
+            Candidate = float(I) / 60.0;
+            Pose(M, Seq, Candidate);
+            Relative(M, Root, Ammo, Point.Position, Point.Rotation);
+            if (VSize(Point.Position - SeatLocal) > 2) bMoved = true;
+            if (!bMoved || Candidate + 3.0 / 60.0 > Clip.SequenceLength
+                || VSize(Point.Position - SeatLocal) > 0.2
+                || RotationMatch(Point.Rotation, SeatLocalQ) < 0.99984770) continue;
+            PlateauLocal = Point.Position; PlateauLocalQ = Point.Rotation;
+            bStable = true;
+            for (J = 1; J <= 3; ++J)
+            {
+                Pose(M, Seq, Candidate + float(J) / 60.0);
+                Relative(M, Root, Ammo, Point.Position, Point.Rotation);
+                if (VSize(Point.Position - SeatLocal) > 0.2
+                    || RotationMatch(Point.Rotation, SeatLocalQ) < 0.99984770
+                    || VSize(Point.Position - PlateauLocal) > 0.2
+                    || RotationMatch(Point.Rotation, PlateauLocalQ) < 0.99996192)
+                { bStable = false; break; }
+            }
+            if (!bStable) continue;
+            T = Candidate + 3.0 / 60.0;
+            bFoundPlateau = true;
+            break;
+        }
+        if (!bFoundPlateau) { FailureReason = "missing-projectile-plateau"; return false; }
+    }
+    else if (bLateBoxNotify)
     {
         Pose(M, Seq, SeatTime);
         Relative(M, Root, Ammo, PlateauLocal, PlateauLocalQ);
     }
-    T = bLateBoxNotify ? SeatTime : FMin(SeatTime + 0.35 * Clip.RateScale, Clip.SequenceLength);
+    if (!bProjectilePlateau)
+        T = bLateBoxNotify ? SeatTime : FMin(SeatTime + 0.35 * Clip.RateScale, Clip.SequenceLength);
     Pose(M, Seq, T);
     Relative(M, Root, Ammo, Point.Position, Point.Rotation);
     if (VSize(Point.Position - PlateauLocal) > 0.2
@@ -464,9 +503,12 @@ function bool SampleBoxInsert(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     EntryTime = T;
     // Use a short physical mouth-to-seat stroke, not the stock hand's long
     // box approach. Eight UU leaves deliberate push travel after capture.
+    // The bow translates into the seat before its rotation settles. Reach
+    // back far enough to include its actual nocking approach.
+    EntryWindow = bProjectilePlateau ? 0.8 : 0.45;
     for (I = 1; I <= 64; ++I)
     {
-        EntryTime = FMax(T - 0.45 * Clip.RateScale * float(I) / 64.0, 0);
+        EntryTime = FMax(T - EntryWindow * Clip.RateScale * float(I) / 64.0, 0);
         Pose(M, Seq, EntryTime);
         Relative(M, Root, Ammo, Point.Position, Point.Rotation);
         if (VSize(Point.Position - SeatLocal) >= 8) break;

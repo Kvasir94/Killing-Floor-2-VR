@@ -94,6 +94,7 @@ def parse_mods(value):
 # default. Saved play mode applies to Host and Solo; a friend joining still gets the
 # flat screen unless they ask for --vr.
 DLSS_MODES = ("off", "dlaa", "quality", "balanced", "performance", "ultraperformance")
+KF2VR_WORKSHOP_ID = "3815925510"
 
 
 def _read_preferences(path, *, strict=False):
@@ -164,11 +165,23 @@ def load_preferences(args):
         args.portal_gun = saved.get("portal_gun", False) is True
     if getattr(args, "threaded_render", None) is None:
         args.threaded_render = saved.get("threaded_render", False) is True
+    for key in ("workshop_desktop", "open_server"):
+        if getattr(args, key, None) is None:
+            setattr(args, key, saved.get(key, False) is True if getattr(args, "host", False) else False)
+    for key in ("single_pass", "hbao", "reflections"):
+        if getattr(args, key, None) is None:
+            value = saved.get(key, True) is True
+            # A saved Steam preference must not enable unsupported Epic stereo.
+            if key == "single_pass" and getattr(args, "store", "auto") == "epic":
+                value = False
+            setattr(args, key, value)
     if getattr(args, "dlss", None) is None:
         mode = saved.get("dlss", "off")
         args.dlss = mode if mode in DLSS_MODES else "off"
     if getattr(args, "hide_bile_lens", None) is None:
         args.hide_bile_lens = saved.get("hide_bile_lens", True) is not False
+    if getattr(args, "hide_blood_lens", None) is None:
+        args.hide_blood_lens = saved.get("hide_blood_lens", True) is not False
     if getattr(args, "dlss_sharpness", None) is None:
         value = saved.get("dlss_sharpness", 0)
         args.dlss_sharpness = value if type(value) is int and 0 <= value <= 100 else 0
@@ -199,7 +212,8 @@ def save_dlss_preferences(args):
     saved = _read_preferences(path, strict=True)
     saved.update({"dlss": getattr(args, "dlss", None) or "off",
                   "dlss_sharpness": int(getattr(args, "dlss_sharpness", None) or 0),
-                  "hide_bile_lens": getattr(args, "hide_bile_lens", True) is not False})
+                  "hide_bile_lens": getattr(args, "hide_bile_lens", True) is not False,
+                  "hide_blood_lens": getattr(args, "hide_blood_lens", True) is not False})
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(saved, indent=2), encoding="utf-8")
     temporary.replace(path)
@@ -216,14 +230,20 @@ def save_preferences(args):
     # one setting is how they start disagreeing.
     saved = _read_preferences(path, strict=True)
     saved.update({"vr": bool(getattr(args, "vr", True)),
-        "map": MAP_NAME if getattr(args, "test_map", False) else getattr(args, "map", "KF-BurningParis"),
+        "map": (saved.get("map", "KF-BurningParis")
+                if getattr(args, "solo", False) and getattr(args, "test_map", False)
+                else MAP_NAME if getattr(args, "test_map", False) else getattr(args, "map", "KF-BurningParis")),
         "difficulty": getattr(args, "difficulty", "normal"),
         "game_length": getattr(args, "game_length", "short"),
         "vr_quality": getattr(args, "vr_quality", "performance"),
         "threaded_render": bool(getattr(args, "threaded_render", False)),
+        "single_pass": bool(getattr(args, "single_pass", True)),
+        "hbao": bool(getattr(args, "hbao", True)),
+        "reflections": bool(getattr(args, "reflections", True)),
         "dlss": getattr(args, "dlss", None) or "off",
         "dlss_sharpness": int(getattr(args, "dlss_sharpness", None) or 0),
         "hide_bile_lens": getattr(args, "hide_bile_lens", True) is not False,
+        "hide_blood_lens": getattr(args, "hide_blood_lens", True) is not False,
         "breacher": bool(getattr(args, "breacher", False))})
     # Solo applies no hosted loadout. Remember its common choices without
     # erasing the mods and host settings the next hosted session will use.
@@ -232,6 +252,8 @@ def save_preferences(args):
         saved.update({"mods": args.mods if getattr(args, "vr", True) or getattr(args, "mods_requested", False) else previous_mods,
             "damage_popups": args.damage_popups, "test_map_players": args.test_map_players,
             "inventory_focus": bool(getattr(args, "inventory_focus", False)),
+            "open_server": bool(getattr(args, "open_server", False)),
+            "workshop_desktop": bool(getattr(args, "workshop_desktop", False)),
             "multiplayer_grabs": bool(getattr(args, "multiplayer_grabs", False))})
     if getattr(args, "solo", False):
         saved["portal_gun"] = bool(getattr(args, "portal_gun", False))
@@ -386,29 +408,54 @@ def prepare_content(args, game, steam_root):
 def configure_content(configs, args, *, server):
     from session import read_ini, set_ini
     content = getattr(args, "workshop_content", [])
-    if not content:
+    offer_mod = server and getattr(args, "workshop_desktop", False) is True
+    if offer_mod and not getattr(args, "workshop_desktop_verified", False):
+        raise RuntimeError("Workshop desktop content has not been verified against this package. Use the matching KF2-VR ZIP.")
+    if not content and not offer_mod:
         return
     path = Path(configs) / "KFEngine.ini"
     text = read_ini(path)
-    section = re.search(r"(?ims)^\[Core\.System\][^\n]*\n(.*?)(?=^\[|\Z)", text)
-    if not section:
-        raise RuntimeError("Missing Core.System for Workshop content")
-    directories = sorted({str((Path(item["root"]) / name).parent) for item in content for name in item["files_sha256"]})
-    values = {key: directories + re.findall(r"(?im)^" + key + r"=([^\r\n]*)", section[1])
-              for key in ("Paths", "ScriptPaths", "SeekFreePCPaths", "BrewedPCPaths")}
-    localization = [str(Path(item["root"]) / "Localization") for item in content
-                    if (Path(item["root"]) / "Localization").is_dir()]
-    values["LocalizationPaths"] = localization + re.findall(r"(?im)^LocalizationPaths=([^\r\n]*)", section[1])
-    text = set_ini(text, "Core.System", values)
+    if content:
+        section = re.search(r"(?ims)^\[Core\.System\][^\n]*\n(.*?)(?=^\[|\Z)", text)
+        if not section:
+            raise RuntimeError("Missing Core.System for Workshop content")
+        directories = sorted({str((Path(item["root"]) / name).parent) for item in content for name in item["files_sha256"]})
+        values = {key: directories + re.findall(r"(?im)^" + key + r"=([^\r\n]*)", section[1])
+                  for key in ("Paths", "ScriptPaths", "SeekFreePCPaths", "BrewedPCPaths")}
+        localization = [str(Path(item["root"]) / "Localization") for item in content
+                        if (Path(item["root"]) / "Localization").is_dir()]
+        values["LocalizationPaths"] = localization + re.findall(r"(?im)^LocalizationPaths=([^\r\n]*)", section[1])
+        text = set_ini(text, "Core.System", values)
     if server:
         text = set_ini(text, "OnlineSubsystemSteamworks.KFWorkshopSteamworks", {
-            "ServerSubscribedWorkshopItems": [item["workshop_id"] for item in content]})
+            "ServerSubscribedWorkshopItems": [item["workshop_id"] for item in content] + ([KF2VR_WORKSHOP_ID] if offer_mod else [])})
     net = re.search(r"(?ims)^\[IpDrv\.TcpNetDriver\][^\n]*\n(.*?)(?=^\[|\Z)", text)
     managers = re.findall(r"(?im)^DownloadManagers=([^\r\n]*)", net[1]) if net else []
     workshop_manager = "OnlineSubsystemSteamworks.SteamWorkshopDownload"
     text = set_ini(text, "IpDrv.TcpNetDriver", {"DownloadManagers": [workshop_manager] +
         [value for value in managers if value.lower() != workshop_manager.lower()]})
     path.write_text(text, encoding="utf-16")
+
+
+def verify_desktop_workshop(args, game, steam_root, release):
+    """Offer only matching packages; never mount published scripts over local ones."""
+    args.workshop_desktop_verified = False
+    if getattr(args, "breacher", False):
+        raise RuntimeError("Workshop desktop joining cannot supply the optional Breacher package. Use the matching KF2-VR ZIP.")
+    root = ensure_item(KF2VR_WORKSHOP_ID, game, args.cache_root, steam_root, download=not args.prepare_only)
+    published = package_hashes(root, KF2VR_WORKSHOP_ID)
+    local = package_hashes(Path(release) / "Packages", KF2VR_WORKSHOP_ID)
+    def identities(files):
+        names = {}
+        for name, digest in files.items():
+            key = Path(name).name.lower()
+            if key in names:
+                raise RuntimeError("Ambiguous Workshop package names. Use the matching KF2-VR ZIP.")
+            names[key] = digest
+        return names
+    if identities(local) != identities(published):
+        raise RuntimeError("Workshop desktop packages differ from this KF2-VR build. Disable Workshop desktop joining and send the matching KF2-VR ZIP.")
+    args.workshop_desktop_verified = True
 
 
 def configure_mod_settings(role, args, game, user):

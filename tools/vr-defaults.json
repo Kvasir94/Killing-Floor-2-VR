@@ -1,6 +1,7 @@
 {
  "KF2VR.VRHandsBridge": {
   "ChestGrenadeOffset": "(X=11.6,Y=4.4,Z=7.3)",
+  "bChestGrenadeCentered": "True",
   "bUseQuest2GripProfile": "True",
   "FirearmAimPitchDegrees": "0.0",
   "bToggleGrip": "True",
@@ -13,6 +14,7 @@
   "bBoxingGloves": "False",
   "bInteractiveReloads": "False",
   "bReloadHints": "True",
+  "bWideGrabZones": "False",
   "bManualPump": "False",
   "bAutoSprint": "False",
   "MovementHand": "0",
@@ -23,6 +25,7 @@
   "bWeaponAmmoReadouts": "true",
   "bDamagePopups": "True",
   "bSightLineConvergence": "True",
+  "bSightPointAim": "False",
   "bWeaponLasers": "True",
   "bWristwatchHUD": "True",
   "WristwatchOffset": "(X=0.0,Y=0.0,Z=0.0)",
@@ -62,10 +65,13 @@
   "bSnapTurn": "True",
   "SnapTurnDegrees": "30",
   "SmoothTurnScale": "0.5",
-  "EyeRenderPercent": "75",
+  "EyeRenderPercent": "100",
   "MenuBackdropMode": "0",
   "LocalMap": "KF-BurningParis",
   "LocalDifficulty": "0",
   "LocalLength": "0"
+ },
+ "KF2VR.VRFreeHandPose": {
+  "bAuthoredGrenadeGrip": "True"
  }
 }

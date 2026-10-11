@@ -1,6 +1,8 @@
 # Optional Breacher experiment
 
-Breacher is an early optional perk/weapon experiment, disabled by default.
+Breacher is a frozen optional perk/weapon experiment, disabled by default.
+The current combined source candidate omits its optional content. Further
+Breacher work is deferred until explicitly resumed.
 Only a package built with Breacher can offer it. All players in a hosted session
 must use matching packages and settings; ordinary Solo/Host/Join does not need it.
 

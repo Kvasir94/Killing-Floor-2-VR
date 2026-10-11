@@ -27,7 +27,7 @@ support. Changing movement/dominant hand does not swap physical X/Y/A/B labels.
 
 For a fresh profile: left stick moves relative to the head, right stick turns,
 30-degree snap turn is ON, click-to-sprint is used, and down-stick crouch is ON.
-The weapon hand defaults right; menu pointer defaults right. Performance / 75%
+The weapon hand defaults right; menu pointer defaults right. Performance / 100%
 render scale is the launcher starting point. Button reloads, latched transfer/
 brace grip, held support grip and support-hand gun aiming are defaults. Physical reloads/manual pump,
 body holsters, threaded rendering, Portal/Breacher content and host inventory
@@ -55,7 +55,8 @@ start OFF and follow the host. Saved preferences override starting defaults.
   grip to throw. Trigger does not throw it. A release at rest drops it; a
   very short grab or invalid tracking can cancel without spending ammunition.
 - For two-hand support, squeeze at the gun's support contact. The default is
-  hold-to-support; release or leave the contact to detach. Weapons stay equipped
+  hold-to-support; release grip to detach. Acquired firearm support stays held
+  across distance drift while grip and tracking remain valid. Weapons stay equipped
   when fingers relax. To transfer primary ownership, use a support-only carry
   after the old primary is stowed, move to the primary grip and pull trigger;
   that pull claims the item and a fresh pull fires. It is not an unconditional
@@ -350,8 +351,9 @@ borrow the stock 9mm support pose fitted to their firing wrist, since their own
 idle/ADS off-hand poses are for hammer fanning. The primary controller alone
 sets aim direction; moving the support hand never steers a pistol. Unbraced
 shots use stock hip-fire spread and recoil. Valid bracing uses stock ADS spread
-and recoil, without zoom or a sight animation. Release grip or move away to
-detach; lost tracking removes the bonus immediately. Two separately held
+and recoil, without zoom or a sight animation. Release grip to detach;
+lost tracking removes the bonus immediately. Acquired firearm support is retained
+across distance drift while grip and tracking remain valid. Two separately held
 pistols each use hip handling. These rules are shared by solo and multiplayer,
 including converted stock-pair members. The HX25 uses the same brace and handling
 policy, with its own authored receiver contact.
@@ -899,6 +901,17 @@ No mutate commands are required during normal headset play.
   disarms controller triggers for one tick to prevent accidental firing or interaction.
 
 
+## One-hand and paired hip reloads
+
+With Physical or Physical + Pump enabled, compatible one-hand guns can reload
+at the hip while the other hand holds a gun or object. Press that gun hand's
+reload button, then bring its gun to its hip loader. Revolvers accept their
+speedloader or round load; magazine guns accept the hip magazine. Each hand
+owns its own reload session. Independent guns show separate spare counts;
+actual paired guns show both icons above one shared reserve count. Ammunition
+is paid by the authority when seated. Headset and real online acceptance remain
+pending. The additional waist-triggered reload mode is planned only.
+
 ## Chest grenade
 
 The perk grenade rides the upper chest where Arizona Sunshine 2 hangs its chest
@@ -933,6 +946,9 @@ visible centres above the origin: nail bomb 17.3 UU, dynamite 2.4, EMP 1.9,
 Molotov 1.8; frag, HE, medic, freeze and flashbang are within 1 UU and treated
 as centred, as is any unknown grenade. The grab sphere is centred on the visible
 grenade, and the held body puts that same centre in the fist.
+
+Authored stock grenade grips are enabled by default; the Interaction page can
+select tracked curl instead. Saved grip preferences win.
 
 The held preview is the perk grenade's own `ProjFlightTemplate`, which carries the
 grenade body as a mesh emitter. It is absolute and driven from script, so it sets
@@ -1021,9 +1037,14 @@ cover environment, characters, effects, textures/filtering, shadows, bloom,
 volumetric lighting and light shafts. Non-texture edits use narrow system-setting
 writes and native/script readback. Texture controls select stock grouped presets;
 filter changes refuse nonuniform texture LOD biases rather than flattening them.
-Blur, DOF, post-process AA, AO/HBAO, reflections, VSync, grain and lens flares
-remain off; variable frame rate stays on. These fields are displayed as locked
-status, not selectable settings. Quality changes report readback mismatches.
+Blur, DOF, post-process AA, VSync, grain and lens flares remain off;
+variable frame rate stays on. HBAO+ and reflections are launcher-controlled,
+saved choices that start ON. Steam single-pass stereo starts ON; Epic stays
+OFF. The in-game rows display locked status rather than changing these choices.
+Quality changes report readback mismatches.
+Boss introductions use a fixed viewpoint with tracked head look; death/victory
+and spectator views keep level anchors instead of following stock camera motion.
+These views still need headset acceptance.
 The VR shell opens only at session entry or through its explicit menu control;
 death, boss-kill/end-of-game cinematics and other game camera takeovers do not
 open it. Stock game UI floats as a spatial panel within the grounded VR Studio
@@ -1063,7 +1084,9 @@ Fast cylindrical-shell approaches may acquire when their valid tracked path cros
 the guide mouth, rather than requiring a frame exactly at the mouth. Tomahawk
 generic air whooshes are suppressed; contact and throw/recall cues remain.
 
-Physical-stock mode retains an acquired firearm support grip while the physical grip is held and tracking is valid, even if controller distance drifts. Normal two-hand aim keeps distance release.
+Acquired firearm support stays attached while the physical grip is held and
+tracking is valid, even if controller distance drifts. This applies to ordinary
+two-hand aiming and Physical-stock mode; release grip normally to detach.
 
 ### Supported primary-hand lever cycling
 
@@ -1075,7 +1098,3 @@ the round, reattach support, then close with the primary hand. The off-hand
 lever route remains available. Tracking or support loss cancels the grip;
 release and squeeze again to resume the pending stage. Headset acceptance is
 pending, including both handedness choices and normal/elite reloads.
-
-## Updated physical handling
-
-Calibration includes bounded seated view-height adjustment. The chest reference follows the scaled grenade display centre. MG3 physical reload now separates box insertion and belt seating; Stoner/Bastion remain unchanged. Supported Winchester/SPX primary-hand lever strokes use the support hand as the anchor. See the [release notes](public-alpha/RELEASE-NOTES-DRAFT.md) for exact retained-chamber support/exceptions, speedloader/action-path fixes and pending headset checks. Button reloads remain available.

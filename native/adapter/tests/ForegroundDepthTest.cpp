@@ -120,6 +120,38 @@ float4 PS(P p):SV_TARGET { return float4(p.c,1); }
     context->RSSetViewports(1,&viewport);
     clear(false);
     clear(true);
+    // Single-pass stereo: two eye rectangles side by side in one target.
+    const D3D11_VIEWPORT left{0,0,4,4,0,1}, right{4,0,4,4,0,1}, both{0,0,8,4,0,1};
+    policy.SetEyes(left,right);
+    const auto at=[&](const D3D11_VIEWPORT& v) { context->RSSetViewports(1,&v); };
+    policy.Begin(true);
+    at(left);clear(false);at(right);clear(false);   // each eye's world clear
+    at(left);clear(true);at(right);clear(true);     // each eye's foreground clear
+    at(left);clear(true);                           // repeated foreground clear
+    policy.Begin(true);
+    at(both);clear(false);                          // one world clear of both eyes
+    at(left);clear(true);at(right);clear(true);     // foreground clears per eye
+    // A second view of the same depth buffer is the same target.
+    ComPtr<ID3D11DepthStencilView> dsv2;HR(device->CreateDepthStencilView(depth.Get(),&dd,&dsv2));
+    policy.Begin(true);
+    at(left);clear(false);at(right);flags=3;
+    Test(!policy.Filter(context.Get(),dsv2.Get(),flags,1,0) && flags==3,"other view: right eye world clear");
+    at(right);flags=3;
+    Test(policy.Filter(context.Get(),dsv2.Get(),flags,1,0) && flags==D3D11_CLEAR_STENCIL,"other view: right eye foreground clear");
+    // RHIClear's quad path may clear an eye's depth alone.
+    policy.Begin(true);
+    at(left);flags=D3D11_CLEAR_DEPTH;
+    Test(!policy.Filter(context.Get(),dsv.Get(),flags,1,0) && flags==D3D11_CLEAR_DEPTH,"depth-only eye world clear");
+    at(left);flags=D3D11_CLEAR_DEPTH;
+    Test(policy.Filter(context.Get(),dsv.Get(),flags,1,0) && flags==0,"depth-only eye foreground clear skipped");
+    at(both);flags=D3D11_CLEAR_DEPTH;
+    Test(!policy.Filter(context.Get(),dsv.Get(),flags,1,0) && flags==D3D11_CLEAR_DEPTH,"depth-only clear of both eyes unchanged");
+    policy.Begin(false);
+    at(left);clear(false);at(right);clear(false);   // inactive: never preserved
+    policy.ClearEyes();
+    policy.Begin(true);
+    at(left);clear(false);at(right);flags=3;
+    Test(!policy.Filter(context.Get(),dsv.Get(),flags,1,0) && flags==3,"mono: other viewport still rejected");
     context->ClearState();
     std::printf("Foreground depth checks=%d failures=%d\n",checks,failures);
     return failures?1:0;

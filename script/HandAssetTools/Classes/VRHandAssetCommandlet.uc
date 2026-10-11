@@ -15,6 +15,18 @@ var config vector TomahawkRigGrip, TomahawkAttachmentGrip;
 var config int TomahawkAttachmentYaw;
 var config array<name> TomahawkTakes;
 var config array<float> TomahawkTakeSeconds;
+// Breacher Deadbolt rig takes from build/hand-meshes/VRDeadbolt.json "rig"
+// (tools/deadbolt/export_deadbolt.py); empty when no rig was exported.
+var config array<name> DeadboltTakes;
+var config array<float> DeadboltTakeSeconds;
+var config array<int> DeadboltTakeFrames;
+var config int DeadboltBones;
+// Breacher Ripcord rig takes from build/hand-meshes/VRRipcord.json "rig"
+// (tools/ripcord/export_ripcord.py); empty when no rig was exported.
+var config array<name> RipcordTakes;
+var config array<float> RipcordTakeSeconds;
+var config array<int> RipcordTakeFrames;
+var config int RipcordBones;
 
 function bool EditTexture(Texture2D T, string PropertyName, string Value, optional bool bNotify=true)
 {
@@ -129,6 +141,118 @@ function bool ImportTomahawkRig(WorldInfo WI, FbxImportUI ImportOptions, string 
     return true;
 }
 
+// VRDeadboltRig: the gauntlet, glow and spike as one skeletal mesh on the
+// deadbolt_anim skeleton (DeadboltBones bones), with its takes in VRDeadboltRig_Anims.
+// VRDeadboltPresentation plays them; glow and spike visibility stay scripted.
+function bool ImportDeadboltRig(WorldInfo WI, FbxImportUI ImportOptions, string Root)
+{
+    local SkeletalMesh Rig;
+    local AnimSet Set;
+    local Texture2D Icon;
+    local string Imported;
+    local int I, Bar;
+    if (DeadboltTakes.Length == 0 || DeadboltTakeSeconds.Length != DeadboltTakes.Length
+        || DeadboltTakeFrames.Length != DeadboltTakes.Length) return false;
+    ImportOptions.MeshTypeToImport = FBXIT_SkeletalMesh;
+    ImportOptions.bImportAnimations = false;
+    WI.ConsoleCommand("NEW SkeletalMesh NAME=VRDeadboltRig PACKAGE=KF2VRHands FILE=\"" $ Root $ "/VRDeadboltRig.fbx\"");
+    ImportOptions.MeshTypeToImport = FBXIT_StaticMesh;
+    Rig = SkeletalMesh(FindObject("KF2VRHands.VRDeadboltRig", class'SkeletalMesh'));
+    if (Rig == None || Rig.RefSkeleton.Length != DeadboltBones)
+    { `log("VR_HAND_ASSET deadbolt_rig_failed=" $ Rig); return false; }
+    Set = new(Rig.Outer, "VRDeadboltRig_Anims") class'AnimSet';
+    Set.PreviewSkelMeshName = name("KF2VRHands.VRDeadboltRig");
+    Set.bAnimRotationOnly = false;
+    if (FindObject("KF2VRHands.ImportAnimations.VRDeadboltRig", class'AnimSet') != Set
+        || Set.Sequences.Length != DeadboltTakes.Length || Set.TrackBoneNames.Length != DeadboltBones)
+    { `log("VR_HAND_ASSET deadbolt_rig_animation_failed sequences=" $ Set.Sequences.Length @ "tracks=" $ Set.TrackBoneNames.Length); return false; }
+    for (I = 0; I < Set.Sequences.Length; ++I)
+    {
+        Imported = string(Set.Sequences[I].SequenceName);
+        Bar = InStr(Imported, "|", true);
+        if (Bar >= 0) Imported = Mid(Imported, Bar + 1);
+        if (DeadboltTakes.Find(name(Imported)) == INDEX_NONE || Set.Sequences[I].CompressedByteStream.Length == 0)
+        { `log("VR_HAND_ASSET deadbolt_take_unexpected=" $ Set.Sequences[I].SequenceName); return false; }
+        Set.Sequences[I].SequenceName = name(Imported);
+        Set.Sequences[I].bNoLoopingInterpolation = true;
+    }
+    for (I = 0; I < DeadboltTakes.Length; ++I)
+    {
+        if (FindTake(Set, DeadboltTakes[I]) == None)
+        { `log("VR_HAND_ASSET deadbolt_take_missing=" $ DeadboltTakes[I]); return false; }
+        // Keys are 60 fps samples on a 30 fps FBX time base: every sample must
+        // arrive as one frame, then the take gets its 60 fps length. The export
+        // pads every take to one length, because the importer samples all takes
+        // over the first take's interval.
+        `log("VR_HAND_ASSET deadbolt_take=" $ DeadboltTakes[I] @ "frames=" $ FindTake(Set, DeadboltTakes[I]).NumFrames
+            @ "expected=" $ DeadboltTakeFrames[I] @ "seconds=" $ DeadboltTakeSeconds[I]);
+        if (FindTake(Set, DeadboltTakes[I]).NumFrames != DeadboltTakeFrames[I]) return false;
+        FindTake(Set, DeadboltTakes[I]).SequenceLength = DeadboltTakeSeconds[I];
+    }
+    // Trader and weapon-select icon (tools/deadbolt/make_icon.py), a UI-group texture like VRTomahawkIcon.
+    WI.ConsoleCommand("NEW Texture2D NAME=VRDeadboltIcon PACKAGE=KF2VRHands FILE=\"" $ Root $ "/VRDeadboltIcon.tga\"");
+    Icon = Texture2D(FindObject("KF2VRHands.VRDeadboltIcon", class'Texture2D'));
+    if (Icon == None || !EditTexture(Icon, "LODGroup", "TEXTUREGROUP_UI"))
+    { `log("VR_HAND_ASSET deadbolt_icon_failed=" $ Icon); return false; }
+    `log("VR_HAND_ASSET deadbolt_icon=" $ Icon.SizeX $ "x" $ Icon.SizeY);
+    // Bounds let the build confirm the rig landed in the static props' frame
+    // (about 30.6 x 8.7 x 11.1 cm half extents, longest along X).
+    `log("VR_HAND_ASSET rig_imported=VRDeadboltRig bones=" $ Rig.RefSkeleton.Length @ "materials=" $ Rig.Materials.Length
+        @ "takes=" $ Set.Sequences.Length @ "reload_seconds=" $ FindTake(Set, 'Reload').SequenceLength
+        @ "bounds_origin=" $ Rig.Bounds.Origin @ "bounds_extent=" $ Rig.Bounds.BoxExtent);
+    return true;
+}
+
+// VRRipcordRig: the gauntlet and the tracer glow as one skeletal mesh on the
+// ripcord_anim skeleton (RipcordBones bones), with its takes in VRRipcordRig_Anims.
+// VRRipcordPresentation plays them; the tracer glow and the seated hook's
+// visibility stay scripted. Same import contract as the Deadbolt rig.
+function bool ImportRipcordRig(WorldInfo WI, FbxImportUI ImportOptions, string Root)
+{
+    local SkeletalMesh Rig;
+    local AnimSet Set;
+    local string Imported;
+    local int I, Bar;
+    if (RipcordTakes.Length == 0 || RipcordTakeSeconds.Length != RipcordTakes.Length
+        || RipcordTakeFrames.Length != RipcordTakes.Length) return false;
+    ImportOptions.MeshTypeToImport = FBXIT_SkeletalMesh;
+    ImportOptions.bImportAnimations = false;
+    WI.ConsoleCommand("NEW SkeletalMesh NAME=VRRipcordRig PACKAGE=KF2VRHands FILE=\"" $ Root $ "/VRRipcordRig.fbx\"");
+    ImportOptions.MeshTypeToImport = FBXIT_StaticMesh;
+    Rig = SkeletalMesh(FindObject("KF2VRHands.VRRipcordRig", class'SkeletalMesh'));
+    if (Rig == None || Rig.RefSkeleton.Length != RipcordBones)
+    { `log("VR_HAND_ASSET ripcord_rig_failed=" $ Rig); return false; }
+    Set = new(Rig.Outer, "VRRipcordRig_Anims") class'AnimSet';
+    Set.PreviewSkelMeshName = name("KF2VRHands.VRRipcordRig");
+    Set.bAnimRotationOnly = false;
+    if (FindObject("KF2VRHands.ImportAnimations.VRRipcordRig", class'AnimSet') != Set
+        || Set.Sequences.Length != RipcordTakes.Length || Set.TrackBoneNames.Length != RipcordBones)
+    { `log("VR_HAND_ASSET ripcord_rig_animation_failed sequences=" $ Set.Sequences.Length @ "tracks=" $ Set.TrackBoneNames.Length); return false; }
+    for (I = 0; I < Set.Sequences.Length; ++I)
+    {
+        Imported = string(Set.Sequences[I].SequenceName);
+        Bar = InStr(Imported, "|", true);
+        if (Bar >= 0) Imported = Mid(Imported, Bar + 1);
+        if (RipcordTakes.Find(name(Imported)) == INDEX_NONE || Set.Sequences[I].CompressedByteStream.Length == 0)
+        { `log("VR_HAND_ASSET ripcord_take_unexpected=" $ Set.Sequences[I].SequenceName); return false; }
+        Set.Sequences[I].SequenceName = name(Imported);
+        Set.Sequences[I].bNoLoopingInterpolation = true;
+    }
+    for (I = 0; I < RipcordTakes.Length; ++I)
+    {
+        if (FindTake(Set, RipcordTakes[I]) == None)
+        { `log("VR_HAND_ASSET ripcord_take_missing=" $ RipcordTakes[I]); return false; }
+        `log("VR_HAND_ASSET ripcord_take=" $ RipcordTakes[I] @ "frames=" $ FindTake(Set, RipcordTakes[I]).NumFrames
+            @ "expected=" $ RipcordTakeFrames[I] @ "seconds=" $ RipcordTakeSeconds[I]);
+        if (FindTake(Set, RipcordTakes[I]).NumFrames != RipcordTakeFrames[I]) return false;
+        FindTake(Set, RipcordTakes[I]).SequenceLength = RipcordTakeSeconds[I];
+    }
+    `log("VR_HAND_ASSET rig_imported=VRRipcordRig bones=" $ Rig.RefSkeleton.Length @ "materials=" $ Rig.Materials.Length
+        @ "takes=" $ Set.Sequences.Length @ "reel_seconds=" $ FindTake(Set, 'Reel').SequenceLength
+        @ "bounds_origin=" $ Rig.Bounds.Origin @ "bounds_extent=" $ Rig.Bounds.BoxExtent);
+    return true;
+}
+
 event int Main(string Params)
 {
     local WorldInfo WI;
@@ -210,7 +334,19 @@ event int Main(string Params)
             || !ImportBakedTextures(WI, "VRTomahawkMarking", Left(PropMeshes[I], Slash))
             || !ImportBakedTextures(WI, "VRTomahawkBlade", Left(PropMeshes[I], Slash))
             || !ImportBakedTextures(WI, "VRTomahawkCeramic", Left(PropMeshes[I], Slash)))) return 13;
+        // Breacher Deadbolt: baked body atlas and glow (VRDeadbolt), emissive spike (VRDeadboltSpike).
+        if (PropName == "VRDeadbolt" && (!ImportBakedTextures(WI, "VRDeadboltBody", Left(PropMeshes[I], Slash))
+            || !ImportBakedTextures(WI, "VRDeadboltGlow", Left(PropMeshes[I], Slash)))) return 13;
+        if (PropName == "VRDeadboltSpike" && !ImportBakedTextures(WI, "VRDeadboltSpike", Left(PropMeshes[I], Slash))) return 13;
+        // Breacher Ripcord: baked body atlas and tracer glow (VRRipcord), the flying hook, the cable segment.
+        if (PropName == "VRRipcord" && (!ImportBakedTextures(WI, "VRRipcordBody", Left(PropMeshes[I], Slash))
+            || !ImportBakedTextures(WI, "VRRipcordGlow", Left(PropMeshes[I], Slash)))) return 13;
+        if (PropName == "VRRipcordHook" && !ImportBakedTextures(WI, "VRRipcordHook", Left(PropMeshes[I], Slash))) return 13;
+        if (PropName == "VRRipcordCable" && (!ImportBakedTextures(WI, "VRRipcordCableBody", Left(PropMeshes[I], Slash))
+            || !ImportBakedTextures(WI, "VRRipcordCableGlow", Left(PropMeshes[I], Slash)))) return 13;
         `log("VR_HAND_ASSET prop_imported=" $ PropName);
+        if (PropName == "VRDeadbolt" && DeadboltTakes.Length > 0 && !ImportDeadboltRig(WI, ImportOptions, Left(PropMeshes[I], Slash))) return 16;
+        if (PropName == "VRRipcord" && RipcordTakes.Length > 0 && !ImportRipcordRig(WI, ImportOptions, Left(PropMeshes[I], Slash))) return 17;
         if (PropName == "VRTomahawk" && !ImportTomahawkRig(WI, ImportOptions, Left(PropMeshes[I], Slash))) return 14;
     }
     // The editor-only bridge handles this unique request synchronously on

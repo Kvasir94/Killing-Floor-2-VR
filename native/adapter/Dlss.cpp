@@ -26,7 +26,8 @@ cbuffer Reprojection : register(b0) {
     float2 Size;
     float2 InvSize;
     float Valid;
-    float3 Padding;
+    float2 Offset;    // The eye's origin in the scene depth target.
+    float Padding;
 };
 Texture2D<float> SceneDepth : register(t0);
 RWTexture2D<float2> Motion : register(u0);
@@ -34,7 +35,7 @@ RWTexture2D<float> DepthOut : register(u1);
 [numthreads(8,8,1)]
 void CS(uint3 id : SV_DispatchThreadID) {
     if (id.x >= (uint)Size.x || id.y >= (uint)Size.y) return;
-    const float depth = SceneDepth.Load(int3(id.xy, 0));
+    const float depth = SceneDepth.Load(int3(id.xy + uint2(Offset), 0));
     DepthOut[id.xy] = depth;
     float2 motion = 0;
     if (Valid > 0.5) {
@@ -96,7 +97,7 @@ static_assert(sizeof(SharpenConstants)==32);
 struct alignas(16) MotionConstants {
     float prevFromCur[4][4];
     float size[2], invSize[2];
-    float valid, padding[3];
+    float valid, offset[2], padding;
 };
 static_assert(sizeof(MotionConstants)==96);
 
@@ -321,10 +322,12 @@ bool DlssUpscaler::Evaluate(ID3D11Device* device, ID3D11DeviceContext* context, 
     color->GetDesc(&cd);depth->GetDesc(&dd);output->GetDesc(&od);
     const unsigned rw=input.renderWidth, rh=input.renderHeight;
     const DXGI_FORMAT colorFormat=UnormOf(cd.Format);
-    if (!rw || !rh || rw>cd.Width || rh>cd.Height || cd.SampleDesc.Count!=1 || colorFormat==DXGI_FORMAT_UNKNOWN) {
+    const unsigned rx=input.renderX, ry=input.renderY;
+    if (!rw || !rh || rx>cd.Width || ry>cd.Height || rw>cd.Width-rx || rh>cd.Height-ry
+        || cd.SampleDesc.Count!=1 || colorFormat==DXGI_FORMAT_UNKNOWN) {
         error="DLSS colour does not match the eye render size/format"; Fail(error); return false;
     }
-    if (!DepthFamily(dd.Format) || dd.SampleDesc.Count!=1 || dd.Width<rw || dd.Height<rh) {
+    if (!DepthFamily(dd.Format) || dd.SampleDesc.Count!=1 || dd.Width<rx+rw || dd.Height<ry+rh) {
         error="DLSS scene depth does not cover the eye render"; Fail(error); return false;
     }
     if (UnormOf(od.Format)!=colorFormat || !(od.BindFlags&D3D11_BIND_UNORDERED_ACCESS) || od.Width<rw || od.Height<rh) {
@@ -343,7 +346,7 @@ bool DlssUpscaler::Evaluate(ID3D11Device* device, ID3D11DeviceContext* context, 
     } restore{p.context.Get(),gameState.Get()};
 
     if (!p.EnsureEye(e,mode_,colorFormat,rw,rh,od.Width,od.Height,dd.Width,dd.Height,error)) { Fail(error); return false; }
-    const D3D11_BOX box{0,0,0,rw,rh,1};
+    const D3D11_BOX box{rx,ry,0,rx+rw,ry+rh,1};
     p.context->CopySubresourceRegion(e.colorIn.Get(),0,0,0,0,color,0,&box);
     p.context->CopyResource(e.depthCopy.Get(),depth);
 
@@ -359,6 +362,7 @@ bool DlssUpscaler::Evaluate(ID3D11Device* device, ID3D11DeviceContext* context, 
             reset=true;
     }
     constants.valid=reset ? 0.0f : 1.0f;
+    constants.offset[0]=static_cast<float>(rx);constants.offset[1]=static_cast<float>(ry);
     constants.size[0]=static_cast<float>(rw);constants.size[1]=static_cast<float>(rh);
     constants.invSize[0]=1.0f/static_cast<float>(rw);constants.invSize[1]=1.0f/static_cast<float>(rh);
     D3D11_MAPPED_SUBRESOURCE mapped{};

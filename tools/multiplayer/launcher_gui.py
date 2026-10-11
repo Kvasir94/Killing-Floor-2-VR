@@ -129,6 +129,16 @@ def friendly(message):
     return next((text for key, text in FRIENDLY_ERRORS if key in message), message or "Something went wrong.")
 
 
+def host_identity():
+    try:
+        saved = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    if not isinstance(saved, dict):
+        saved = {}
+    return str(saved.get("server_name") or "KF2-VR Server"), str(saved.get("host_password") or "")
+
+
 def game_folder(store="auto"):
     settings = ROOT / "settings.json"
     try:
@@ -171,6 +181,11 @@ def contextual_arguments(arguments, saved, context):
             result.append(flag)
     if "--test-map-players" in context.initial_arguments and "--host" in result:
         result += ["--test-map-players", str(saved.test_map_players)]
+    if ("--solo" in result or "--host" in result) and "--breacher" in result:
+        if getattr(saved, "breacher_level", None) is not None:
+            result += ["--breacher-level", str(saved.breacher_level)]
+            if getattr(saved, "breacher_skills", None) is not None:
+                result += ["--breacher-skills", saved.breacher_skills]
     return result
 
 
@@ -443,7 +458,7 @@ class Launcher(tk.Tk):
 
     def dlss_controls(self, grid, fields):
         # DLSS mode and sharpening, shared by Play solo, Host and Join.
-        self.combo(grid, fields, "DLSS", {"off": "Off (experimental DLSS)", "dlaa": "DLAA (full resolution)", "quality": "Quality",
+        self.combo(grid, fields, "DLSS", {"off": "Off", "dlaa": "DLAA (full resolution)", "quality": "Quality",
                                           "balanced": "Balanced", "performance": "Performance",
                                           "ultraperformance": "Ultra Performance"},
                    getattr(self.saved, "dlss", None) or "off")
@@ -464,13 +479,19 @@ class Launcher(tk.Tk):
         fields["DLSS sharpness"] = (None, {})
         row = len(fields)
         self.hide_bile_lens = tk.BooleanVar(value=getattr(self.saved, "hide_bile_lens", True) is not False)
-        ttk.Checkbutton(grid, text="Hide Bloat bile screen splatter",
+        ttk.Checkbutton(grid, text="Hide Bloat bile screen splatter (large GPU saving)",
                         variable=self.hide_bile_lens).grid(row=row, column=1, sticky="w", pady=self.px(3))
         fields["Bile lens"] = (None, {})
+        row = len(fields)
+        self.hide_blood_lens = tk.BooleanVar(value=getattr(self.saved, "hide_blood_lens", True) is not False)
+        ttk.Checkbutton(grid, text="Hide hit blood screen splatter (keeps the red damage tint)",
+                        variable=self.hide_blood_lens).grid(row=row, column=1, sticky="w", pady=self.px(3))
+        fields["Blood lens"] = (None, {})
 
     def dlss_arguments(self, fields):
         return ["--dlss", self.pick(fields, "DLSS"), "--dlss-sharpness", str(int(self.dlss_sharpness.get())),
-                "--hide-bile-lens" if self.hide_bile_lens.get() else "--no-hide-bile-lens"]
+                "--hide-bile-lens" if self.hide_bile_lens.get() else "--no-hide-bile-lens",
+                "--hide-blood-lens" if self.hide_blood_lens.get() else "--no-hide-blood-lens"]
 
     @staticmethod
     def pick(fields, label):
@@ -646,13 +667,39 @@ class Launcher(tk.Tk):
                             variable=extras["threaded"]).pack(anchor="w", pady=(self.px(4), 0))
             self.label(frame, "OFF: portal see-through views. ON: flat portal fill; may improve frame rate.",
                        "small", DIM, wraplength=self.px(600)).pack(anchor="w")
+            extras["hbao"] = tk.BooleanVar(value=bool(getattr(self.saved, "hbao", True)))
+            ttk.Checkbutton(frame, text="HBAO+ ambient occlusion",
+                            variable=extras["hbao"]).pack(anchor="w", pady=(self.px(4), 0))
+            extras["reflections"] = tk.BooleanVar(value=bool(getattr(self.saved, "reflections", True)))
+            ttk.Checkbutton(frame, text="Screen-space reflections",
+                            variable=extras["reflections"]).pack(anchor="w")
+            extras["single_pass"] = tk.BooleanVar(value=self.store.get() != "epic" and bool(getattr(self.saved, "single_pass", True)))
+            ttk.Checkbutton(frame, text="Single-pass stereo: both eyes in one draw (experimental, Steam)",
+                            variable=extras["single_pass"], state="disabled" if self.store.get() == "epic" else "normal").pack(anchor="w", pady=(self.px(4), 0))
+            self.label(frame, "Saved; Join uses the last choice.",
+                       "small", DIM, wraplength=self.px(600)).pack(anchor="w")
         if not solo:
+            self.section(frame, "Server")
+            saved_name, saved_password = host_identity()
+            server_name = tk.StringVar(value=self.saved.server_name or saved_name)
+            server_password = tk.StringVar(value="" if self.saved.open_server else self.saved.password if self.saved.password is not None else saved_password)
+            grid = self.form(frame)
+            for index, (text, variable) in enumerate((("Server name", server_name), ("Password", server_password))):
+                self.label(grid, text.upper(), "label", DIM).grid(row=index, column=0, sticky="w", pady=self.px(5))
+                ttk.Entry(grid, textvariable=variable, width=30, font=self.f_body).grid(
+                    row=index, column=1, sticky="w", pady=self.px(5))
+            self.label(frame, "Leave the password blank for no password: anyone who finds the server can join.",
+                       "small", DIM, wraplength=self.px(600)).pack(anchor="w")
             self.section(frame, "Extras (optional)")
             for key, text, value in (
                     ("grabs", "VR players can grab Zeds (experimental)", self.saved.multiplayer_grabs),
-                    ("focus", "Slow time while a VR player picks a weapon (experimental)", self.saved.inventory_focus)):
+                    ("focus", "Slow time while a VR player picks a weapon (experimental)", self.saved.inventory_focus),
+                    ("workshop_desktop", "Desktop players without KF2-VR can join (mod downloads from the Steam Workshop)",
+                     getattr(self.saved, "workshop_desktop", False))):
                 extras[key] = tk.BooleanVar(value=bool(value))
                 ttk.Checkbutton(frame, text=text, variable=extras[key]).pack(anchor="w")
+            self.label(frame, "Workshop joining requires exactly matching published packages; otherwise use the matching ZIP.",
+                       "small", DIM, wraplength=self.px(600)).pack(anchor="w")
             self.label(frame, "Mods - everyone downloads them automatically", "small", DIM).pack(anchor="w", pady=(self.px(8), self.px(2)))
             mods = tk.Frame(frame, bg=INK)
             mods.pack(anchor="w")
@@ -670,6 +717,10 @@ class Launcher(tk.Tk):
         extras["breacher"] = tk.BooleanVar(value=bool(self.saved.breacher))
         ttk.Checkbutton(frame, text="Breacher (experimental; matching local package required for every player)",
                         variable=extras["breacher"]).pack(anchor="w", pady=(self.px(6), 0))
+        if getattr(self.saved, "breacher_level", None) is not None:
+            self.label(frame, f"Breacher development level {self.saved.breacher_level} while enabled; "
+                       "this window only, not progression.", "small", AMBER,
+                       wraplength=self.px(600)).pack(anchor="w")
 
         # This opt-in belongs to one Solo VR launch and is never loaded/saved.
         extras["local_test_control"] = tk.BooleanVar(value=bool(self.saved.local_test_control and solo and self.vr.get()
@@ -695,10 +746,27 @@ class Launcher(tk.Tk):
                 if pick("Render scale") != SCALES[0]:
                     arguments += ["--eye-render-percent", pick("Render scale").rstrip("%")]
                 arguments.append("--threaded-render" if extras["threaded"].get() else "--no-threaded-render")
+                if self.store.get() != "epic":
+                    arguments.append("--single-pass" if extras["single_pass"].get() else "--no-single-pass")
+                else:
+                    arguments.append("--no-single-pass")
+                arguments.append("--hbao" if extras["hbao"].get() else "--no-hbao")
+                arguments.append("--reflections" if extras["reflections"].get() else "--no-reflections")
                 arguments += self.dlss_arguments(fields)
             if not solo:
                 arguments.append("--multiplayer-grabs" if extras["grabs"].get() else "--no-multiplayer-grabs")
                 arguments.append("--inventory-focus" if extras["focus"].get() else "--no-inventory-focus")
+                arguments.append("--workshop-desktop" if extras["workshop_desktop"].get() else "--no-workshop-desktop")
+                name, secret = server_name.get().strip(), server_password.get().strip()
+                import friends
+                if not re.fullmatch(friends.SERVER_NAME_PATTERN, name):
+                    messagebox.showerror("Server name", "Use 1-48 letters, numbers, spaces or . , ' ! & ( ) + _ -")
+                    return
+                if secret and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", secret):
+                    messagebox.showerror("Password", "Use letters, numbers, underscore or hyphen (up to 64), or leave it blank.")
+                    return
+                arguments += ["--server-name", name]
+                arguments += ["--no-open-server", "--password", secret] if secret else ["--open-server"]
                 chosen = [key for key in MODS if extras["mod:" + key].get()]
                 arguments += ["--mods", ",".join(chosen) or "none"]
             else:
@@ -767,7 +835,7 @@ class Launcher(tk.Tk):
             arguments = ["--vr" if self.vr.get() else "--desktop", "--game-root", str(game)]
             if text.startswith("KF2VR1:"):
                 arguments += ["--address", text]
-            elif not text and re.fullmatch(r"[A-Za-z0-9.-]+", host) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", secret):
+            elif not text and re.fullmatch(r"[A-Za-z0-9.-]+", host) and re.fullmatch(r"[A-Za-z0-9_-]{0,64}", secret):
                 arguments += ["--address", host, "--password", secret]
             else:
                 messagebox.showwarning("Check the code", "Paste the whole code from your friend. It starts with KF2VR1:")
@@ -977,7 +1045,7 @@ class Launcher(tk.Tk):
         self.combo(grid, fields, "Turning", {"True": "Snap turn", "False": "Smooth turn"},
                    session.get("bSnapTurn", "True").capitalize())
         self.combo(grid, fields, "Render scale", {str(n): f"{n}%" for n in range(100, 49, -5)},
-                   session.get("EyeRenderPercent", "75"))
+                   session.get("EyeRenderPercent", "100"))
         self.label(frame, "Shared with Play solo / Host and in-game VR Controls > Graphics.",
                    "small", DIM, wraplength=self.px(600)).pack(anchor="w")
         self.section(frame, "Other")

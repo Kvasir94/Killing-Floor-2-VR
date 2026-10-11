@@ -8,9 +8,12 @@
 #include <share.h>
 #include <MinHook.h>
 #include "GameScript.h"
+#include "VampireReloadGuard.h"
 #include "ScriptField.h"
 #include "WeaponIsolation.h"
 #include "PerkContext.h"
+#include "CorpseDamageObserver.h"
+#include "ConsumedPieceQuery.h"
 #include "PromoEventLog.h"
 
 // Deliberately separate from the rendering/XR adapter. No local player, camera,
@@ -88,6 +91,15 @@ void HookProcess(void* object,void* stack,void* result) {
         }
     }
     if(authorityThread.load()!=GetCurrentThreadId()) { originalProcess(object,stack,result);return; }
+    if (kf2vr::adapter::RouteVampireReloadGuard(*script,object,function)) return;
+    kf2vr::adapter::SwipeDispatchScope swipeDispatch(*script,object,function,GameScript::At<void*>(stack,0x2c));
+    if (kf2vr::adapter::RouteHeldSwipeContact(*script,object,function,GameScript::At<void*>(stack,0x2c))) return;
+    kf2vr::adapter::RadiusDamageScope radiusDamage(*script,object,function);
+    if (kf2vr::adapter::RouteHeldHuskContact(*script,object,function,GameScript::At<void*>(stack,0x2c))) return;
+    if (name==script->Intern(L"TakeDamage"))
+        kf2vr::adapter::ObserveCorpseDamage(*script,object,function,GameScript::At<void*>(stack,0x2c));
+    kf2vr::adapter::LiveDamageScope liveDamage(*script,name==script->Intern(L"TakeDamage") ? object : nullptr,
+        function,GameScript::At<void*>(stack,0x2c));
     kf2vr::adapter::promo::Log::PhysicalScope promoPhysical(promoLog,*script,object,name);
     if (promoLog.Enabled() && name==script->Intern(L"InitGame") && script->IsClass(object,L"KFGameInfo"))
         promoLog.BeginTravel();
@@ -148,9 +160,17 @@ DWORD WINAPI AdapterMain(void*) {
     // virtual slot is 0x210; client 0x218 is ProcessDelegate here and is unsafe.
     script=std::make_unique<GameScript>(base,GameScript::ReflectionProfile{0xc3b70,0xc8f40,0x210,0x7b200});
     promoLog.Start();
+    if (!kf2vr::adapter::consumedQuery::Configure(base,true,[] {
+            return GetCurrentThreadId()==authorityThread.load(std::memory_order_acquire);
+        })) { std::fprintf(logFile,"server_adapter consumed_query_abi_refused\n");return 4; }
     if(MH_Initialize()!=MH_OK || MH_CreateHook(reinterpret_cast<void*>(base+0x7b590),
        reinterpret_cast<void*>(&HookProcess),reinterpret_cast<void**>(&originalProcess))!=MH_OK ||
+       MH_CreateHook(reinterpret_cast<void*>(base+kf2vr::adapter::consumedQuery::matchRva),
+       reinterpret_cast<void*>(&kf2vr::adapter::consumedQuery::Hook),
+       reinterpret_cast<void**>(&kf2vr::adapter::consumedQuery::original))!=MH_OK ||
+       MH_EnableHook(reinterpret_cast<void*>(base+kf2vr::adapter::consumedQuery::matchRva))!=MH_OK ||
        MH_EnableHook(reinterpret_cast<void*>(base+0x7b590))!=MH_OK) {
+        MH_DisableHook(MH_ALL_HOOKS); MH_Uninitialize();
         std::fprintf(logFile,"server_adapter hook_refused\n");return 4;
     }
     std::fprintf(logFile,"server_adapter ready=1 sha256=%s process_internal=7b590 guardedReads=%d\n",hash.c_str(),

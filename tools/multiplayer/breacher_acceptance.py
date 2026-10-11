@@ -55,7 +55,7 @@ def prepare(root, game, user, run, enabled, bridge):
     role = role_config(run, 'driver', user, root / 'build/multiplayer/script', game, 19077, 29077,
                        run / 'Cache', False)
     configs = Path(role['config_root'])
-    breacher.configure_content(configs, args)
+    breacher.configure_content(configs, args, game_root=game)
     path = configs / 'KFEngine.ini'
     text = read_ini(path)
     section = re.search(r'(?ims)^\[Core\.System\][^\n]*\n(.*?)(?=^\[|\Z)', text)[1]

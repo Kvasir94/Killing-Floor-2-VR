@@ -133,14 +133,15 @@ simulated function bool Eligible()
         || Presenter.NativeMenuActive != 0) return false;
     IneligibleReason = "state";
     // A gun in the hand can always bash: firing, a pump or bolt cycle, a
-    // reload, sprinting. Only a gun being drawn, put away or thrown cannot.
-    if (Weapon.IsInState('Inactive') || Weapon.IsInState('WeaponEquipping')
-        || Weapon.IsInState('WeaponPuttingDown') || Weapon.IsInState('WeaponAbortEquip')
-        || Weapon.IsInState('WeaponThrowing')) return false;
+    // reload, sprinting. Drawing, putting away, throwing and the stock
+    // non-restraint weapon-interaction lock still refuse a bash. Strong grabs
+    // lower the stock weapon; that does not remove the tracked held item.
+    if (!class'VRPhysicalInteraction'.static.BashStateAllowed(Weapon.GetStateName(),
+        class'VRPhysicalInteraction'.static.Restrained(Presenter.Human))) return false;
     IneligibleReason = "camera";
     if (!Presenter.PC.UsingFirstPersonCamera()) return false;
     IneligibleReason = "nofiring";
-    if (Presenter.Human.bNoWeaponFiring) return false;
+    if (!class'VRPhysicalInteraction'.static.Allowed(Presenter.Human)) return false;
     IneligibleReason = "profile";
     // A retained bash sampler must not survive a profile transition into a
     // weapon that supplies its own physical melee head.

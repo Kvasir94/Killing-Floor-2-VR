@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../vr-user-profile.ps1')
+. (Join-Path $PSScriptRoot '../vr-defaults.ps1')
 $testRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ('../../build/session-profile-tests/' + [Guid]::NewGuid().ToString('N'))))
 $first = Join-Path $testRoot 'First'
 $second = Join-Path $testRoot 'Second'
@@ -23,6 +24,21 @@ Check ($engine.Contains('MusicVolumeMultiplier=0.3')) 'Audio preference did not 
 Check ($game.Contains('MovementHand=1') -and $game.Contains('MenuHand=0') -and $game.Contains('ChestGrenadeOffset=(X=15,Y=2,Z=0)')) 'Hand, menu or calibration preference was lost.'
 Check ($game.Contains('bNormalGame=True') -and -not $game.Contains('FirstRun')) 'Diagnostic mode or INI provenance leaked into next run.'
 Check (($inputText -split 'Bindings=').Count -eq 3) 'Array bindings were flattened or old bindings retained.'
+$game = Repair-VRPreferenceValues $game
+Check ($game.Contains('bChestGrenadeCentered=False')) 'Legacy chest offset inherited centre-based defaults.'
+Check ((Get-VRDefaults 'KF2VR.VRHandsBridge')['bChestGrenadeCentered'] -eq 'True') 'New chest defaults are not centre-based.'
+foreach ($offset in @('(X=12,Y=0,Z=0)','(X=10,Y=-18,Z=-6)','(X=10,Y=-18,Z=-29)','(X=20,Y=-16,Z=-8)','(X=10,Y=-20,Z=-18)','(X=11.6,Y=4.4,Z=7.3)')) {
+    $legacyChest = Repair-VRPreferenceValues "[KF2VR.VRHandsBridge]`r`nChestGrenadeOffset=$offset`r`n"
+    Check ($legacyChest.Contains("ChestGrenadeOffset=$offset") -and $legacyChest.Contains('bChestGrenadeCentered=False')) 'Legacy chest preset/capture was reinterpreted.'
+}
+$centeredChest = "[KF2VR.VRHandsBridge]`r`nChestGrenadeOffset=(X=6,Y=-4,Z=9)`r`nbChestGrenadeCentered=True`r`n"
+[IO.File]::WriteAllText((Join-Path $second 'KFGame.ini'), (Repair-VRPreferenceValues $centeredChest))
+Export-VRUserProfile $profile $second
+Import-VRUserProfile $profile $first
+$restoredChest = Repair-VRPreferenceValues ([IO.File]::ReadAllText((Join-Path $first 'KFGame.ini')))
+Check ($restoredChest.Contains('ChestGrenadeOffset=(X=6,Y=-4,Z=9)') -and $restoredChest.Contains('bChestGrenadeCentered=True')) 'Centred chest capture did not round-trip with its interpretation.'
+$invalidChest = Repair-VRPreferenceValues ($centeredChest.Replace('=True','=invalid'))
+Check ($invalidChest.Contains('bChestGrenadeCentered=False')) 'Malformed chest interpretation did not preserve legacy semantics.'
 Check ([IO.File]::ReadAllText((Join-Path $first 'KFEngine.ini')) -ceq $original) 'Source run was modified by persistence.'
 Export-VRUserProfile $profile $second
 Check ((Get-ChildItem -LiteralPath $profile -Filter '*.tmp').Count -eq 0) 'Atomic preference export left a temporary file.'

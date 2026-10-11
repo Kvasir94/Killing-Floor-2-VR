@@ -27,12 +27,14 @@ public:
     }
 };
 class SessionMenuInput {
-    bool menuArmed_=false,chordArmed_=false,chordHeld_=false;
-    double chordSince_=0,lastTime_=0;
+    bool menuArmed_=false,chordArmed_=false,chordHeld_=false,holdArmed_=false,holdHeld_=false;
+    double chordSince_=0,holdSince_=0,lastTime_=0;
     bool haveTime_=false;
 public:
     void Reset() { *this={}; }
-    bool Update(bool available,bool menuActive,bool menuDown,bool chordActive,bool chordDown,double now) {
+    // hold: a single control held for 0.6 s (Index right trackpad press).
+    bool Update(bool available,bool menuActive,bool menuDown,bool chordActive,bool chordDown,double now,
+                bool holdActive=false,bool holdDown=false) {
         if (!available || !std::isfinite(now) || (haveTime_ && (now<lastTime_ || now-lastTime_>.25))) {
             Reset(); return false;
         }
@@ -46,7 +48,12 @@ public:
         if (chordDown && chordArmed_ && !chordHeld_) { chordHeld_=true; chordSince_=now; }
         const bool chord=chordHeld_ && chordArmed_ && now-chordSince_>=.6;
         if (chord) chordArmed_=false;
-        return menu || chord;
+        if (!holdActive) { holdArmed_=false; holdHeld_=false; }
+        else if (!holdDown) { holdArmed_=true; holdHeld_=false; }
+        if (holdDown && holdArmed_ && !holdHeld_) { holdHeld_=true; holdSince_=now; }
+        const bool hold=holdHeld_ && holdArmed_ && now-holdSince_>=.6;
+        if (hold) holdArmed_=false;
+        return menu || chord || hold;
     }
 };
 }

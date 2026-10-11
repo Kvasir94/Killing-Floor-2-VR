@@ -150,7 +150,8 @@ simulated function RefreshGripIdentity()
     bReadyPoseSettling = true;
     if (PhysicalMelee != None) PhysicalMelee.Cancel();
     if (PhysicalBash != None) PhysicalBash.Cancel();
-    CalibrateGripPose(ActiveWeapon);
+    if (ActiveProfile>=0 && WeaponProfiles[ActiveProfile].bWristEquipment) CalibrateWristEquipment();
+    else CalibrateGripPose(ActiveWeapon);
     if (!bCalibrated) return;
     CaptureAuthoredGrip();
     BindRoles();
@@ -204,7 +205,7 @@ simulated function EnsurePhysicalCombat()
     // or that recalibrated later, stayed without one for its whole life, which
     // is why bashing worked on some guns and never on others. Every calibrated
     // ordinary item gets one here, the same rule ConfigureWeapon applies.
-    if (WeaponProfiles[ActiveProfile].bPhysicalMelee
+    if (WeaponProfiles[ActiveProfile].bPhysicalMelee || WeaponProfiles[ActiveProfile].bWristEquipment
         || !(WeaponProfiles[ActiveProfile].bFirearm || !ActiveWeapon.IsA('KFWeap_MeleeBase')))
     {
         if (PhysicalBash != None) { PhysicalBash.Release(); PhysicalBash = None; }
@@ -328,6 +329,7 @@ simulated function SyncTracking()
     NativeDepthSupported = RootBridge.NativeDepthSupported;
     NativeKeepWorldDepth = RootBridge.NativeKeepWorldDepth;
     bSightLineConvergence = RootBridge.bSightLineConvergence;
+    bSightPointAim = RootBridge.bSightPointAim;
     bDisableSupportHandAim = RootBridge.bDisableSupportHandAim;
     bWeaponLasers = RootBridge.bWeaponLasers;
     NativeControlsEnabled = RootBridge.NativeControlsEnabled;
@@ -355,20 +357,20 @@ simulated function SyncTracking()
     EnsurePhysicalCombat();
 }
 
-// Stock users intentionally aim firearms with the primary controller. Retain
-// an acquired foregrip only while its physical grip and valid tracking remain.
-// Melee, support-only carries, ordinary two-hand aim and toggle release keep
-// their existing policies.
-simulated function bool RetainPhysicalStockSupport()
+// Once acquired, a firearm foregrip stays held during normal aiming even if
+// its tracked position drifts. Input owns hold/toggle release; readying,
+// support-only carry and physical melee retain their existing contact rules.
+simulated function bool RetainAcquiredFirearmSupport()
 {
-    return RootBridge != None && RootBridge.bDisableSupportHandAim
+    return RootBridge != None && bCalibrated && ActiveWeapon != None && !ActiveWeapon.bDeleteMe
         && ActiveProfile >= 0 && ActiveProfile < WeaponProfiles.Length
-        && WeaponProfiles[ActiveProfile].bFirearm
+        && WeaponProfiles[ActiveProfile].bFirearm && !WeaponProfiles[ActiveProfile].bPhysicalMelee
+        && !IsWeaponReadying(ActiveWeapon) && !bReadyPoseSettling
         && PresentedItem != None && PresentedItem.PrimaryHand >= 0
         && PresentedItem.SupportHand >= 0 && PresentedItem.SupportHand < 2
         && HasValidSupportTracking()
-        && Hands[PresentedItem.SupportHand].bGrip
-        && (RootBridge.NativeGripMask & (1 << PresentedItem.SupportHand)) != 0;
+        && (!RootBridge.bHoldSupportGrip || (Hands[PresentedItem.SupportHand].bGrip
+            && (RootBridge.NativeGripMask & (1 << PresentedItem.SupportHand)) != 0));
 }
 
 simulated function bool SupportIsEngaged()
@@ -378,7 +380,7 @@ simulated function bool SupportIsEngaged()
         && (NativeValidMask & (1 << PresentedItem.SupportHand)) != 0
         && (NativeGripActiveMask & (1 << PresentedItem.SupportHand)) != 0
         && AttachedHands[PresentedItem.SupportHand] != None
-        && (RetainPhysicalStockSupport() || SupportContactWithinReleaseRange())
+        && (RetainAcquiredFirearmSupport() || SupportContactWithinReleaseRange())
         && (!RootBridge.bHoldSupportGrip || (Hands[PresentedItem.SupportHand].bGrip
             && (RootBridge.NativeGripMask & (1 << PresentedItem.SupportHand)) != 0));
 }
@@ -669,6 +671,8 @@ simulated function Suspend()
     if (PhysicalBash != None) PhysicalBash.Cancel();
     if (AF2011Barrels != None) AF2011Barrels.Suspend();
     if (RiotShield != None) RiotShield.Suspend();
+    if (Deadbolt != None) Deadbolt.Suspend();
+    if (Ripcord != None) Ripcord.Suspend();
     HideWeaponLaser();
     ClearHandAttachments();
     HandFillLight.SetEnabled(false);
@@ -692,6 +696,8 @@ simulated function Abandon()
     if (M14Scope != None) { M14Scope.Release(true); M14Scope = None; }
     if (M14Laser != None) { M14Laser.Release(true); M14Laser = None; }
     if (AF2011Barrels != None) { AF2011Barrels.Release(true); AF2011Barrels = None; }
+    if (Deadbolt != None) { Deadbolt.Release(true); Deadbolt = None; }
+    if (Ripcord != None) { Ripcord.Release(true); Ripcord = None; }
     // The control is ours, appended to the weapon's instanced tree; a new
     // owner's presenter would otherwise inherit a shield pinned in world space.
     if (RiotShield != None) { RiotShield.Release(); RiotShield = None; }

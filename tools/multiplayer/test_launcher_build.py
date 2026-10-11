@@ -21,6 +21,7 @@ class LauncherBuildTests(unittest.TestCase):
             tools.mkdir(parents=True)
             for name in LAUNCHER_MODULES:
                 (tools / name).write_text("# audited module\n")
+            (tools / "linux-desktop.sh").write_text("#!/usr/bin/env bash\n")
             for name in ("install-multiplayer-server.ps1", "vr-defaults.json", "dependency-pins.json"):
                 (source / "tools" / name).write_text("{}")
             (source / "private.log").write_text("private local data")

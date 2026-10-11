@@ -102,8 +102,20 @@ function Initialize(VRDualHandInput Owner)
 
 function Shutdown()
 {
-    Cancel();
+    CancelTransaction();
     if (Arc != None) { Arc.Release(); Arc = None; }
+}
+
+// Context loss cancels the whole local transaction. Cancel() alone only hides
+// an aim, including the aim that is cleared after a normal commit begins.
+// Preserve ReadyTime: cancellation cannot shorten an already billed recharge.
+// A network request already sent still belongs to the server; this does not
+// withdraw it or move the pawn back.
+function CancelTransaction()
+{
+    ClearBuffer();
+    Cancel();
+    AbortCommit();
 }
 
 function Cancel()
@@ -163,9 +175,7 @@ function Update(float RealDelta)
     TryArrivalSound();
     if (!ModeActive())
     {
-        if (Phase != 0) AbortCommit();
-        ClearBuffer();
-        Cancel();
+        CancelTransaction();
         return;
     }
     // Teleport mode never drives the stock movement axes. Cleared here rather
@@ -178,13 +188,13 @@ function Update(float RealDelta)
     if (Phase != 0) { Cancel(); return; }
 
     Hand = Clamp(Bridge.MovementHand, 0, 1);
-    if (!Input.ContextValid()) { ClearBuffer(); Cancel(); return; }
-    if (bBuffered && FireBuffered()) { Cancel(); return; }
+    if (!Input.ContextValid()) { CancelTransaction(); return; }
+    if (bBuffered && BufferedHand != Hand) ClearBuffer();
     X = Hand == 0 ? Bridge.LeftStickX : Bridge.RightStickX;
     Y = Hand == 0 ? Bridge.LeftStickY : Bridge.RightStickY;
     if ((Bridge.NativeValidMask & Bridge.NativeStickActiveMask & (1 << Hand)) == 0
         || X != X || Y != Y || Abs(X) > 1 || Abs(Y) > 1)
-    { Cancel(); return; }
+    { ClearBuffer(); Cancel(); return; }
     Magnitude = Sqrt(X*X + Y*Y);
 
     // Stick click puts the arc away. It has no sprint meaning in this mode, so
@@ -196,6 +206,7 @@ function Update(float RealDelta)
         return;
     }
 
+    if (bBuffered && FireBuffered()) { Cancel(); return; }
     bAllowed = class'VRTeleportLocomotion'.static.BodyReady(Bridge.Human);
     bReady = Now() >= ReadyTime;
     if (Magnitude > 0.12)
@@ -932,5 +943,5 @@ function BeginFadeIn()
 // the fade with the rest instead of leaving the view black.
 function PublishBlink()
 {
-    Bridge.NativeBlinkFX = FClamp(Blink, 0, 1);
+    if (Bridge != None) Bridge.NativeBlinkFX = FClamp(Blink, 0, 1);
 }

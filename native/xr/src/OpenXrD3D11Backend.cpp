@@ -104,6 +104,7 @@ struct OpenXrD3D11Backend::Impl {
     XrAction gripPose = XR_NULL_HANDLE, aimPose = XR_NULL_HANDLE;
     XrAction trigger = XR_NULL_HANDLE, squeeze = XR_NULL_HANDLE, stick = XR_NULL_HANDLE;
     XrAction primary = XR_NULL_HANDLE, secondary = XR_NULL_HANDLE, stickClick = XR_NULL_HANDLE, menu = XR_NULL_HANDLE;
+    XrAction menuHold = XR_NULL_HANDLE;
     XrAction vibration = XR_NULL_HANDLE;
     struct HapticPulse { float amplitude=0, duration=0; ULONGLONG queued=0; };
     SRWLOCK hapticLock = SRWLOCK_INIT;
@@ -253,6 +254,7 @@ struct OpenXrD3D11Backend::Impl {
         secondary = Action("secondary", "Secondary button", XR_ACTION_TYPE_BOOLEAN_INPUT);
         stickClick = Action("stick_click", "Movement axis click", XR_ACTION_TYPE_BOOLEAN_INPUT);
         menu = Action("menu", "Menu", XR_ACTION_TYPE_BOOLEAN_INPUT);
+        menuHold = Action("menu_hold", "VR menu (hold)", XR_ACTION_TYPE_BOOLEAN_INPUT);
         vibration = Action("vibration", "Hand feedback", XR_ACTION_TYPE_VIBRATION_OUTPUT);
 
         // Core interaction profiles only: bindings are suggestions, so runtimes
@@ -288,6 +290,8 @@ struct OpenXrD3D11Backend::Impl {
                 } else if (p == 2) { // Index A/B on either hand; system reserved.
                     bind(primary, "/input/a/click");
                     bind(secondary, "/input/b/click");
+                    // Index has no menu button: a held right trackpad press opens the VR menu.
+                    if (hand == 1) bind(menuHold, "/input/trackpad/force");
                 } else {
                     bind(menu, "/input/menu/click");
                 }
@@ -608,6 +612,7 @@ struct OpenXrD3D11Backend::Impl {
         hand.secondaryPressed = BoolInput(secondary, index, hand.secondaryActive);
         hand.stickPressed = BoolInput(stickClick, index, hand.stickClickActive);
         hand.menuPressed = BoolInput(menu, index, hand.menuActive);
+        hand.menuHoldPressed = BoolInput(menuHold, index, hand.menuHoldActive);
     }
 
     template<typename EyeFrame>
@@ -726,7 +731,7 @@ struct OpenXrD3D11Backend::Impl {
         session = XR_NULL_HANDLE;
         if (actionSet != XR_NULL_HANDLE) xrDestroyActionSet(actionSet);
         actionSet = XR_NULL_HANDLE;
-        gripPose = aimPose = trigger = squeeze = stick = primary = secondary = stickClick = menu = vibration = XR_NULL_HANDLE;
+        gripPose = aimPose = trigger = squeeze = stick = primary = secondary = stickClick = menu = menuHold = vibration = XR_NULL_HANDLE;
         if (instance != XR_NULL_HANDLE) xrDestroyInstance(instance);
         instance = XR_NULL_HANDLE;
         system = XR_NULL_SYSTEM_ID;

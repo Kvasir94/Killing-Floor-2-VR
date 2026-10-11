@@ -154,10 +154,17 @@ var private matrix ServerGrabStart[2];
 var private matrix ServerGrabTarget[2];
 var private float ServerGrabTargetTime[2];
 var private byte ServerGrabTargetReady[2], ServerGrabOwnsKinematic[2], ServerGrabSavedKinematic[2];
+var private vector ServerGrabPreviousPoint[2];
+var private vector ServerGrabPalm[2];
+var private rotator ServerGrabRotation[2];
+var private float ServerGrabPreviousTime[2], ServerRendReady;
+var private byte ServerGrabFrameSamples[2];
+var private bool bServerRendArmed;
 // VR practice range on a network game. The range runs on the authority; the
 // owning client keeps only this mirror of its state for the practice page.
 var VRPracticeRange ServerPracticeRange;
 var bool bVRPracticeActive, bVRPracticeInvulnerable;
+var bool bVRSandboxActive, bSentSandboxActive;
 // Owning client's mirror of bGodMode for the utilities wheel tile.
 var bool bVRGodMode;
 var float LastVRDoshTime;
@@ -614,7 +621,6 @@ function UpdateLocalVRBridge()
     BridgeClass = class<Actor>(DynamicLoadObject("KF2VRNetClient.KF2VRNetHandsBridge", class'Class'));
     if (BridgeClass != None) LocalVRBridge = Spawn(BridgeClass, self);
     `log("KF2VRNet vr_bridge actor=" $ LocalVRBridge $ " netmode=" $ WorldInfo.NetMode);
-    bSkipNonCriticalForceLookAt = true;
 }
 
 // Fault injection affects only the cosmetic upload. Native tracking, input,
@@ -661,8 +667,11 @@ function PublishTrackedPose(vector Head, rotator HeadAim, vector LeftHand,
         || NetChannel == None || !NetChannel.bVRTrackingEnabled || NetChannel.PawnEpoch == 0
         || DiagnosticDropoutStep == 1
         || WorldInfo.RealTimeSeconds < NextTrackedPoseTime) return;
-    NextTrackedPoseTime = WorldInfo.RealTimeSeconds + class'KF2VRNetTypes'.const.ClientPoseInterval;
-    Root.Yaw = Pawn.Rotation.Yaw;
+    // Keep the cadence. Restarting the wait from this frame rounded every
+    // interval up to whole frames (30 Hz sent ~22 Hz at 90 fps).
+    NextTrackedPoseTime = FMax(NextTrackedPoseTime + class'KF2VRNetTypes'.const.ClientPoseInterval,
+        WorldInfo.RealTimeSeconds);
+    Root.Yaw = NormalizeRotAxis(Pawn.Rotation.Yaw);
     Sample.WorldEpoch = NetChannel.WorldEpoch;
     Sample.ConnectionEpoch = NetChannel.ConnectionEpoch;
     Sample.PawnEpoch = NetChannel.PawnEpoch;
@@ -708,6 +717,9 @@ function PublishTrackedPose(vector Head, rotator HeadAim, vector LeftHand,
     // Low byte left, next byte right (KF2VRNetTypes.NetPoseSample encoding).
     if ((TrackingFlags & 2) != 0) Sample.LeftHandPose = HandPoses & 255;
     if ((TrackingFlags & 4) != 0) Sample.RightHandPose = (HandPoses >> 8) & 255;
+    Sample.SampleMillis = int(WorldInfo.RealTimeSeconds * 1000.0) & 65535;
+    Sample.RootYaw = Root.Yaw;
+    Sample.PresentationFlags = Sample.PresentationFlags | 64;
     NetChannel.ServerSubmitPose(Sample);
 }
 
@@ -1763,6 +1775,7 @@ function bool PhysicalMeleeRequestValid(KFWeapon W, byte FiringMode, vector HitL
     local int I;
     local bool bMeleeGun;
     if (W == None || W.bDeleteMe || Pawn == None || W.Instigator != Pawn
+        || !class'VRPhysicalInteraction'.static.Allowed(KFPawn_Human(Pawn))
         || NetChannel == None || !NetChannel.IsInventoryFocusEligible()
         || !NetChannel.HeldState.bIndependentWeapons
         || (NetChannel.HeldState.LeftWeapon != W && NetChannel.HeldState.RightWeapon != W)
@@ -1889,9 +1902,20 @@ reliable server function ServerGrabDamage(Pawn Victim, float Amount, vector HitL
     Victim.TakeDamage(Amount, self, HitLocation, Momentum, class'VRDT_ZedSlam', HitInfo, Pawn);
 }
 
+// A separate source-bearing contact cannot masquerade as an arbitrary damage
+// type or manufacture a payload from the damage victim. Core checks receipts,
+// body identity, ranges and contact geometry before optional skill callbacks.
+reliable server function ServerGrabImpact(Actor Source, name Bone, Actor Target,
+    vector Point, vector Direction, float Speed, float BaseDamage, int RequestPawnEpoch, int PolicyEpoch)
+{
+    if (!CurrentGrabRequest(RequestPawnEpoch,PolicyEpoch)) return;
+    class'VRBreacherCharge'.static.Apply(self,Source,Bone,Target,Point,Direction,Speed,BaseDamage);
+}
+
 reliable server function ServerPhysicalDamage(Pawn Victim, float DamageAmount, vector HitLocation, vector Momentum, class<DamageType> DamageType, name BoneName, byte Hand)
 {
     local TraceHitInfo HitInfo;
+    local int EmpoweredDamage;
     if (Role != ROLE_Authority || Victim == None || Victim.bDeleteMe || Victim.Health <= 0) return;
     if (Hand > 1 || NetChannel == None || !NetChannel.PhysicalHandEligible(Hand, HitLocation)
         || ServerGrabPawn[Hand] != None) return;
@@ -1919,7 +1943,9 @@ reliable server function ServerPhysicalDamage(Pawn Victim, float DamageAmount, v
     else if (DamageType == class'VRDT_FistDamageHeavy' || DamageType == class'VRDT_GloveFistHeavy')
         class'VRPhysicalFist'.static.ApplyParry(KFPawn(Victim), KFPawn(Pawn), class'VRPhysicalFist'.default.HeavyParryStrength);
     HitInfo.BoneName = BoneName;
-    Victim.TakeDamage(DamageAmount, self, HitLocation, Momentum, DamageType, HitInfo, Pawn);
+    EmpoweredDamage=int(DamageAmount);
+    class'VRBreacherPhysics'.static.EmpowerPunch(self,KFPawn(Victim),HitLocation,BoneName,EmpoweredDamage,Momentum,DamageType);
+    Victim.TakeDamage(EmpoweredDamage, self, HitLocation, Momentum, DamageType, HitInfo, Pawn);
 }
 
 // A client's raised fist guard (VRFistGuard) caught a Zed mid-attack. The
@@ -1978,6 +2004,11 @@ function SyncVRPractice()
 {
     local bool bActiveNow, bInvulnerableNow;
     bActiveNow = ServerPracticeRange != None && !ServerPracticeRange.bDeleteMe && ServerPracticeRange.bActive;
+    if (bSentSandboxActive != (bActiveNow && ServerPracticeRange.bSandbox))
+    {
+        bSentSandboxActive = bActiveNow && ServerPracticeRange.bSandbox;
+        ClientVRSandboxState(bSentSandboxActive);
+    }
     bInvulnerableNow = bActiveNow && ServerPracticeRange.IsInvulnerable();
     if (bActiveNow != bSentPracticeActive || bInvulnerableNow != bSentPracticeInvulnerable)
     {
@@ -2057,10 +2088,18 @@ reliable client function ClientVRPracticeState(bool bActiveNow, bool bInvulnerab
     bVRPracticeInvulnerable = bInvulnerableNow;
 }
 
+reliable client function ClientVRSandboxState(bool bActiveNow)
+{
+    bVRSandboxActive = bActiveNow;
+}
+
 reliable server function ServerRequestKnockdown(KFPawn_Monster M, vector Nudge, int RequestPawnEpoch, int PolicyEpoch)
 {
     if (!CurrentGrabRequest(RequestPawnEpoch, PolicyEpoch) || M == None || M.bDeleteMe || M.Health <= 0
         || Pawn == None || VSize(M.Location - Pawn.Location) > SERVER_GRAB_LIMIT) return;
+    if (class'VRBreacherPhysics'.static.Boss(M) || M.GetTeamNum()==Pawn.GetTeamNum()
+        || M.IsHeadless() || M.HasInjuredHitZones()
+        || (M.IsLargeZed() && !class'VRBreacherPhysics'.static.ExpandedGrab(self))) return;
     class'VRSM_HeldKnockdown'.static.Install(M);
     // No spin and only the least shove the client asked for: the Zed goes
     // limp where it stands, into the hand that grabbed it.
@@ -2084,7 +2123,10 @@ reliable server function ServerGrabHold(KFPawn_Monster M, name BoneName, byte Ha
     if (!CurrentGrabRequest(RequestPawnEpoch, PolicyEpoch) || M == None || M.bDeleteMe || Hand > 1 || Pawn == None
         || !class'VRGrenadeThrow'.static.Bounded(Palm - Pawn.Location, SERVER_GRAB_LIMIT)
         || VSize(Palm - M.Location) > SERVER_GRAB_LIMIT) return;
-    if (M.Mesh == None) return;
+    if (M.Mesh == None || class'VRBreacherPhysics'.static.Boss(M)) return;
+    if (M.Health>0 && M.GetTeamNum()==Pawn.GetTeamNum()) return;
+    if (M.Health>0 && M.Physics!=PHYS_RigidBody && M.IsLargeZed()
+        && !class'VRBreacherPhysics'.static.ExpandedGrab(self)) return;
     if (ServerGrabPawn[1 - Hand] == M && ServerGrabBone[1 - Hand] == BoneName) return;
     // Re-arm rather than stack: a repeated claim for the same hand is the
     // client re-asserting a hold it already owns, not a second hand.
@@ -2111,16 +2153,45 @@ reliable server function ServerGrabHold(KFPawn_Monster M, name BoneName, byte Ha
 function bool AttachServerGrab(byte Hand, vector Palm, rotator HandRotation)
 {
     local KFPawn_Monster M;
+    local VRSM_HeldKnockdown Move;
     local RB_BodyInstance Body;
     local vector Offset;
     local Quat Relative;
+    local KF2VRNetHeldCorpse CorpseHold;
     M = ServerGrabPawn[Hand];
     if (M == None || M.bDeleteMe || M.Mesh == None) return false;
-    if (ServerGrabBody[Hand] != None && ServerGrabBody[Hand].IsValidBodyInstance()) return true;
-    if (M.Physics != PHYS_RigidBody) return false;
+    CorpseHold=class'KF2VRNetHeldCorpse'.static.Find(self,M);
+    if (M.Health<=0 || M.bPlayedDeath)
+    {
+        // Only a retained authority pose can continue across tear-off. An
+        // arbitrary client-only corpse does not become an authoritative shield.
+        if (CorpseHold==None || !CorpseHold.Refresh(Hand,ServerGrabBone[Hand])) return false;
+        ServerGrabHeld[Hand]=0;
+    }
+    if (class'VRBodyHold'.static.Detached(M.Mesh, ServerGrabBone[Hand]))
+    {
+        if (ServerGrabHeld[Hand] != 0)
+        {
+            Move = class'VRSM_HeldKnockdown'.static.Current(M);
+            if (Move != None) Move.ReleaseHold(false);
+            ServerGrabHeld[Hand] = 0;
+        }
+    }
+    else if (M.Physics != PHYS_RigidBody) return false;
     Body = class'VRBodyHold'.static.BodyFor(M.Mesh, ServerGrabBone[Hand]);
     if (Body == None || !Body.IsValidBodyInstance()) return false;
+    if (M.Health>0 && !M.bPlayedDeath)
+    {
+        if (CorpseHold==None) CorpseHold=class'KF2VRNetHeldCorpse'.static.Begin(self,M);
+        if (CorpseHold!=None) CorpseHold.Refresh(Hand,ServerGrabBone[Hand]);
+    }
+    if (ServerGrabBody[Hand] == Body)
+    {
+        class'VRBodyHold'.static.Begin(Body, M.Mesh);
+        return true;
+    }
     if (Body == ServerGrabBody[1 - Hand]) { ReleaseServerGrab(Hand); return false; }
+    class'VRBodyHold'.static.YieldPins(M.Mesh);
     if (Body != None && ServerGrabPawn[1 - Hand] == M && ServerGrabBody[1 - Hand] != None
         && ServerGrabBody[1 - Hand].IsValidBodyInstance())
     {
@@ -2128,10 +2199,16 @@ function bool AttachServerGrab(byte Hand, vector Palm, rotator HandRotation)
             - MatrixGetOrigin(ServerGrabBody[1 - Hand].GetUnrealWorldTM()));
         ServerGrabSpan[1 - Hand] = ServerGrabSpan[Hand];
     }
-    if (!class'VRBodyHold'.static.Capture(Body, Palm, HandRotation, Offset, Relative)) return false;
+    if (ServerGrabOwnsKinematic[Hand] == 0)
+    {
+        if (!class'VRBodyHold'.static.Capture(Body, Palm, HandRotation, Offset, Relative)) return false;
+        ServerGrabOffset[Hand] = Offset;
+        ServerGrabRelative[Hand] = Relative;
+    }
+    // A gore rebuild keeps the exact part and its original grip frame.
+    if (ServerGrabBody[Hand] != None && ServerGrabBody[Hand].IsValidBodyInstance())
+        ServerGrabBody[Hand].SetFixed(false);
     ServerGrabBody[Hand] = Body;
-    ServerGrabOffset[Hand] = Offset;
-    ServerGrabRelative[Hand] = Relative;
     ServerGrabStart[Hand] = Body.GetUnrealWorldTM();
     ServerGrabAttachTime[Hand] = WorldInfo.TimeSeconds;
     if (ServerGrabOwnsKinematic[Hand] == 0)
@@ -2143,6 +2220,97 @@ function bool AttachServerGrab(byte Hand, vector Palm, rotator HandRotation)
     ServerGrabTargetReady[Hand] = 0;
     class'VRBodyHold'.static.Begin(Body, M.Mesh);
     M.Mesh.WakeRigidBody();
+    return true;
+}
+
+function int ServerRendZone(KFPawn_Monster M, name Bone)
+{
+    local int I;
+    for (I=0; I<M.HitZones.Length; ++I)
+        if (M.HitZones[I].BoneName!='' && M.GetRBBoneFromBoneName(M.HitZones[I].BoneName)==Bone) return I;
+    return INDEX_NONE;
+}
+
+// Called only with a complete pair from the authenticated grip stream. The
+// client supplies neither victim, cut, damage nor a claim that Rend succeeded.
+function bool TryServerRend(KFPawn_Monster M)
+{
+    local KFPerk Perk;
+    local KFPawn_Human Human;
+    local KF2VRNetHeldCorpse H;
+    local VRGrabOwnership Receipt;
+    local class<KFDamageType> Rend;
+    local TraceHitInfo HitInfo;
+    local int Zone, OtherZone, Hand, ReceiptMask, Skill;
+    local vector Pull, Point;
+    Human=KFPawn_Human(Pawn);
+    if (Role!=ROLE_Authority || !GrabPermitted() || Human==None || Human.Health<=0
+        || M==None || M.bDeleteMe || M.Health<=0 || M.bPlayedDeath || M.IsLargeZed()
+        || class'VRBreacherPhysics'.static.Boss(M) || M.GetTeamNum()==Human.GetTeamNum()
+        || M.Mesh==None || M.Physics!=PHYS_RigidBody || WorldInfo.RealTimeSeconds<ServerRendReady
+        || !bServerRendArmed
+        || ServerGrabPawn[0]!=M || ServerGrabPawn[1]!=M || ServerGrabBone[0]==ServerGrabBone[1]
+        || ServerGrabFrameSamples[0]<2 || ServerGrabFrameSamples[1]<2
+        || WorldInfo.RealTimeSeconds-ServerGrabPreviousTime[0]>0.25
+        || WorldInfo.RealTimeSeconds-ServerGrabPreviousTime[1]>0.25) return false;
+    Perk=Human.GetPerk(); Skill=class'VRZedGrab'.default.RendSkillIndex;
+    if (Perk==None || Perk.Class.Name!='BreacherPerk' || Skill<0 || Skill>=Perk.PerkSkills.Length
+        || !Perk.PerkSkills[Skill].bActive || !Perk.IsPerkLevelAllowed(Skill)) return false;
+    // A pull must start from a fresh, unstretched pair, never a tracking jump
+    // followed by stationary frames. One attempt until the hands return.
+    bServerRendArmed=false;
+    for (Hand=0; Hand<2; ++Hand)
+        if (ServerGrabBody[Hand]==None || !ServerGrabBody[Hand].IsValidBodyInstance()
+            || !ServerGrabBody[Hand].IsFixed()
+            || ServerGrabBody[Hand]!=class'VRBodyHold'.static.BodyFor(M.Mesh,ServerGrabBone[Hand])) return false;
+    foreach DynamicActors(class'VRGrabOwnership',Receipt)
+        if (!Receipt.bDeleteMe && !Receipt.bPendingDelete && !Receipt.bTearOff && Receipt.Owner==M)
+        {
+            if (Receipt.Instigator!=Human) return false;
+            Hand=int(Receipt.DrawScale)-1;
+            if (Hand<0 || Hand>1 || Receipt.Tag!=ServerGrabBone[Hand]
+                || WorldInfo.TimeSeconds-Receipt.LastRefresh>0.25) return false;
+            ReceiptMask=ReceiptMask | (1 << Hand);
+        }
+    if (ReceiptMask!=3) return false;
+    Zone=ServerRendZone(M,ServerGrabBone[0]); OtherZone=ServerRendZone(M,ServerGrabBone[1]);
+    if (Zone==INDEX_NONE || OtherZone==INDEX_NONE || Zone==OtherZone) return false;
+    Hand=0;
+    if (M.HitZones[Zone].Limb==BP_Torso && M.HitZones[OtherZone].Limb!=BP_Torso)
+    { Zone=OtherZone; Hand=1; }
+    if (M.Mesh.BoneIsChildOf(ServerGrabBone[1-Hand],M.HitZones[Zone].BoneName))
+    { Hand=1-Hand; Zone=ServerRendZone(M,ServerGrabBone[Hand]); }
+    if (Zone==INDEX_NONE) return false;
+    H=class'KF2VRNetHeldCorpse'.static.Find(self,M);
+    if (H==None || H.GripBone[0]!=ServerGrabBone[0] || H.GripBone[1]!=ServerGrabBone[1]
+        || WorldInfo.RealTimeSeconds-H.LastGrip[0]>0.25 || WorldInfo.RealTimeSeconds-H.LastGrip[1]>0.25) return false;
+    Rend=class<KFDamageType>(DynamicLoadObject("KF2Breacher.BreacherDT_Rend",class'Class',true));
+    if (Rend==None || !H.PlanRend(Zone,ServerGrabBone[0],ServerGrabBone[1],Rend)) return false;
+    // One attempt per pull window, including a game-rule/armour death veto.
+    ServerRendReady=WorldInfo.RealTimeSeconds+1.0;
+    Pull=Normal(MatrixGetOrigin(ServerGrabTarget[Hand])-MatrixGetOrigin(ServerGrabTarget[1-Hand]));
+    Point=MatrixGetOrigin(ServerGrabBody[Hand].GetUnrealWorldTM());
+    HitInfo.BoneName=M.HitZones[Zone].ZoneName; HitInfo.HitComponent=M.Mesh;
+    M.TakeHitZoneDamage(M.HitZones[Zone].GoreHealth+1,Rend,Zone,Human.Location);
+    if (M.Health>0 && !M.bPlayedDeath) M.TakeDamage(M.Health+1,self,Point,Pull*50,Rend,HitInfo,self);
+    if (M.bDeleteMe || M.Health>0 || !M.bPlayedDeath)
+    { H.CancelRend(); return false; }
+    // Stock death may rebuild/unfix every body. Rebind BOTH exact hand names
+    // after the planned cuts; never apply a saved client body pose.
+    if (ServerGrabPawn[0]!=M || ServerGrabPawn[1]!=M
+        || !AttachServerGrab(0,ServerGrabPalm[0],ServerGrabRotation[0]))
+    {
+        if (ServerGrabPawn[0]==M) ReleaseServerGrab(0);
+        if (ServerGrabPawn[1]==M) ReleaseServerGrab(1);
+        return true;
+    }
+    // Existing grip offsets/relative rotations are retained on reattach;
+    // use the already validated body targets when refixing their positions.
+    if (!AttachServerGrab(1,ServerGrabPalm[1],ServerGrabRotation[1]))
+    { ReleaseServerGrab(0); ReleaseServerGrab(1); return true; }
+    for (Hand=0; Hand<2; ++Hand)
+        class'VRGrabOwnership'.static.Update(self,byte(Hand),M,ServerGrabBone[Hand],ServerGrabPalm[Hand]);
+    `log("KF2VR_ZEDGRAB action=rend authority=true pawn=" $ M.Class $ " zone=" $ M.HitZones[Zone].ZoneName);
     return true;
 }
 
@@ -2162,17 +2330,32 @@ unreliable server function ServerGrabMove(byte Hand, vector Palm, rotator HandRo
     { ReleaseServerGrab(Hand); return; }
     M = ServerGrabPawn[Hand];
     if (M == None || M.bDeleteMe) { ReleaseServerGrab(Hand); return; }
-    // A dead Zed is torn off: from here its corpse is each client's own
-    // simulation, so the client keeps holding it and the server lets go.
-    if (M.Health <= 0 || M.bPlayedDeath) { ReleaseServerGrab(Hand); return; }
+    // Tear-off stops stock movement replication; it does not discard this
+    // controller's already authenticated hand stream. AttachServerGrab only
+    // continues a corpse with a retained, real authoritative mesh/pose.
     // The hand has to be near the body it claims to hold, with room for the
     // disagreement a round trip guarantees, so a tampered client cannot tow a
     // Zed across the map.
     if (VSize(Palm - M.Location) > SERVER_GRAB_LIMIT) { ReleaseServerGrab(Hand); return; }
-    if (!AttachServerGrab(Hand, Palm, HandRotation)) return;
+    if (!AttachServerGrab(Hand, Palm, HandRotation))
+    {
+        // Living knockdown can still be forming. A completed death without
+        // retained authority geometry cannot keep reserving this hand forever.
+        if (M.bPlayedDeath) ReleaseServerGrab(Hand);
+        return;
+    }
+    class'VRGrabOwnership'.static.Update(self,Hand,M,ServerGrabBone[Hand],Palm);
     Target = class'VRBodyHold'.static.Blend(ServerGrabStart[Hand],
         class'VRBodyHold'.static.TargetFor(Palm, HandRotation, ServerGrabOffset[Hand], ServerGrabRelative[Hand]),
         (WorldInfo.TimeSeconds - ServerGrabAttachTime[Hand]) / FMax(class'VRBodyHold'.default.CatchTime, 0.01));
+    Now=WorldInfo.RealTimeSeconds;
+    if (!class'VRBodyHold'.static.FiniteVector(MatrixGetOrigin(Target))) { ReleaseServerGrab(Hand); return; }
+    if (ServerGrabFrameSamples[Hand]==0 || Now-ServerGrabPreviousTime[Hand]>0.25
+        || VSize(MatrixGetOrigin(Target)-ServerGrabPreviousPoint[Hand])>class'VRZedGrab'.default.MaximumImpactStep)
+    { ServerGrabFrameSamples[Hand]=1; bServerRendArmed=false; }
+    else ServerGrabFrameSamples[Hand]=2;
+    ServerGrabPreviousPoint[Hand]=MatrixGetOrigin(Target); ServerGrabPreviousTime[Hand]=Now;
+    ServerGrabPalm[Hand]=Palm; ServerGrabRotation[Hand]=HandRotation;
     Other = 1 - Hand;
     if (ServerGrabPawn[Other] == M && ServerGrabBody[Other] != None && ServerGrabBody[Other].IsValidBodyInstance())
     {
@@ -2187,7 +2370,13 @@ unreliable server function ServerGrabMove(byte Hand, vector Palm, rotator HandRo
         if (Now - ServerGrabTargetTime[Other] > class'VRZedGrab'.default.MoveSendInterval * 0.5)
         { ServerGrabTargetReady[Other] = 0; return; }
         ServerGrabTargetReady[0] = 0; ServerGrabTargetReady[1] = 0;
-        if (VSize(MatrixGetOrigin(Target) - MatrixGetOrigin(ServerGrabTarget[Other]))
+        if (ServerGrabFrameSamples[0]>=2 && ServerGrabFrameSamples[1]>=2
+            && VSize(MatrixGetOrigin(ServerGrabTarget[0])-MatrixGetOrigin(ServerGrabTarget[1]))
+            <= ServerGrabSpan[Hand]+class'VRZedGrab'.default.RendStretch) bServerRendArmed=true;
+        if (VSize(MatrixGetOrigin(ServerGrabTarget[0])-MatrixGetOrigin(ServerGrabTarget[1]))
+            > ServerGrabSpan[Hand]+class'VRZedGrab'.default.RendStretch && TryServerRend(M)) return;
+        if (class'VRBodyHold'.static.SamePiece(M.Mesh, ServerGrabBone[Hand], ServerGrabBone[Other])
+            && VSize(MatrixGetOrigin(Target) - MatrixGetOrigin(ServerGrabTarget[Other]))
             > ServerGrabSpan[Hand] + class'VRBodyHold'.default.GripReach * 2)
         { ReleaseServerGrab(Hand); return; }
         class'VRBodyHold'.static.Move(M.Mesh, ServerGrabBone[Other], ServerGrabTarget[Other]);
@@ -2212,11 +2401,17 @@ function ReleaseServerGrab(byte Hand, optional vector Throw)
 {
     local VRSM_HeldKnockdown Move;
     local KFPawn_Monster M;
+    local KF2VRNetHeldCorpse CorpseHold;
     if (Hand > 1) return;
     M = ServerGrabPawn[Hand];
-    if (M != None && ServerGrabPawn[1 - Hand] == M) Throw = vect(0,0,0);
+    if (M!=None) CorpseHold=class'KF2VRNetHeldCorpse'.static.Find(self,M);
+    if (M != None && ServerGrabPawn[1 - Hand] == M
+        && class'VRBodyHold'.static.SamePiece(M.Mesh, ServerGrabBone[Hand], ServerGrabBone[1 - Hand])) Throw = vect(0,0,0);
+    if (M != None && !M.bDeleteMe && !IsZero(Throw))
+        Throw=class'VRBreacherPhysics'.static.EmpowerThrow(self,M,M.Location,Throw);
+    class'VRGrabOwnership'.static.Release(self,Hand,Throw);
     if (M != None && !M.bDeleteMe && ServerGrabBody[Hand] != None)
-        class'VRBodyHold'.static.End(ServerGrabBody[Hand], M.Mesh, Throw);
+        class'VRBodyHold'.static.End(ServerGrabBody[Hand], M.Mesh, Throw, ServerGrabBone[Hand]);
     if (ServerGrabOwnsKinematic[Hand] != 0 && M != None && !M.bDeleteMe && M.Mesh != None
         && !(ServerGrabPawn[1 - Hand] == M && ServerGrabOwnsKinematic[1 - Hand] != 0))
         M.Mesh.bUpdateKinematicBonesFromAnimation = M.Health > 0 && !M.bPlayedDeath && ServerGrabSavedKinematic[Hand] != 0;
@@ -2233,6 +2428,15 @@ function ReleaseServerGrab(byte Hand, optional vector Throw)
     ServerGrabOwnsKinematic[Hand] = 0;
     ServerGrabTargetReady[Hand] = 0;
     ServerGrabTargetTime[Hand] = 0;
+    ServerGrabFrameSamples[Hand]=0; ServerGrabPreviousTime[Hand]=0;
+    bServerRendArmed=false;
+    if (CorpseHold!=None) CorpseHold.Release(Hand,Throw);
+}
+
+// A helper may expire only the same target it leased, never a later hand grab.
+function ExpireServerGrab(byte Hand, KFPawn_Monster Expected)
+{
+    if (Hand<2 && ServerGrabPawn[Hand]==Expected) ReleaseServerGrab(Hand);
 }
 
 function ReleaseAllServerGrabs()

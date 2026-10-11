@@ -93,11 +93,11 @@ inline bool Root(std::string_view utf8,std::wstring& root) {
     }
     return true;
 }
-inline bool GraphicsOptions(std::string_view mode,std::string_view sharp,std::string_view bile) {
+inline bool GraphicsOptions(std::string_view mode,std::string_view sharp,std::string_view bile,std::string_view blood="1") {
     if(mode!="off" && mode!="dlaa" && mode!="quality" && mode!="balanced" && mode!="performance" && mode!="ultraperformance") return false;
     if(sharp.empty() || sharp.size()>3 || sharp.find_first_not_of("0123456789")!=sharp.npos) return false;
     unsigned value=0;for(char c:sharp)value=value*10+static_cast<unsigned>(c-'0');
-    return value<=100 && (bile=="0" || bile=="1");
+    return value<=100 && (bile=="0" || bile=="1") && (blood=="0" || blood=="1");
 }
 inline Result Consume(std::wstring_view command) {
     Marker marker;const auto parsed=Parse(command,marker);
@@ -123,14 +123,14 @@ inline Result Consume(std::wstring_view command) {
     if(!Transfer(pipe.value,false,config)||config.size()>60000)return Result::Refused;
     std::vector<std::string> lines;size_t at=0;
     while(at<config.size()) {const auto end=config.find('\n',at);if(end==config.npos)return Result::Refused;lines.push_back(config.substr(at,end-at));at=end+1;}
-    if(lines.size()!=7||lines[0]!="KF2VR-CONFIG/2"||lines[1]!=Narrow(marker.session))return Result::Refused;
+    if(lines.size()!=8||lines[0]!="KF2VR-CONFIG/3"||lines[1]!=Narrow(marker.session))return Result::Refused;
     std::wstring root;std::uint64_t percent=0;const std::wstring percentText(lines[3].begin(),lines[3].end());
     if(!Root(lines[2],root)||!Number(percentText,percent)||percent<50||percent>100)return Result::Refused;
     // Typed options only. Runtime location is derived from the authenticated
     // packaged broker executable, never accepted as a supplied path or env map.
     const auto& mode=lines[4];
     const auto& sharp=lines[5];
-    if(!GraphicsOptions(mode,sharp,lines[6])) return Result::Refused;
+    if(!GraphicsOptions(mode,sharp,lines[6],lines[7])) return Result::Refused;
     std::wstring ngx;
     if(mode!="off") {
         wchar_t executable[32768]{};DWORD size=32768;
@@ -159,6 +159,7 @@ inline Result Consume(std::wstring_view command) {
        !SetEnvironmentVariableW(L"KF2VR_DLSS",std::wstring(mode.begin(),mode.end()).c_str()) ||
        !SetEnvironmentVariableW(L"KF2VR_DLSS_SHARPNESS",std::wstring(sharp.begin(),sharp.end()).c_str()) ||
        !SetEnvironmentVariableW(L"KF2VR_HIDE_BILE_LENS",lines[6]=="1"?L"1":L"0") ||
+       !SetEnvironmentVariableW(L"KF2VR_HIDE_BLOOD_LENS",lines[7]=="1"?L"1":L"0") ||
        (!ngx.empty() && !SetEnvironmentVariableW(L"KF2VR_NGX_DIR",ngx.c_str())))return Result::Refused;
     return Result::Accepted;
 }

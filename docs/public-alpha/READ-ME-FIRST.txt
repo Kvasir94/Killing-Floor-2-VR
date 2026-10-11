@@ -26,8 +26,10 @@ This is an early alpha, tested so far on one developer PC with a Quest
 headset over Link. Solo play is the most tested path. The developer has also
 used a remotely joined hosted server; wider internet and hardware coverage
 need feedback. Expect bugs, and please
-report them. The default graphics are Performance at 75% render scale;
-raise them in Settings or the headset menu if your PC has headroom.
+report them. The default graphics are Performance at 100% render scale;
+adjust scale/detail in Settings or the headset menu for your PC.
+Steam single-pass stereo, HBAO+ and reflections start ON; Epic single-pass
+stays OFF. Saved preferences override fresh defaults.
 The questions we most want answered are in app\docs\FEEDBACK-QUESTIONS.md.
 
 PLAY SOLO FIRST
@@ -62,10 +64,10 @@ remains incomplete; this ZIP is not established as a runtime pass.
 
 Epic Host/Join/Desktop, cross-store online play, local test control, motion
 recording and highlight logging are unavailable. Optional content is unaccepted.
-Primary-hand lever cycling is missing: the gun hand cannot yet leave the firing
-grip to operate the lever while the support hand holds the rifle. The proposed
-off-hand workaround is not headset-confirmed. Keep Button reload mode if physical
-cycling blocks play. The VR Use/hold prompt correction also needs retesting.
+Primary-hand lever cycling with the other hand supporting the rifle is implemented,
+alongside off-hand cycling. Both routes still need headset acceptance. Keep Button
+reload mode if physical cycling blocks play. The VR Use/hold prompt correction
+also needs retesting.
 
 JOIN A FRIEND
 -------------
@@ -79,10 +81,11 @@ HOST A GAME
 -----------
 Steam only in this alpha.
 1. Start KF2-VR, click "Host a game", pick a map and difficulty, click Start.
+   A blank Host password makes the server public: anyone who reaches it can join.
 2. The first time, KF2-VR downloads the free KF2 game server (about 32 GB).
    That can take a long time. It only happens once.
 3. When it says your game is up, click "Copy code" and send it to your friends
-   in a private message. The code has your game's password in it.
+   in a private message. If you set a password, the code contains it.
 4. Friends on other internet connections need your router to forward
    UDP ports 7777 and 27015 to your PC. Friends on your home network don't.
    Allow KFServer through Windows Firewall when prompted. Joiners do not need
@@ -141,6 +144,3 @@ configs or crash dumps publicly; they have not been anonymized.
 Each player needs their own Killing Floor 2 copy. Multiplayer is Steam-only in this alpha.
 This is an early alpha test build. KF2-VR is a fan project and is not
 affiliated with Tripwire Interactive.
-
-OCTOBER 7 UPDATE
-Normal startup does not request cheats or restore Godmode; isolated session copies disable saved Admin Auto Login automatic cheats. The pre-play warning separates VAC status from XP eligibility. Secure injected VR is unsupported; ordinary perk progression is not promised. Explicit later Practice remains available with its warning. Experimental DLSS starts Off, requires NVIDIA RTX hardware and awaits headset acceptance. Read RELEASE-NOTES-DRAFT.md and DLSS.md for exact handling coverage, exceptions and publication limits.

@@ -40,7 +40,8 @@ Steam Solo has had the most developer headset testing, using Quest over Link.
 The developer has also tested remote joining of a hosted server and
 install/recovery. This is an early alpha; broader hardware, complete matches,
 remote gestures, travel and arsenal coverage need feedback. Defaults are
-Performance graphics, 75% render scale and Button reloads. Saved preferences win.
+Performance graphics, 100% render scale and Button reloads. Steam single-pass
+stereo, HBAO+ and reflections start ON; Epic single-pass stays OFF. Saved preferences win.
 
 Begin with [READ ME FIRST](docs/public-alpha/READ-ME-FIRST.txt), the
 [quick controls card](docs/public-alpha/CONTROLS-CARD.txt) and
@@ -54,6 +55,22 @@ may need removal. Use [GitHub Issues](https://github.com/Kvasir94/Killing-Floor-
 for public bug reports; keep sensitive details private.
 After interruption, quit KF2 and use **Fix a stuck session** before changing or
 deleting that release folder. Never mix DLLs or bypass game/package checks.
+
+## Current source status
+
+This source snapshot integrates OptimumBox's `v0.5.0-alpha.20261011`
+(`e35ec355ae951dda72ee80b20cb1cef12345b9ac`) with retained local interaction,
+rendering and launcher choices. The combined source is compiled and checked
+with the offline CPU/launcher gate; headset and real online acceptance remain
+pending. This source update does not publish a new playable ZIP or establish
+runtime parity. Existing release notes and manifests govern each download.
+
+The source includes one-hand and paired hip reloads, sender-timed remote poses,
+walking with the weapon wheel open, fixed boss-introduction views, level
+spectator views and authored grenade grips. Button, Physical and Physical + Pump
+reload modes remain available. An additional waist-triggered reload mode is
+planned only. Breacher development is frozen and the current combined candidate
+omits its optional content. See [provenance](docs/PROVENANCE.md) for attribution.
 
 ## Build and contribute
 
@@ -109,7 +126,3 @@ game-derived packages; its redistribution review remains unresolved, as disclose
 in the release notes. Public availability does not establish rights clearance.
 See [PROVENANCE](docs/PROVENANCE.md)
 and [dependency pins](third_party/VERSIONS.md).
-
-## October 7 handling and graphics update
-
-See the [release notes](docs/public-alpha/RELEASE-NOTES-DRAFT.md) for exact MG3 and retained-chamber coverage, loading-hand and grenade-grip corrections, belt visuals, seated calibration and experimental DLSS. DLSS starts Off and requires NVIDIA RTX hardware; see [DLSS](docs/DLSS.md) for limitations and publication obligations. Ordinary startup disables saved Admin Auto Login automatic cheats in isolated session copies. VAC status is separate from XP eligibility; secure injected VR is unsupported. Final headset and real online acceptance remain pending.

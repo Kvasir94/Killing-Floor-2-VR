@@ -29,6 +29,10 @@ struct AppliedHeadAim {
 inline constexpr float kMaxWorldViewOffset = 400.0f;
 bool IsValidWorldViewOffset(const Vec3& offset) noexcept;
 
+// Game thread only: a second persistent FSceneViewState for the right eye of
+// a single-pass pair, allocated once like the player's own (never freed).
+void* AllocateRightEyeViewState(std::uintptr_t baseAddress);
+
 // Pure calculation, exposed for offline validation. Matrices use UE3's
 // row-vector camera convention (+X right, +Y up, +Z forward). Native depth
 // projection coefficients remain unchanged. World scale is provisional.
@@ -62,6 +66,21 @@ public:
     // Unjittered matrices of the most recent single-eye submission.
     const EyeMatrices& LastSubmitted() const noexcept { return lastSubmitted_; }
     bool LastSubmittedValid() const noexcept { return lastSubmittedValid_; }
+    // Unjittered matrices of the most recent two-view (single-pass) submission.
+    const std::array<EyeMatrices, 2>& LastPair() const noexcept { return lastPair_; }
+    bool LastPairValid() const noexcept { return lastPairValid_; }
+    // Single-pass stereo: submit the two eye views of one viewport draw as two
+    // one-view scene submissions (one renderer each, as in sequential passes)
+    // instead of one two-view family. The callbacks run on the game thread
+    // around each eye's submission.
+    using EyeSubmitCallback = void(*)(unsigned eye);
+    void SetSplitSubmit(bool enabled, EyeSubmitCallback before = nullptr, EyeSubmitCallback after = nullptr) noexcept {
+        splitSubmit_=enabled; beforeEye_=before; afterEye_=after;
+    }
+    // Single-pass stereo: give the right eye of a two-view family its own
+    // persistent view state (occlusion history, per-frame lists, exposure),
+    // instead of sharing the stock one with the left eye.
+    void SetSeparateRightState(bool enabled) noexcept { separateRightState_=enabled; }
 
 private:
     HeadInTracking initialHead_{};
@@ -72,6 +91,11 @@ private:
     float jitterX_=0, jitterY_=0;
     EyeMatrices lastSubmitted_{};
     bool lastSubmittedValid_=false;
+    std::array<EyeMatrices, 2> lastPair_{};
+    bool lastPairValid_=false;
+    bool splitSubmit_=false;
+    bool separateRightState_=false;
+    EyeSubmitCallback beforeEye_=nullptr, afterEye_=nullptr;
 };
 
 } // namespace kf2vr::adapter

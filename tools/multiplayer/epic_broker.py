@@ -12,7 +12,7 @@ import threading
 import time
 from epic_session import ProcessIdentity, filetime_now
 
-def graphics_payload(dlss="off", sharpness=0, hide_bile_lens=True):
+def graphics_payload(dlss="off", sharpness=0, hide_bile_lens=True, hide_blood_lens=True):
     from workshop_loadout import DLSS_MODES
     if not isinstance(dlss, str) or dlss not in DLSS_MODES:
         raise ValueError("Invalid DLSS mode")
@@ -20,7 +20,9 @@ def graphics_payload(dlss="off", sharpness=0, hide_bile_lens=True):
         raise ValueError("Invalid DLSS sharpness")
     if type(hide_bile_lens) is not bool:
         raise ValueError("Invalid bile lens setting")
-    return f"{dlss}\n{sharpness}\n{int(hide_bile_lens)}\n"
+    if type(hide_blood_lens) is not bool:
+        raise ValueError("Invalid blood lens setting")
+    return f"{dlss}\n{sharpness}\n{int(hide_bile_lens)}\n{int(hide_blood_lens)}\n"
 
 
 class OVERLAPPED(c.Structure):
@@ -92,7 +94,7 @@ class SECURITY_ATTRIBUTES(c.Structure):
 
 
 class EpicBroker:
-    def __init__(self,ticket,session_root,*,on_claim,eye_percent=100,dlss="off",dlss_sharpness=0,hide_bile_lens=True):
+    def __init__(self,ticket,session_root,*,on_claim,eye_percent=100,dlss="off",dlss_sharpness=0,hide_bile_lens=True,hide_blood_lens=True):
         requested=Path(session_root).absolute()
         self.ticket=ticket;self.root=requested.resolve();self.eye_percent=eye_percent
         if requested!=self.root:raise ValueError("Linked session root is not accepted")
@@ -100,7 +102,7 @@ class EpicBroker:
         self.on_claim=on_claim;self.ready=threading.Event();self.error=None;self.owner_handle=None
         self._pipe=None;self._pipe_lock=threading.Lock();self._observed=[]
         if type(eye_percent) is not int or not 50<=eye_percent<=100:raise ValueError('Invalid eye render percentage')
-        self.graphics = graphics_payload(dlss, dlss_sharpness, hide_bile_lens)
+        self.graphics = graphics_payload(dlss, dlss_sharpness, hide_bile_lens, hide_blood_lens)
         self._validate_root()
         self.kernel=api()
         self.broker_identity,handle=process_identity(self.kernel,os.getpid());self.kernel.CloseHandle(handle)
@@ -170,7 +172,7 @@ class EpicBroker:
             expected=('KF2VR-HELLO/1\n'+self.ticket.session_id+'\n'+nonce+'\n').encode()
             if self._io(pipe,'ReadFile')!=expected:raise ValueError('Epic session challenge failed')
             self._validate_root()
-            payload=f'KF2VR-CONFIG/2\n{self.ticket.session_id}\n{self.root}\n{self.eye_percent}\n{self.graphics}'.encode('utf-8')
+            payload=f'KF2VR-CONFIG/3\n{self.ticket.session_id}\n{self.root}\n{self.eye_percent}\n{self.graphics}'.encode('utf-8')
             self._io(pipe,'WriteFile',payload)
             if self._io(pipe,'ReadFile')!=b'KF2VR-READY/1\n':raise ValueError('Native session setup refused')
             if k.WaitForSingleObject(peer_handle,0)!=258:raise ValueError('Epic game exited during handoff')

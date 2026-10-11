@@ -247,7 +247,7 @@ class VisualRolesTests(unittest.TestCase):
                     self.assertNotIn("kf2vr_eye_render_percent", environment)
                     self.assertNotIn("Kf2Vr_HAND_REPLAY", environment)
                     if name == "driver":
-                        self.assertEqual(75 if selected is None else selected, role["eye_render_percent"])
+                        self.assertEqual(100 if selected is None else selected, role["eye_render_percent"])
                         self.assertEqual(str(role["eye_render_percent"]), environment["KF2VR_EYE_RENDER_PERCENT"])
                     else:
                         self.assertNotIn("eye_render_percent", role)

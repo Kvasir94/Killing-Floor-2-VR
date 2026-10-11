@@ -311,6 +311,13 @@ event PostLogin(PlayerController NewPlayer)
 {
     local KF2VRNetPlayerController NetPC;
     Super.PostLogin(NewPlayer);
+    // A stock client (a desktop player from the Workshop) asks for KF2's
+    // small default rate, too little for every VR player's 120 Hz pose
+    // stream. The server sends at the connection's rate, so raise it here;
+    // the host's MaxClientRate still bounds it.
+    if (NetConnection(NewPlayer.Player) != None
+        && NewPlayer.Player.CurrentNetSpeed < class'KF2VRNetTypes'.const.PoseNetSpeed)
+        NewPlayer.SetNetSpeed(class'KF2VRNetTypes'.const.PoseNetSpeed);
     NetPC = KF2VRNetPlayerController(NewPlayer);
     if (NetPC != None && NextConnectionEpoch > 0)
     {

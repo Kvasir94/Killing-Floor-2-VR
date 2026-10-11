@@ -19,6 +19,10 @@ struct TimedPreviewSnapshot
     var float ReceivedAt;
 };
 var private array<TimedPreviewSnapshot> PreviewHistory;
+// Sender timeline for interpolation: snapshot times follow the sender's
+// clock (or the sample sequence from older senders), anchored to arrivals.
+var private float PoseTimeBase, PoseSequenceTime;
+var private int LastPoseSequence, LastPoseMillis;
 var KF2VRNetAvatarPreview AvatarPreview;
 var private float PreviewStrength, PreviousPreviewTick;
 var bool bIndependentWeapons;
@@ -75,21 +79,23 @@ function PublishWeapons(bool bEnabled, KFWeapon Left, int LeftId, KFWeapon Right
 // delay, so hands and guns hung from it lag behind the visible pawn. No
 // MTO_PhysSmoothOffset: the owner's eye base already carries its own stair
 // smoothing into the offsets.
-simulated function PresentationRoot(out vector Root, out rotator Basis)
+// The offsets turn with the yaw the sender measured them against, carried in
+// the same interpolated frame: the simulated pawn's yaw arrives at the
+// server's tick rate and out of step with the buffered pose, and turned the
+// arms into the body or the gun over the head while the player turned.
+simulated function PresentationRoot(NetPoseSnapshot Frame, out vector Root, out rotator Basis)
 {
-    local NetPoseSnapshot Frame;
     if (Snapshot.Motion.bEnabled)
     {
         // Saved replay owns the pawn root through authority. Present the same
         // atomic frame as its hands/muzzle; live movement yaw can arrive later.
-        Frame = SamplePreview();
         Root = Frame.RootPosition; Basis = Frame.RootRotation;
         TargetPawn.SetLocation(Root); TargetPawn.SetRotation(Basis);
         return;
     }
     Root = TargetPawn.Location;
     Basis = rot(0,0,0);
-    Basis.Yaw = TargetPawn.Rotation.Yaw;
+    Basis.Yaw = (Frame.Sample.PresentationFlags & 64) != 0 ? Frame.Sample.RootYaw : TargetPawn.Rotation.Yaw;
 }
 
 simulated function RestoreStockAttachment()
@@ -138,7 +144,7 @@ simulated function UpdateRemoteWeapons(bool bFresh)
         for (I = 0; I < 2; ++I) { if (RemoteWeapons[I] != None) RemoteWeapons[I].Destroy(); RemoteWeapons[I] = None; }
         PreviousMotionReplayId = Frame.Motion.ReplayId;
     }
-    PresentationRoot(Root, Basis);
+    PresentationRoot(Frame, Root, Basis);
     if (RemoteBody == None)
     {
         RemoteBody = Spawn(class'KF2VRNetRemoteBody', self);
@@ -167,7 +173,12 @@ simulated function UpdateRemoteWeapons(bool bFresh)
         }
         Muzzle = I == 0 ? Frame.Sample.LeftMuzzlePosition : Frame.Sample.MuzzlePosition;
         Aim = I == 0 ? Frame.Sample.LeftMuzzleRotation : Frame.Sample.MuzzleRotation;
-        bVisualReady = RemoteWeapons[I].UpdateVisual(Visual, Root + (Muzzle >> Basis),
+        // The body's head-fit shift and the arm's reach limit (a player who
+        // reaches farther than the model's arms), so the gun stays in the
+        // drawn hand instead of floating ahead of it.
+        if (RemoteBody != None) Muzzle = (Muzzle >> Basis) + RemoteBody.HandCorrection + RemoteBody.ReachShift[I];
+        else Muzzle = Muzzle >> Basis;
+        bVisualReady = RemoteWeapons[I].UpdateVisual(Visual, Root + Muzzle,
             Normalize(Basis + Aim), bFresh
                 && (!Frame.Motion.bEnabled || (RemoteBody != None && RemoteBody.IsTrackedPoseReady()))
                 && (Frame.Sample.TrackingFlags & (2 << I)) != 0
@@ -271,6 +282,7 @@ simulated event ReplicatedEvent(name VarName)
 simulated function ConsumeSnapshot()
 {
     local TimedPreviewSnapshot Timed;
+    local int Delta;
     if (TargetPawn == None || TargetPawn.bDeleteMe || WorldEpoch == 0
         || Snapshot.Sample.WorldEpoch != WorldEpoch
         || Snapshot.Sample.ConnectionEpoch != ConnectionEpoch
@@ -294,9 +306,33 @@ simulated function ConsumeSnapshot()
     DisplaySnapshot = Snapshot;
     LastReceivedRealTime = WorldInfo.RealTimeSeconds;
     Timed.Pose = Snapshot;
-    Timed.ReceivedAt = LastReceivedRealTime;
+    // Place each snapshot by its sample sequence rather than its arrival:
+    // internet jitter bunched arrivals and the arms froze, then jumped. The
+    // base follows arrivals slowly and never puts a snapshot in the future.
+    if (PreviewHistory.Length == 0)
+    {
+        PoseSequenceTime = 0;
+        PoseTimeBase = LastReceivedRealTime;
+    }
+    else
+    {
+        // The sender's clock: its frames do not land on an exact interval.
+        if ((Snapshot.Sample.PresentationFlags & 64) != 0)
+            PoseSequenceTime += FClamp(((Snapshot.Sample.SampleMillis - LastPoseMillis) & 65535) / 1000.0, 0.001, 1.0);
+        else
+        {
+            Delta = (Snapshot.Sample.Sequence - LastPoseSequence) & 65535;
+            PoseSequenceTime += FClamp(Delta, 1, 120) * class'KF2VRNetTypes'.const.ClientPoseInterval;
+        }
+        PoseTimeBase += (LastReceivedRealTime - PoseSequenceTime - PoseTimeBase) * 0.015;
+        if (PoseTimeBase + PoseSequenceTime > LastReceivedRealTime)
+            PoseTimeBase = LastReceivedRealTime - PoseSequenceTime;
+    }
+    LastPoseSequence = Snapshot.Sample.Sequence;
+    LastPoseMillis = Snapshot.Sample.SampleMillis;
+    Timed.ReceivedAt = PoseTimeBase + PoseSequenceTime;
     PreviewHistory.AddItem(Timed);
-    if (PreviewHistory.Length > 8) PreviewHistory.Remove(0, 1);
+    if (PreviewHistory.Length > 32) PreviewHistory.Remove(0, 1);
     bHaveSnapshot = true;
     ReceivedSnapshots = Min(ReceivedSnapshots + 1, 2147483646);
     if (Snapshot.Motion.bEnabled)
@@ -308,15 +344,17 @@ simulated function ConsumeSnapshot()
             $ " time=" $ WorldInfo.RealTimeSeconds);
 }
 
-// Cosmetic receive-time interpolation, bounded to eight snapshots. Never
-// extrapolate tracking or expose this buffered state to input/damage code.
+// Cosmetic interpolation on the sender timeline, 100 ms behind (twelve
+// samples at 120 Hz, so ordinary jitter does not run the buffer dry), bounded
+// to 32 snapshots. Never extrapolate tracking or expose this buffered state to
+// input/damage code.
 simulated function NetPoseSnapshot SamplePreview()
 {
     local NetPoseSnapshot A, B, Result;
     local int I;
     local float At, Blend, Span;
     if (PreviewHistory.Length == 0) return DisplaySnapshot;
-    At = WorldInfo.RealTimeSeconds - 0.06;
+    At = WorldInfo.RealTimeSeconds - 0.10;
     if (At <= PreviewHistory[0].ReceivedAt) return PreviewHistory[0].Pose;
     for (I = 1; I < PreviewHistory.Length; ++I)
     {
@@ -328,6 +366,7 @@ simulated function NetPoseSnapshot SamplePreview()
         Result = B;
         Result.RootPosition = A.RootPosition + (B.RootPosition - A.RootPosition) * Blend;
         Result.RootRotation = RLerp(A.RootRotation, B.RootRotation, Blend, true);
+        Result.Sample.RootYaw = A.Sample.RootYaw + NormalizeRotAxis(B.Sample.RootYaw - A.Sample.RootYaw) * Blend;
         Result.Sample.HeadPosition = A.Sample.HeadPosition + (B.Sample.HeadPosition - A.Sample.HeadPosition) * Blend;
         Result.Sample.LeftPosition = A.Sample.LeftPosition + (B.Sample.LeftPosition - A.Sample.LeftPosition) * Blend;
         Result.Sample.RightPosition = A.Sample.RightPosition + (B.Sample.RightPosition - A.Sample.RightPosition) * Blend;
@@ -454,18 +493,21 @@ simulated function UpdateRoomscaleAnimation(float DeltaTime, bool bFresh)
 {
     local vector Observed, Current;
     local float Span, FootSpread;
-    local int Last;
+    local int Last, First;
     local bool bApply;
     if (TargetPawn != None && !TargetPawn.bDeleteMe && TargetPawn.Role == ROLE_SimulatedProxy
         && TargetPawn.Physics == PHYS_Walking && bFresh)
     {
+        // About 0.1 s of snapshots, whatever the send rate.
         Last = PreviewHistory.Length - 1;
-        if (Last >= 3)
+        First = Last;
+        while (First > 0 && PreviewHistory[Last].ReceivedAt - PreviewHistory[First].ReceivedAt < 0.1) --First;
+        if (First < Last)
         {
-            Span = PreviewHistory[Last].ReceivedAt - PreviewHistory[Last - 3].ReceivedAt;
+            Span = PreviewHistory[Last].ReceivedAt - PreviewHistory[First].ReceivedAt;
             if (Span >= 0.06 && Span <= 0.5)
             {
-                Observed = (PreviewHistory[Last].Pose.RootPosition - PreviewHistory[Last - 3].Pose.RootPosition) / Span;
+                Observed = (PreviewHistory[Last].Pose.RootPosition - PreviewHistory[First].Pose.RootPosition) / Span;
                 Observed.Z = 0;
             }
         }
@@ -582,13 +624,14 @@ defaultproperties
 {
     RemoteRole=ROLE_SimulatedProxy
     bOnlyRelevantToOwner=false
-    // Six-player prototype broadcasts small state. Distance relevancy and a
-    // production avatar interpolator are separate measured milestones.
+    // Six-player prototype broadcasts small state. Distance relevancy is a
+    // separate measured milestone.
     bAlwaysRelevant=true
     bReplicateMovement=false
     bHidden=true
     bCollideActors=false
     bBlockActors=false
-    NetUpdateFrequency=25.0
+    // Every server tick: clients sample at 120 Hz and the host ticks at 120.
+    NetUpdateFrequency=120.0
     TickGroup=TG_PreAsyncWork
 }

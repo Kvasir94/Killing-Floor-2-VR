@@ -45,6 +45,15 @@ inline bool Parse(std::string_view wire, Request& output) {
     if (op=="status" || op=="disable") { if (arg!="-" || count!=0) return false; }
     else if (op=="catalog" || op=="give-all") { if (count!=0) return false; }
     else if (op=="give-one") { if (arg=="-" || count!=1) return false; }
+    else if (op=="diagnostic") {
+        constexpr std::array cases{"ready","snapshot",
+            "case-deadbolt-left-manual","case-deadbolt-right-manual",
+            "case-deadbolt-left-automatic","case-deadbolt-right-automatic",
+            "case-ripcord-left-manual","case-ripcord-right-manual",
+            "case-ripcord-left-automatic","case-ripcord-right-automatic"};
+        bool found=false; for (auto kind:cases) found=found || arg==kind;
+        if (!found || count!=0) return false;
+    }
     else if (op=="spawn-zeds") {
         constexpr std::array kinds{"cyst","alpha","slasher","crawler","gorefast","bloat","husk","scrake","fleshpound"};
         bool found=false; for (auto kind:kinds) found=found || arg==kind;

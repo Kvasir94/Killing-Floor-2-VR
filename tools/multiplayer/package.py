@@ -75,6 +75,7 @@ def copy_launcher_tools(source_root, output):
     destination.mkdir(parents=True, exist_ok=True)
     for name in LAUNCHER_MODULES:
         shutil.copy2(source_root / "tools/multiplayer" / name, destination / name)
+    shutil.copy2(source_root / "tools/multiplayer/linux-desktop.sh", destination)
     for name in ("install-multiplayer-server.ps1", "vr-defaults.json", "dependency-pins.json"):
         shutil.copy2(source_root / "tools" / name, output / "tools" / name)
 
@@ -179,6 +180,30 @@ def portable_receipt(receipt):
                 "started_utc", "finished_utc", "dlss_enabled", "ngx_sdk")}
 
 
+def write_desktop_companions(output, full_zip, manifest):
+    """Ship matching desktop paths without copying donor game binaries."""
+    output, full_zip = Path(output), Path(full_zip)
+    linux_zip = Path(str(output) + "-LinuxKit.zip")
+    with zipfile.ZipFile(linux_zip, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.write(full_zip, full_zip.name)
+        archive.write(output / "docs/LINUX-DESKTOP.md", "LINUX-DESKTOP.md")
+        archive.write(output / "tools/multiplayer/linux-desktop.sh", "linux-desktop.sh")
+    epic_zip = Path(str(output) + "-Epic-Desktop-Pack.zip")
+    names = ("KF2VR.u", "KF2VRNet.u", "KF2VRHands.upk")
+    companion = {"schema": "kf2vr/desktop-companion/1", "build_id": manifest["build_id"],
+                 "git_head": manifest["git_head"], "protocol_version": manifest["protocol_version"],
+                 "package_revision": manifest["package_revision"],
+                 "release": output.name, "release_manifest_sha256": digest(output / "release.json"),
+                 "files_sha256": {"KF2VR/" + name: digest(output / "Packages" / name) for name in names}}
+    companion["files_sha256"]["EPIC-DESKTOP.md"] = digest(output / "docs/EPIC-DESKTOP.md")
+    with zipfile.ZipFile(epic_zip, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in names:
+            archive.write(output / "Packages" / name, "KF2VR/" + name)
+        archive.write(output / "docs/EPIC-DESKTOP.md", "EPIC-DESKTOP.md")
+        archive.writestr("companion.json", json.dumps(companion, indent=2))
+    return linux_zip, epic_zip
+
+
 def validate_native_inventory(root, native):
     if set(native["artifacts_sha256"]) != ({"dinput8.dll", "openxr_loader.dll", "nvngx_dlss.dll"} if native.get("dlss_enabled") else {"dinput8.dll", "openxr_loader.dll"}) or set(native["server_artifacts_sha256"]) != {"dinput8.dll"}:
         raise RuntimeError("Unexpected native distribution contents")
@@ -258,6 +283,8 @@ def main(argv=None):
     shutil.copy2(documents / "docs/public-alpha/BREACHER.md", output / "docs")
     shutil.copy2(documents / "docs/public-alpha/FEEDBACK-QUESTIONS.md", output / "docs")
     shutil.copy2(documents / "docs/public-alpha/CONTROLS-CARD.txt", output / "docs")
+    for name in ("LINUX-DESKTOP.md", "EPIC-DESKTOP.md"):
+        shutil.copy2(ROOT / "docs" / name, output / "docs" / name)
     notices = output / "notices"
     notices.mkdir()
     if native.get("dlss_enabled"):
@@ -272,12 +299,14 @@ def main(argv=None):
     if frozen:
         copy_frozen_runtime_extras(frozen, output)
     install = json.loads((ROOT / "docs/intake/install_manifest.json").read_text(encoding="utf-8-sig"))
-    protocol = int(re.search(r"const ProtocolVersion = (\d+);", (ROOT / "script/KF2VRNet/Classes/KF2VRNetTypes.uc").read_text())[1])
+    net_types = (ROOT / "script/KF2VRNet/Classes/KF2VRNetTypes.uc").read_text()
+    protocol = int(re.search(r"const ProtocolVersion = (\d+);", net_types)[1])
+    revision = int(re.search(r"const PackageRevision = (\d+);", net_types)[1])
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     build_id = f"0.1.0-alpha-{stamp}-{commit[:12]}-p{protocol}" + ("-dev" if status or not args.public_release else "")
     # Receipts remain traceable through source/artifact hashes; local log and SDK
     # paths do not belong in a distributable manifest.
-    manifest = {"build_id": build_id, "version": "0.1.0-alpha", "protocol_version": protocol,
+    manifest = {"build_id": build_id, "version": "0.1.0-alpha", "protocol_version": protocol, "package_revision": revision,
         "breacher_protocol": 1,
         "player_launcher_protocol": 1,
         "store_launcher_protocol": 1,
@@ -295,6 +324,7 @@ def main(argv=None):
                                               "manifest_sha256": digest(frozen / "release.json")}
     (output / "release.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     write_zip(output, readme)
+    companions = write_desktop_companions(output, Path(str(output) + ".zip"), manifest)
     with tempfile.TemporaryDirectory(prefix="kf2vr-extracted-") as temporary:
         with zipfile.ZipFile(str(output) + ".zip") as archive:
             archive.extractall(temporary)
@@ -307,6 +337,8 @@ def main(argv=None):
     select_candidate(ROOT, output, select=not args.no_select)
     print(output, flush=True)
     print(str(output) + ".zip", flush=True)
+    for companion in companions:
+        print(companion, flush=True)
 
 
 if __name__ == "__main__":

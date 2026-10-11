@@ -38,6 +38,9 @@ struct MagazineProfile
     // Some clips withdraw the hand before the insertion lead. Sample an
     // earlier finger contact for free carry without extending the seat path.
     var bool bEarlierCarryGrip;
+    // The visible part seats before or after its ammo notify. Follow the
+    // final authored approach to Idle instead of treating the notify as a pose.
+    var bool bPlateauInsert, bProjectilePlateau;
     // A third material slot (the Bouncer's canister: body, glass, trim).
     var int Section2MaterialIndex;
     // Nothing leaves the gun at the start (a fired rocket, the Doshinegun's
@@ -229,4 +232,15 @@ defaultproperties
     Profiles(65)=(WeaponClass=class'KFWeap_Blunt_Pulverizer',MeshName=Wep_1stP_Pulverizer_Rig_New,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Mag1,SpareBone=RW_Mag1,LoadedExtras[0]=RW_Shell1,LoadedExtras[1]=RW_Shell2,LoadedExtras[2]=RW_Shell3,LoadedExtras[3]=RW_Shell4,LoadedExtras[4]=RW_MagSpringPlate1)
     Profiles(66)=(WeaponClass=class'KFWeap_AssaultRifle_Doshinegun',MeshName=Wep_1stP_Doshinegun_Rig,RackBone=RW_Weapon,MaterialIndex=2,ActionKind=2,LoadedBone=RW_Notes2,SpareBone=RW_Notes2,bSeatAtNotify=true,bNoEject=true,bParkedLoaded=true)
     Profiles(60)=(WeaponClass=class'KFWeap_Rifle_ParasiteImplanter',MeshName=Wep_1stP_ParasiteImplanter_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Magazine,SpareBone=RW_Magazine,InsertHand=1)
+    // Single projectiles: never eject a fictitious magazine. Stock retains
+    // its cable/bolt completion and each weapon's one-round ammo contract.
+    Profiles(67)=(WeaponClass=class'KFWeap_Bow_Crossbow',MeshName=Wep_1stP_Crossbow_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Projectile,SpareBone=RW_Projectile,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
+    Profiles(68)=(WeaponClass=class'KFWeap_HRG_Crossboom',MeshName=Wep_1stP_HRG_Crossboom_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Projectile,SpareBone=RW_Projectile,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
+    Profiles(69)=(WeaponClass=class'KFWeap_Rifle_RailGun',MeshName=WEP_1stP_RailGun_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Bullets1,SpareBone=RW_Bullets1,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
+    Profiles(70)=(WeaponClass=class'KFWeap_Rifle_HRGIncision',MeshName=WEP_1stP_HRG_Incision,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Bullets1,SpareBone=RW_Bullets1,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
+    // The bow is LW_Weapon; RW_Weapon is the right-hand arrow, not the bow.
+    // Nocking does not draw or fire it: stock trigger charge/release remains.
+    Profiles(71)=(WeaponClass=class'KFWeap_Bow_CompoundBow',MeshName=Wep_1stP_CompoundBow_Rig,RackBone=LW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Weapon,SpareBone=RW_Weapon,InsertHand=1,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
+    // Blade cassette only. PerformReload(0) must never replenish motor fuel.
+    Profiles(72)=(WeaponClass=class'KFWeap_Eviscerator',MeshName=Wep_1stP_SawBlade_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=Magazine1,SpareBone=Magazine1,InsertHand=1,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true,LoadedExtras[0]=DiskSaw2,LoadedExtras[1]=DiskSaw1)
 }

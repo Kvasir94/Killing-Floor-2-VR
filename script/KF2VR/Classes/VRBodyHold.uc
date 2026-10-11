@@ -30,8 +30,37 @@ static function RB_BodyInstance BodyFor(PrimitiveComponent Component, name BoneN
 {
     if (Component == None) return None;
     if (SkeletalMeshComponent(Component) != None)
+    {
+        if (Consumed(SkeletalMeshComponent(Component),BoneName)) return None;
         return SkeletalMeshComponent(Component).FindBodyInstanceNamed(BoneName);
+    }
     return Component.BodyInstance;
+}
+
+// Optional Breacher marker publishes its exact snapshotted connected set. Do
+// not infer descendants: a severed child's body still belongs to its own hand.
+static simulated function bool Consumed(SkeletalMeshComponent Mesh, name Bone)
+{
+    local Actor Marker;
+    local class<Actor> MarkerClass;
+    local vector Query;
+    local int Index;
+    if (Mesh==None || Mesh.Owner==None || !Mesh.Owner.IsA('KFPawn_Monster') || Bone=='') return false;
+    Index=Mesh.MatchRefBone(Bone);
+    if (Index==INDEX_NONE) return false;
+    // Look up only an already loaded optional class. Ordinary grabs must not
+    // load Breacher or scan every actor for every candidate physics body.
+    MarkerClass=class<Actor>(FindObject("KF2Breacher.BreacherConsumedPiece",class'Class'));
+    if (MarkerClass==None) return false;
+    Query.X=Index;
+    foreach Mesh.Owner.DynamicActors(MarkerClass,Marker)
+        if (Marker.Class.Name=='BreacherConsumedPiece' && Marker.Owner==Mesh.Owner && !Marker.bDeleteMe)
+        {
+            Marker.SetDrawScale(1);
+            Marker.Touch(Mesh.Owner,Mesh,Query,vect(0,0,0));
+            if (Marker.DrawScale==2) return true;
+        }
+    return false;
 }
 
 static function bool FiniteVector(vector V)
@@ -88,6 +117,17 @@ static function Begin(RB_BodyInstance Body, optional PrimitiveComponent Componen
     if (Body != None && Body.IsValidBodyInstance()) Body.SetFixed(true);
 }
 
+// Optional Breacher integration without a package dependency. A hand takes
+// priority over a cosmetic pin. Notify before capturing/fixing the hand body,
+// so pin cleanup cannot unfix a body that the hand already owns.
+static function YieldPins(PrimitiveComponent Component)
+{
+    local Actor A;
+    if (Component == None || Component.Owner == None) return;
+    foreach Component.Owner.DynamicActors(class'Actor', A)
+        if (A.IsA('BreacherPin')) A.UnTouch(Component.Owner);
+}
+
 static function Move(PrimitiveComponent Component, name BoneName, matrix Target)
 {
     if (Component == None) return;
@@ -96,14 +136,70 @@ static function Move(PrimitiveComponent Component, name BoneName, matrix Target)
     Component.WakeRigidBody(BoneName);
 }
 
-// Let go. With a throw velocity the whole body leaves at the hand's speed;
+// Let go. With a throw velocity the connected piece leaves at the hand's speed;
 // without one it keeps whatever the solver gave it.
-static function End(RB_BodyInstance Body, PrimitiveComponent Component, optional vector ThrowVelocity)
+static function End(RB_BodyInstance Body, PrimitiveComponent Component, optional vector ThrowVelocity, optional name BoneName)
 {
     if (Body != None && Body.IsValidBodyInstance()) Body.SetFixed(false);
     if (Component == None) return;
-    if (!IsZero(ThrowVelocity)) Component.SetRBLinearVelocity(ThrowVelocity, false);
+    if (!IsZero(ThrowVelocity)) ThrowPiece(Component, BoneName, ThrowVelocity);
     Component.WakeRigidBody();
+}
+
+// Stock dismemberment breaks constraints inside the SAME skeletal mesh. The
+// nearest broken ancestor identifies the piece; actor identity does not.
+static function name PieceRoot(SkeletalMeshComponent Mesh, name Bone)
+{
+    local name Parent;
+    local int Steps;
+    if (Mesh == None || Mesh.PhysicsAssetInstance == None || Bone == '') return '';
+    for (Steps = 0; Steps < 256; ++Steps)
+    {
+        if (Mesh.IsBrokenConstraint(Bone)) return Bone;
+        Parent = Mesh.GetParentBone(Bone);
+        if (Parent == '' || Parent == Bone) return Bone;
+        Bone = Parent;
+    }
+    return '';
+}
+
+static function bool SamePiece(PrimitiveComponent Component, name A, name B)
+{
+    local SkeletalMeshComponent Mesh;
+    local name RootA, RootB;
+    Mesh = SkeletalMeshComponent(Component);
+    if (Mesh == None) return true;
+    RootA = PieceRoot(Mesh, A);
+    RootB = PieceRoot(Mesh, B);
+    // Unknown topology must keep the connected-body safety limits.
+    return RootA == '' || RootB == '' || RootA == RootB;
+}
+
+static function bool Detached(SkeletalMeshComponent Mesh, name Bone)
+{
+    return Mesh != None && !SamePiece(Mesh, Bone, Mesh.GetBoneName(0));
+}
+
+// Set velocity only on the connected piece that was released. Setting the
+// entire mesh's velocity also launches severed parts still held by a hand.
+static function ThrowPiece(PrimitiveComponent Component, name Bone, vector Velocity)
+{
+    local SkeletalMeshComponent Mesh;
+    local RB_BodyInstance Body;
+    local name Candidate;
+    local int I;
+    Mesh = SkeletalMeshComponent(Component);
+    if (Mesh == None || Bone == '') { Component.SetRBLinearVelocity(Velocity, false); return; }
+    if (Mesh.PhysicsAsset == None || Mesh.PhysicsAssetInstance == None) return;
+    for (I = 0; I < Mesh.PhysicsAsset.BodySetup.Length; ++I)
+    {
+        Candidate = Mesh.PhysicsAsset.BodySetup[I].BoneName;
+        if (Consumed(Mesh,Candidate)) continue;
+        if (!SamePiece(Mesh, Bone, Candidate)) continue;
+        Body = Mesh.FindBodyInstanceNamed(Candidate);
+        if (Body == None || !Body.IsValidBodyInstance() || Body.IsFixed()) continue;
+        Mesh.AddImpulse(Velocity - Body.GetUnrealWorldVelocity(), MatrixGetOrigin(Body.GetUnrealWorldTM()), Candidate, true);
+    }
 }
 
 // Distance and angle between a body and the frame it is being driven to.

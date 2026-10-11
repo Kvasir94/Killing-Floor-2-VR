@@ -39,6 +39,8 @@ struct VRWeaponProfile
     var bool bLaserUsesBoreRotation;
     var bool bFirearm;
     var bool bOneHanded;
+    // Independent forearm hardware, with no gun grip or hand bones in its rig.
+    var bool bWristEquipment;
     // Sidearms brace at the authored grip without steering from wrist spacing.
     var bool bPistolBrace;
     // Some rigs place the support wrist beside/below the primary wrist rather
@@ -219,6 +221,9 @@ var float NativeHeadHeight, NativeStandingHeight;
 var int NativeHeadTracked, NativeCalibrationEpoch, NativeHudSuppressMask;
 var VRCalibrationPanel CalibrationPanel;
 var config vector ChestGrenadeOffset;
+// True: torso-local visible centre. False: legacy mesh-pivot offset.
+// The launcher seeds new defaults; unmarked saved calibration stays legacy.
+var config bool bChestGrenadeCentered;
 // Session-only choice written into the launcher's isolated config.
 var config bool bApplyVRRenderSettings;
 var config bool bDisableRenderSettingsCache;
@@ -300,6 +305,11 @@ var KFSkeletalMeshComponent OriginalFreeHandsOccluderMesh;
 var bool bOriginalFreeHandsOccluder;
 var VRCartridgeRendering CartridgeRendering;
 var VRReloadMeshPresentation ReloadMeshPresentation;
+var VRVampireReloadAuthority VampireAuthority;
+var int VampireRequest;
+var int PairedReloadRequest;
+var KFWeapon PairedReloadItems[2];
+var int PairedReloadRequests[2];
 // Acting-item perk context (VRPerkContext). Native brackets stock perk
 // evaluation with NativePerkFire/Damage/Movement and NativePerkEnd.
 var VRPerkContext PerkContext;
@@ -328,6 +338,10 @@ var bool bControlsLogged;
 var int JumpBindIndex, UseBindIndex;
 var VRFlamePresentation FlameRendering;
 var VRM14Scope M14Scope;
+// Breacher Deadbolt forearm art over its stock nailgun rig; None for every other weapon.
+var VRDeadboltPresentation Deadbolt;
+// Breacher Ripcord cable, yank and catch over its stock crossbow rig; None for every other weapon.
+var VRRipcordPresentation Ripcord;
 var VRM14Laser M14Laser;
 var vector NativeBackBlastLocation;
 var rotator NativeBackBlastRotation;
@@ -358,6 +372,8 @@ var config bool bInteractiveReloads;
 // Local visual guidance only. Keep the player's choice while reloads are off;
 // insertion assistance, ammunition, audio and haptics never depend on this.
 var config bool bReloadHints;
+// Optional broader pouch/action acquisition; placement and insertion stay fixed.
+var config bool bWideGrabZones;
 // With interactive reloads: the pump shotgun needs its fore-end worked by hand
 // after every shot (VRManualPump). Separate setting requiring reloads ON.
 var config bool bManualPump;
@@ -368,11 +384,17 @@ var config bool bPerkReloadMagnet;
 var config bool bUnlockDeferredReloads;
 // Sight-line aim convergence at 20m for iron-sighted firearms (AS2 feel).
 var config bool bSightLineConvergence;
+// Optional, off by default: aim the muzzle at the point the sight line meets,
+// so tracer, Zed Time projectile and hit all land under the sights at any
+// range. Overrides bSightLineConvergence while on; turning it off restores it.
+var config bool bSightPointAim;
 // Legacy holster layout, relative to head minus 42 UU. Read only when
 // BodyHolsterOffsets is unset; BodyHolsterOffset() converts it.
 var config array<vector> BodySlotOffsets;
 // Holster layout in the body frame (BodyPivot/BodyYaw), written by HOLSTER FIT.
 var config array<vector> BodyHolsterOffsets;
+// Belt pouch fit in the body frame; positive Y widens both hip offsets.
+var config vector AmmoPouchAdjustment;
 // Shared body frame for holsters, the chest grenade and the dosh pocket; see
 // BodyYaw. The neck pivot sits this far below the eyes along the head's up axis.
 var rotator BodyFrameYaw;
@@ -484,6 +506,13 @@ simulated function bool MultiplayerGrabHostAllowed()
 simulated function bool RequestNetworkGrabDamage(Pawn Victim, float Amount, vector HitLocation, vector Momentum, name BoneName)
 {
     if (RootBridge != None) return RootBridge.RequestNetworkGrabDamage(Victim, Amount, HitLocation, Momentum, BoneName);
+    return false;
+}
+
+simulated function bool RequestNetworkGrabImpact(Actor Source, name Bone, Actor Target,
+    vector Point, vector Direction, float Speed, float BaseDamage)
+{
+    if (RootBridge!=None) return RootBridge.RequestNetworkGrabImpact(Source,Bone,Target,Point,Direction,Speed,BaseDamage);
     return false;
 }
 
@@ -743,6 +772,9 @@ simulated function rotator BodyYaw()
 // frame. Physical reloads reach for it; the HUD pins the reserve count to it.
 simulated function vector AmmoPouchPosition(int Hand, vector Offset)
 {
+    Offset.X += FClamp(AmmoPouchAdjustment.X, -15, 20);
+    Offset.Y -= FClamp(AmmoPouchAdjustment.Y, -3, 25);
+    Offset.Z += FClamp(AmmoPouchAdjustment.Z, -20, 20);
     if (Hand == 1) Offset.Y = -Offset.Y;
     return BodyPivot() - vect(0,0,1) * (38 - BodyNeckLength) + (Offset >> BodyYaw());
 }
@@ -1106,8 +1138,6 @@ static function bool HasAuthoredProfile(name ClassName)
 {
     local int I;
     if (ClassName == '') return false;
-    // Optional Deadbolt inherits this exact stock mesh/rig; no package load here.
-    if (ClassName == 'BreacherDeadbolt') return HasAuthoredProfile('KFWeap_HRG_Nailgun');
     for (I = 0; I < default.WeaponProfiles.Length; ++I)
         if (default.WeaponProfiles[I].WeaponClassName == ClassName) return true;
     return false;
@@ -1236,6 +1266,11 @@ simulated function bool NetworkPracticeAvailable()
 simulated function bool NetworkPracticeActive()
 {
     if (RootBridge != None) return RootBridge.NetworkPracticeActive();
+    return false;
+}
+simulated function bool NetworkSandboxActive()
+{
+    if (RootBridge != None) return RootBridge.NetworkSandboxActive();
     return false;
 }
 simulated function bool NetworkPracticeInvulnerable()
@@ -1466,6 +1501,137 @@ simulated function bool RequestNetworkGrip(KFWeapon W, int Policy)
 {
     if (RootBridge != None) return RootBridge.RequestNetworkGrip(W, Policy);
     return false;
+}
+
+// Solo uses the same authority transaction as the owner-channel server.
+// Client subclasses route these calls; this base never predicts ammunition.
+simulated function bool VampireAvailable()
+{
+    if (RootBridge != None) return RootBridge.VampireAvailable();
+    if (WorldInfo.NetMode == NM_Client || Human == None || Human.Role != ROLE_Authority
+        || PC == None || PC.Pawn != Human) return false;
+    if (VampireAuthority != None && VampireAuthority.Human != Human)
+    {
+        VampireAuthority.Cancel(VampireAuthority.SessionId, true);
+        VampireAuthority = None;
+    }
+    if (VampireAuthority == None)
+    {
+        VampireAuthority = new(self) class'VRVampireReloadAuthority';
+        VampireAuthority.Human = Human; VampireAuthority.Controller = PC;
+    }
+    VampireAuthority.NativeVampireReloadGate();
+    return VampireAuthority.NativeVersion == 1;
+}
+
+simulated function bool VampireManaged()
+{
+    if (RootBridge != None) return RootBridge.VampireManaged();
+    return Human != None && PC != None && PC.Pawn == Human
+        && VampireAuthority != None && VampireAuthority.Human == Human
+        && VampireAuthority.NativeFence == 1;
+}
+
+simulated function int VampireBegin(KFWeapon W, int Hand, bool bStock)
+{
+    if (!VampireAvailable() || VampireRequest >= MaxInt - 1) return 0;
+    ++VampireRequest;
+    if (!VampireAuthority.Begin(Human, W, VampireRequest, bStock)) return 0;
+    return VampireRequest;
+}
+
+simulated function bool VampireRead(KFWeapon W, int Request, out int Session,
+    out byte Status, out int Ammo, out int Reserve)
+{
+    if (VampireAuthority == None || VampireAuthority.Gun != W
+        || VampireAuthority.SessionId != Request || VampireAuthority.Human != Human) return false;
+    VampireAuthority.Tick();
+    Session = VampireAuthority.SessionId; Status = byte(VampireAuthority.Status);
+    Ammo = W.AmmoCount[0]; Reserve = W.SpareAmmoCount[0];
+    return true;
+}
+
+simulated function bool VampireCommit(KFWeapon W, int Request, int Session)
+{
+    return VampireAuthority != None && VampireAuthority.Gun == W
+        && Request == Session && VampireAuthority.SessionId == Session
+        && VampireAuthority.Commit(Session);
+}
+
+simulated function VampireCancel(KFWeapon W, int Request, int Session)
+{
+    if (VampireAuthority != None && VampireAuthority.Gun == W
+        && VampireAuthority.SessionId == Request) VampireAuthority.Cancel(Request);
+}
+
+// The split pair remains the sole reserve owner in solo and online play.
+// Network subclasses replace transport; neither path predicts ammunition.
+simulated function bool PairedReloadAvailable()
+{
+    if (RootBridge != None) return RootBridge.PairedReloadAvailable();
+    return WorldInfo.NetMode != NM_Client && Human != None && Human.Role == ROLE_Authority
+        && PC != None && PC.Pawn == Human && Human.Health > 0;
+}
+
+simulated function int PairedReloadBegin(KFWeapon W, int Hand, optional bool bStock)
+{
+    local VRWeaponPair Pair;
+    if (RootBridge != None) return RootBridge.PairedReloadBegin(W, Hand, bStock);
+    if (!PairedReloadAvailable() || Hand < 0 || Hand > 1 || W == None
+        || Hands[Hand].Item != W || (NativeValidMask & (1 << Hand)) == 0
+        || PairedReloadRequest >= MaxInt - 1) return 0;
+    Pair = class'VRWeaponPair'.static.ForMember(W);
+    if (Pair == None || Pair.Human != Human || !Pair.IsMember(W)) return 0;
+    if (PairedReloadItems[Hand] != None)
+        PairedReloadCancel(PairedReloadItems[Hand], PairedReloadRequests[Hand], PairedReloadRequests[Hand]);
+    ++PairedReloadRequest;
+    if (!Pair.BeginPhysicalReload(W, PairedReloadRequest, bStock)) return 0;
+    PairedReloadItems[Hand] = W;
+    PairedReloadRequests[Hand] = PairedReloadRequest;
+    return PairedReloadRequest;
+}
+
+simulated function bool PairedReloadRead(KFWeapon W, int BeginRequest, out int Session,
+    out byte Status, out int Ammo, out int Reserve)
+{
+    local int Hand;
+    local VRWeaponPair Pair;
+    if (RootBridge != None) return RootBridge.PairedReloadRead(W, BeginRequest, Session, Status, Ammo, Reserve);
+    if (W == None || BeginRequest <= 0) return false;
+    for (Hand = 0; Hand < 2; ++Hand)
+        if (PairedReloadItems[Hand] == W && PairedReloadRequests[Hand] == BeginRequest) break;
+    if (Hand >= 2) return false;
+    Pair = class'VRWeaponPair'.static.ForMember(W);
+    if (Pair == None || Pair.Role != ROLE_Authority) return false;
+    if (!PairedReloadAvailable() || Hands[Hand].Item != W
+        || (NativeValidMask & (1 << Hand)) == 0)
+        Pair.CancelPhysicalReload(W, BeginRequest);
+    Session = BeginRequest;
+    Status = byte(Pair.PhysicalReloadStatus(W, BeginRequest));
+    Ammo = W.AmmoCount[0];
+    Reserve = Pair.SharedReserve();
+    return true;
+}
+
+simulated function bool PairedReloadCommit(KFWeapon W, int BeginRequest, int Session)
+{
+    local byte Status;
+    local int CurrentSession, Ammo, Reserve;
+    local VRWeaponPair Pair;
+    if (RootBridge != None) return RootBridge.PairedReloadCommit(W, BeginRequest, Session);
+    if (Session != BeginRequest || !PairedReloadRead(W, BeginRequest, CurrentSession, Status, Ammo, Reserve)
+        || Status != 1) return false;
+    Pair = class'VRWeaponPair'.static.ForMember(W);
+    return Pair != None && Pair.CommitPhysicalReload(W, Session);
+}
+
+simulated function PairedReloadCancel(KFWeapon W, int BeginRequest, int Session)
+{
+    local VRWeaponPair Pair;
+    if (RootBridge != None) { RootBridge.PairedReloadCancel(W, BeginRequest, Session); return; }
+    if (W == None || BeginRequest <= 0) return;
+    Pair = class'VRWeaponPair'.static.ForMember(W);
+    if (Pair != None && Pair.Role == ROLE_Authority) Pair.CancelPhysicalReload(W, BeginRequest);
 }
 
 // Native: a managed item's FireAmmunition. Online clients only need the
@@ -1786,6 +1952,22 @@ simulated function ResolveFirstPersonContent(KFWeapon W)
     `log("KF2VR_HANDS content-resolved weapon=" $ W.Class @ "mesh=" $ Asset @ "animSets=" $ W.MySkelMesh.AnimSets.Length);
 }
 
+// Wrist equipment uses the root neutral hand rig, so streamed readiness can
+// recover without inventing a firearm grip pose on its equipment-only bones.
+simulated function CalibrateWristEquipment()
+{
+    local int I;
+    if (RootBridge!=None) FreeHandPose=RootBridge.FreeHandPose;
+    else InitializeFreeHands();
+    for (I=0; I<2; ++I)
+    {
+        GripInWeapon[I]=vect(0,0,0);
+        GripRotationInWeapon[I]=QuatFromRotator(rot(0,0,0));
+        SupportGripRotationInWeapon[I]=QuatFromRotator(rot(0,0,0));
+    }
+    bCalibrated=(Deadbolt!=None || Ripcord!=None) && FreeHandPose!=None && FreeHandPose.bReady;
+}
+
 simulated function ConfigureWeapon(KFWeapon W)
 {
     local int I;
@@ -1805,7 +1987,12 @@ simulated function ConfigureWeapon(KFWeapon W)
         }
         W = None;
     }
-    if (W == ActiveWeapon) return;
+    if (W == ActiveWeapon)
+    {
+        if (!bCalibrated && W!=None && ActiveProfile>=0
+            && WeaponProfiles[ActiveProfile].bWristEquipment) CalibrateWristEquipment();
+        return;
+    }
     if (VRTrackedWeapon(ActiveWeapon) != None) VRTrackedWeapon(ActiveWeapon).CancelTrackedInput();
     // A deliberate two-hand hold survives an inventory transition. Keep the
     // intent through a transient None weapon, but require both physical grips
@@ -1867,7 +2054,8 @@ simulated function ConfigureWeapon(KFWeapon W)
     }
     if (ActiveProfile < 0 || W.MySkelMesh == None) return;
     if (W.MySkelMesh.MatchRefBone(WeaponProfiles[ActiveProfile].RootBone) < 0
-        || W.MySkelMesh.MatchRefBone(HandBone(0)) < 0 || W.MySkelMesh.MatchRefBone(HandBone(1)) < 0
+        || (!WeaponProfiles[ActiveProfile].bWristEquipment
+            && (W.MySkelMesh.MatchRefBone(HandBone(0)) < 0 || W.MySkelMesh.MatchRefBone(HandBone(1)) < 0))
         || (WeaponProfiles[ActiveProfile].SupportBone != ''
             && W.MySkelMesh.MatchRefBone(WeaponProfiles[ActiveProfile].SupportBone) < 0))
     {
@@ -1909,7 +2097,8 @@ simulated function ConfigureWeapon(KFWeapon W)
         WristIK[1] = RootBridge.WristIK[1];
     }
     else InitializeFreeHands();
-    CalibrateGripPose(W);
+    if (WeaponProfiles[ActiveProfile].bWristEquipment) CalibrateWristEquipment();
+    else CalibrateGripPose(W);
     if (bCalibrated && WeaponProfiles[ActiveProfile].bPhysicalMelee)
     {
         PhysicalMelee = new(self) class'VRPhysicalMelee';
@@ -1917,7 +2106,7 @@ simulated function ConfigureWeapon(KFWeapon W)
     }
     // A physically swung melee gun (Mosin, Eviscerator) already strikes with its
     // measured head; a second bash contact would double its hits.
-    if (bCalibrated && !WeaponProfiles[ActiveProfile].bPhysicalMelee
+    if (bCalibrated && !WeaponProfiles[ActiveProfile].bPhysicalMelee && !WeaponProfiles[ActiveProfile].bWristEquipment
         && (WeaponProfiles[ActiveProfile].bFirearm || (W != None && !W.IsA('KFWeap_MeleeBase'))))
     {
         PhysicalBash = new(self) class'VRPhysicalBash';
@@ -1981,6 +2170,8 @@ simulated function RestoreWeaponRendering()
     if (AF2011Barrels != None) { AF2011Barrels.Release(false); AF2011Barrels = None; }
     if (RiotShield != None) { RiotShield.Release(); RiotShield = None; }
     if (M14Scope != None) { M14Scope.Release(false); M14Scope = None; }
+    if (Deadbolt != None) { Deadbolt.Release(); Deadbolt = None; }
+    if (Ripcord != None) { Ripcord.Release(); Ripcord = None; }
     if (ActiveWeapon != None && ActiveWeapon.MySkelMesh != None && OriginalWeaponMaterials.Length > 0)
     {
         if (ActiveWeapon.MySkelMesh.bUseAsOccluder != bOriginalWeaponOccluder)
@@ -2064,6 +2255,17 @@ simulated function ConfigureWeaponRendering(KFWeapon W)
     {
         M14Scope = new(self) class'VRM14Scope';
         if (!M14Scope.Initialize(self, W)) { M14Scope = None; `log("KF2VR_SCOPE scope-unavailable" @ W.Class.Name); }
+    }
+    // KF2Breacher compiles separately, so match its class by name.
+    if (W.IsA('BreacherDeadbolt'))
+    {
+        Deadbolt = new(self) class'VRDeadboltPresentation';
+        if (!Deadbolt.Initialize(self, W)) { Deadbolt = None; `log("KF2VR_DEADBOLT presentation-unavailable"); }
+    }
+    if (W.IsA('BreacherRipcord'))
+    {
+        Ripcord = new(self) class'VRRipcordPresentation';
+        if (!Ripcord.Initialize(self, W)) { Ripcord = None; `log("KF2VR_RIPCORD presentation-unavailable"); }
     }
     // Keep the complete stock 1P material instances, including their blood,
     // skin, reflection and custom lighting parameters. Native preserves world
@@ -2613,6 +2815,51 @@ simulated function PresentBracedSupport(KFWeapon W, int I)
     BraceApplied[I] = 1;
 }
 
+// Sight-line elevation angle (in Unreal rotator units) converging to the bore at 20m (AS2 feel).
+// Low-profile pistols (~1.4 cm above bore) need ~8 units (~0.044 deg).
+// Shotguns (~3.5 cm above bore) need ~18 units (~0.10 deg).
+// Rifles and carbines with elevated sights/optics (~6.8 cm above bore) need ~36 units (~0.20 deg).
+function int SightConvergencePitch(int ProfileIndex)
+{
+    if (ProfileIndex < 0 || ProfileIndex >= WeaponProfiles.Length) return 24;
+    if (WeaponProfiles[ProfileIndex].bOneHanded || WeaponProfiles[ProfileIndex].bPistolBrace) return 8;
+    if (InStr(string(WeaponProfiles[ProfileIndex].WeaponClassName), "Shotgun") != INDEX_NONE) return 18;
+    return 36;
+}
+
+// Sight height above the bore (UU) by category until per-gun rear-sight
+// heights are measured from the stock rigs; same heights as the 20m angles.
+function float SightHeightAboveBore(int ProfileIndex)
+{
+    if (ProfileIndex < 0 || ProfileIndex >= WeaponProfiles.Length) return 4.4;
+    if (WeaponProfiles[ProfileIndex].bOneHanded || WeaponProfiles[ProfileIndex].bPistolBrace) return 1.4;
+    if (InStr(string(WeaponProfiles[ProfileIndex].WeaponClassName), "Shotgun") != INDEX_NONE) return 3.5;
+    return 6.8;
+}
+
+// Sight-point aim: trace the sight line (parallel to the bore, sight height
+// above it) and turn the shot from the real muzzle onto the point it meets.
+// The origin stays at the muzzle, so instant hits, their tracer and Zed Time
+// projectiles share one path. Nothing within 1m swings the shot further
+// than a 1m point would; open sky converges at 50m.
+simulated function AimAtSightPoint(quat BoreWorldQ, rotator ItemRecoil)
+{
+    local vector Forward, SightStart, SightEnd, HitPos, HitNormal, AimPoint;
+    local float Along;
+
+    Forward = QuatRotateVector(BoreWorldQ, vect(1,0,0));
+    SightStart = FireLocation + QuatRotateVector(BoreWorldQ, vect(0,0,1)) * SightHeightAboveBore(ActiveProfile);
+    SightEnd = SightStart + Forward * 5000.0;
+    Along = 5000.0;
+    // The pawn traces so its own cylinder around the held gun is ignored.
+    if (Human.Trace(HitPos, HitNormal, SightEnd, SightStart, true) != None)
+        Along = FMax((HitPos - SightStart) dot Forward, 100.0);
+    AimPoint = SightStart + Forward * Along;
+    FireRotation = QuatToRotator(QuatProduct(QuatFindBetween(Forward, Normal(AimPoint - FireLocation)),
+        BoreWorldQ)) - ItemRecoil;
+    LaserMuzzleRotation = rotator(AimPoint - LaserMuzzleLocation);
+}
+
 // Called after KFWeapon.SetPosition by the native script hook. The game has
 // already processed visibility/attachment and its animation state normally.
 simulated function PlaceWeapon()
@@ -2622,7 +2869,7 @@ simulated function PlaceWeapon()
     local vector RootPos, HandPos, Target, Up, Forward, HitPos, HitNormal, SecondMuzzle;
     local quat RootQ, HandQ, DesiredQ, ActorQ, RelativeQ, PrimaryGripQ;
     local quat TwoHandAimQ, SmoothedCorrectionQ, BoreQ;
-    local rotator DesiredRot, MuzzleRotation, ItemRecoil;
+    local rotator DesiredRot, MuzzleRotation, ItemRecoil, ConvRot;
     local int I, SupportHand, AuthoredPrimaryHand, RiotShieldHand, ShotCount;
     local bool bOffhandGauntletVisible;
     local VRManualAction ManualCycle;
@@ -2650,6 +2897,11 @@ simulated function PlaceWeapon()
     Hands[1].AimRotation = ControllerAimRotation(RightRotation, W);
     ConfigureWeapon(W);
     if (ActiveProfile < 0) { HideWeaponLaser(); return; }
+    if (WeaponProfiles[ActiveProfile].bWristEquipment)
+    {
+        PlaceWristEquipment(W,ItemRecoil);
+        return;
+    }
     AuthoredPrimaryHand = WeaponProfiles[ActiveProfile].bPhysicalLowerHandlePrimary ? 0 : 1;
     BoreQ = QuatFromRotator(WeaponProfiles[ActiveProfile].BoreRotation);
     if (WeaponProfiles[ActiveProfile].bPhysicalMelee) ItemRecoil = rot(0,0,0);
@@ -2857,10 +3109,17 @@ simulated function PlaceWeapon()
     }
     // Stock adjusted aim adds the recoil buffer. Include the visible animation
     // in its input while leaving that stock recoil addition exactly once.
-    FireRotation = QuatToRotator(QuatProduct(DesiredQ, BoreQ)) - ItemRecoil;
     if (bSightLineConvergence && WeaponProfiles[ActiveProfile].bFirearm)
     {
-        FireRotation.Pitch += 24;
+        ConvRot.Pitch = SightConvergencePitch(ActiveProfile);
+        ConvRot.Yaw = 0;
+        ConvRot.Roll = 0;
+        FireRotation = QuatToRotator(QuatProduct(QuatProduct(DesiredQ, BoreQ),
+            QuatFromRotator(ConvRot))) - ItemRecoil;
+    }
+    else
+    {
+        FireRotation = QuatToRotator(QuatProduct(DesiredQ, BoreQ)) - ItemRecoil;
     }
     ActorQ = QuatFromRotator(W.Rotation);
     RelativeQ = QuatProduct(QuatInvert(ActorQ), RootQ);
@@ -2943,22 +3202,6 @@ simulated function PlaceWeapon()
     // receiver. Keep the socket's origin and take the bore the shot uses.
     if (WeaponProfiles[ActiveProfile].bLaserUsesBoreRotation)
         LaserMuzzleRotation = QuatToRotator(DesiredQ);
-    // A muzzle pushed through a wall cannot start a shot on its far side.
-    if (Trace(HitPos, HitNormal, FireLocation, HeadPosition, false) != None)
-        FireLocation = HitPos + HitNormal * 2;
-    if (AF2011Barrels != None && !AF2011Barrels.Update(self, FireLocation))
-    {
-        NativeWeaponReady = 0;
-        NativeControlsEnabled = 0;
-        ReleaseControls();
-        HideWeaponLaser();
-        return;
-    }
-    Hands[WeaponHand].FirePosition = FireLocation;
-    Hands[WeaponHand].FireRotation = FireRotation;
-    UpdateWeaponLaser(W);
-    if (M14Scope != None) M14Scope.Update();
-    if (VRTrackedPresentation(W) != None) VRTrackedPresentation(W).UpdateTrackedPresentation(self);
     // The hand component's actor follows the torso; targets come from the
     // original grip. The support target follows its animated gun part rather
     // than inheriting reload's untracked arm choreography.
@@ -3019,10 +3262,101 @@ simulated function PlaceWeapon()
     // Refresh attachments through their parent, never ForceUpdate a child
     // attached to a bone (that API requires direct actor ownership).
     M.ForceUpdate(true);
+    // Wrist equipment samples the bound hand only after this frame's grip
+    // creation/attachment refresh. Its bore, particles and shot share that
+    // current frame rather than last frame's hand or the hidden neutral rig.
+    if (Deadbolt != None && Deadbolt.Update(WeaponHand, FireLocation, FireRotation))
+    {
+        LaserMuzzleLocation = FireLocation;
+        LaserMuzzleRotation = FireRotation;
+        // Stock adjusted aim adds the item recoil once; the visible wrist
+        // already carries it. Keep the literal laser/art axis unchanged.
+        FireRotation -= ItemRecoil;
+    }
+    if (Ripcord != None && Ripcord.PlaceArt(WeaponHand, FireLocation, FireRotation))
+    {
+        LaserMuzzleLocation = FireLocation;
+        LaserMuzzleRotation = FireRotation;
+        FireRotation -= ItemRecoil;
+    }
+    // A muzzle pushed through a wall cannot start a shot on its far side.
+    if (Trace(HitPos, HitNormal, FireLocation, HeadPosition, false) != None)
+        FireLocation = HitPos + HitNormal * 2;
+    if (AF2011Barrels != None && !AF2011Barrels.Update(self, FireLocation))
+    {
+        NativeWeaponReady = 0;
+        NativeControlsEnabled = 0;
+        ReleaseControls();
+        HideWeaponLaser();
+        return;
+    }
+    if (bSightPointAim && WeaponProfiles[ActiveProfile].bFirearm && Deadbolt == None && Ripcord == None)
+        AimAtSightPoint(QuatProduct(DesiredQ, BoreQ), ItemRecoil);
+    Hands[WeaponHand].FirePosition = FireLocation;
+    Hands[WeaponHand].FireRotation = FireRotation;
+    if (Ripcord != None) Ripcord.Update(WeaponHand);
+    UpdateWeaponLaser(W);
+    if (M14Scope != None) M14Scope.Update();
+    if (VRTrackedPresentation(W) != None) VRTrackedPresentation(W).UpdateTrackedPresentation(self);
     if (++PoseCount <= 3 || PoseCount % 300 == 0)
         `log("KF2VR_HANDS placed count=" $ PoseCount @ "weapon=" $ W.Class @ "aim=" $ FireRotation
             @ "root=" $ Target @ "hand=" $ Hands[WeaponHand].Position @ "support=" $ Hands[SupportHand].SupportOwner
             @ "rootError=" $ PlacedRootError @ "muzzleDistance=" $ PlacedMuzzleDistance @ "fire=" $ FireLocation);
+}
+
+// Independent wrist equipment keeps the existing exact-item ownership and
+// shot-origin publication, while the root's calibrated free-hand rig owns the
+// fingers. There is no hidden firearm skeleton or fabricated grip calibration.
+simulated function PlaceWristEquipment(KFWeapon W,rotator ItemRecoil)
+{
+    local vector HitPoint,HitNormal;
+    local float Now,Elapsed,Weight,Impulse;
+    local int ShotCount;
+    NativeWeaponReady=0;
+    if (!bCalibrated || W!=ActiveWeapon || (Deadbolt==None && Ripcord==None)
+        || W.MySkelMesh==None || FreeHandPose==None
+        || WeaponHand<0 || WeaponHand>1 || (NativeValidMask & (1 << WeaponHand))==0)
+    { HideWeaponLaser(); return; }
+    ClearHandAttachments();
+    EnforceWeaponMotion(W);
+    UpdateWorldRendering(W);
+    UseWorldRendering(W.MySkelMesh);
+    // Keep the established recoil impulse/recovery without moving the actual
+    // tracked hand or head. Only the forearm tool recoils along its own bore.
+    Now=WorldInfo.RealTimeSeconds;
+    ShotCount=PresentedItem!=None ? int(PresentedItem.NativeFlashCount) : int(Human.FlashCount);
+    if (ShotCount!=LastKickShotCount)
+    {
+        if (LastKickShotCount>=0 && ShotCount!=0)
+        {
+            Weight=Loge(FClamp(float(W.minRecoilPitch+W.maxRecoilPitch)*0.5,50,1200)/50)/Loge(24);
+            Impulse=0.8+3.2*Weight;
+            RecoilKickFrom=RecoilKick;
+            RecoilKickPeak=FMin(RecoilKick+Impulse,5);
+            RecoilKickStart=Now;
+            RecoilKickRecover=0.15+0.45*Weight;
+        }
+        LastKickShotCount=ShotCount;
+    }
+    Elapsed=FMax(Now-RecoilKickStart,0);
+    if (Elapsed<0.045) RecoilKick=Lerp(RecoilKickFrom,RecoilKickPeak,Elapsed/0.045);
+    else RecoilKick=RecoilKickPeak*Exp(-(Elapsed-0.045)*2.3/FMax(RecoilKickRecover,0.05));
+    if (RecoilKick<0.02) { RecoilKick=0; RecoilKickPeak=0; }
+    if (Deadbolt!=None)
+    {
+        if (!Deadbolt.Update(WeaponHand,FireLocation,FireRotation)) { HideWeaponLaser(); return; }
+    }
+    else if (!Ripcord.PlaceArt(WeaponHand,FireLocation,FireRotation)) { HideWeaponLaser(); return; }
+    LaserMuzzleLocation=FireLocation;
+    LaserMuzzleRotation=FireRotation;
+    FireRotation-=ItemRecoil;
+    if (Trace(HitPoint,HitNormal,FireLocation,HeadPosition,false)!=None) FireLocation=HitPoint+HitNormal*2;
+    Hands[WeaponHand].FirePosition=FireLocation;
+    Hands[WeaponHand].FireRotation=FireRotation;
+    NativeWeaponReady=1;
+    bReadyPoseSettling=IsWeaponReadying(W);
+    if (Ripcord!=None) Ripcord.Update(WeaponHand);
+    UpdateWeaponLaser(W);
 }
 
 simulated function UseWorldRendering(PrimitiveComponent C)
@@ -3136,7 +3470,8 @@ simulated function UpdateWeaponLaser(KFWeapon W)
     local rotator CenterAim;
 
     if (!bWeaponLasers || !bNativeEnabled || !bCalibrated || NativeControlsEnabled == 0
-        || Human.Health <= 0 || (PresentedItem == None && W != Human.Weapon) || W.MySkelMesh.HiddenGame
+        || Human.Health <= 0 || (PresentedItem == None && W != Human.Weapon)
+        || (W.MySkelMesh.HiddenGame && Deadbolt == None && (Ripcord == None || Ripcord.Rig == None))
         || VRTrackedWeapon(W) != None || !UsesFirearmProfile(W) || W.IsInState('Inactive')
         || W.IsInState('WeaponPuttingDown') || W.IsInState('WeaponEquipping')
         || (NativeValidMask & (1 << WeaponHand)) == 0)
@@ -3604,6 +3939,8 @@ defaultproperties
     WeaponProfiles(130)=(WeaponClassName=VRWeap_PortalGun,RootBone=RW_Weapon,IdleAnimation=Portal_worldidle,bOneHanded=true)
     // Same authored axe/hand fit; the additional trader axe owns another item.
     WeaponProfiles(131)=(WeaponClassName=VRWeap_TomahawkSecond,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=-9.9,Y=1.3,Z=29),MeleeHeadEnd=(X=14.7,Y=0.6,Z=33.4),MeleeRadius=3)
+    WeaponProfiles(132)=(WeaponClassName=BreacherDeadbolt,RootBone=DB_Root,IdleAnimation=Idle,bFirearm=true,bOneHanded=true,bWristEquipment=true)
+    WeaponProfiles(133)=(WeaponClassName=BreacherRipcord,RootBone=RC_Root,IdleAnimation=Idle,bFirearm=true,bOneHanded=true,bWristEquipment=true)
     // HRG Blast Brawlers: button-driven stock melee (as Crovel). The stock
     // attack fires the shotgun blast and spends a shell; empty trigger reloads.
     WeaponProfiles(48)=(WeaponClassName=KFWeap_HRG_BlastBrawlers,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,bPhysicalDualGauntlets=true,MeleeHeadStart=(X=23.1,Y=13,Z=-4.1),MeleeHeadEnd=(X=28.1,Y=-8.7,Z=9.1),MeleeRadius=7.6)
@@ -3628,7 +3965,8 @@ defaultproperties
     AuditedSubclasses(11)=(SubclassName=VRWeap_PairedBuckshot,ProfileClassName=KFWeap_HRG_Revolver_Buckshot)
     AuditedSubclasses(12)=(SubclassName=VRWeap_PairedBladed,ProfileClassName=KFWeap_Pistol_Bladed)
     // Optional package alias only; this name does not load or enable its content.
-    AuditedSubclasses(13)=(SubclassName=BreacherDeadbolt,ProfileClassName=KFWeap_HRG_Nailgun)
+    AuditedSubclasses(13)=(SubclassName=BreacherDeadbolt,ProfileClassName=BreacherDeadbolt)
+    AuditedSubclasses(14)=(SubclassName=BreacherRipcord,ProfileClassName=BreacherRipcord)
     ControllerFitProfiles(0)=(ProfileId=Quest2,Label="LEGACY QUEST 2 FIT",FirearmPitchDegrees=-8.6,FirearmYawDegrees=0.0,FirearmRollDegrees=0.0)
     Quest2WristOffset=(X=-6.0,Y=4.1,Z=0.7)
     ControllerFitProfiles(1)=(ProfileId=Neutral,Label="RAW OPENXR AIM",FirearmPitchDegrees=0.0,FirearmYawDegrees=0.0,FirearmRollDegrees=0.0)

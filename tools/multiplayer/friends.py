@@ -25,7 +25,7 @@ import motion_session
 import join_code
 import breacher
 import game_install
-from workshop_map import MAP_NAME, ensure_map, add_map_path, receipt as map_receipt
+from workshop_map import MAP_NAME, ensure_map, cached_solo_map, add_map_path, receipt as map_receipt
 from launch_menu import (DIFFICULTIES, LENGTHS, host_url, installed_maps,
                          installed_solo_maps, resolve_solo_map, choose_options)
 from workshop_loadout import (parse_mods, load_preferences, save_preferences, save_dlss_preferences, prepare_content,
@@ -193,6 +193,52 @@ def cleanup_order(owned, avatar_preview=False):
     return ordered
 
 
+def disable_mouse_look(text):
+    """Keep mouse counters/buttons in the VR input copy, without camera axes."""
+    def strip(match):
+        row = match.group()
+        if not re.search(r'(?i)\bName\s*=\s*"?Mouse[XY]"?\s*[,)]', row):
+            return row
+        def command(found):
+            parts = [p.strip() for p in found.group(2).split("|")]
+            kept = [p for p in parts if not re.match(r"(?i)Axis\s+aMouse[XY]\b", p)]
+            return found.group(1) + " | ".join(kept) + found.group(3)
+        return re.sub(r'(?i)(\bCommand\s*=\s*")([^"]*)(")', command, row)
+    for section in ("Engine.PlayerInput", "KFGame.KFPlayerInput"):
+        pattern = re.compile(r"(?ims)^[ \t]*\[" + re.escape(section) + r"\][^\r\n]*(?:\r?\n|$).*?(?=^[ \t]*\[|\Z)")
+        text = pattern.sub(lambda block: re.sub(
+            r"(?im)^[ \t]*[+.-]?Bindings\s*=[^\r\n]*", strip, block.group()), text)
+    return text
+
+
+DEFAULT_SERVER_NAME = "KF2-VR Server"
+SERVER_NAME_PATTERN = r"[A-Za-z0-9 .,'!&()+_-]{1,48}"
+
+
+def resolve_host_identity(args, saved):
+    args.server_name = (args.server_name if args.server_name is not None
+                        else saved.get("server_name", DEFAULT_SERVER_NAME)).strip()
+    if not re.fullmatch(SERVER_NAME_PATTERN, args.server_name):
+        raise RuntimeError("Use a server name of 1-48 letters, numbers, spaces or . , ' ! & ( ) + _ -")
+    if args.open_server:
+        args.password = ""
+    else:
+        args.password = args.password or saved.get("host_password") or secrets.token_hex(4)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{0,64}", args.password):
+        raise RuntimeError("Use a session password containing letters, numbers, underscore or hyphen, or none.")
+    saved["server_name"] = args.server_name
+    if args.password:
+        saved["host_password"] = args.password
+
+
+def validate_server_query(info, password):
+    if info["secure"]:
+        raise RuntimeError("Server reports VAC enabled. This prototype requires the KF2-VR VAC-off host.")
+    if info["folder"] != "kf2" or bool(info["password"]) != bool(password):
+        raise ValueError("Expected a password-protected KF2 server" if password
+                         else "Expected a KF2 server without a password")
+
+
 def preview_camera_binding(text, command="KF2VRAvatarToggleCamera"):
     """Change only unmodified F8 in the isolated input copy; retain array rows."""
     if command not in ("KF2VRAvatarToggleCamera", "KF2VRThirdPersonToggle"):
@@ -242,9 +288,11 @@ def role_environment(environment, role):
         result["KF2VR_EYE_RENDER_PERCENT"] = str(percent)
     if role.get("role") == "driver" and role.get("native_adapter"):
         from epic_broker import graphics_payload
-        graphics_payload(role.get("dlss", "off"), role.get("dlss_sharpness", 0), role.get("hide_bile_lens", False))
+        graphics_payload(role.get("dlss", "off"), role.get("dlss_sharpness", 0), role.get("hide_bile_lens", False), role.get("hide_blood_lens", False))
     if role.get("role") == "driver" and role.get("native_adapter") and role.get("hide_bile_lens"):
         result["KF2VR_HIDE_BILE_LENS"] = "1"
+    if role.get("role") == "driver" and role.get("native_adapter") and role.get("hide_blood_lens"):
+        result["KF2VR_HIDE_BLOOD_LENS"] = "1"
     if role.get("dlss", "off") != "off" and role.get("role") == "driver" and role.get("native_adapter"):
         # The adapter loads nvngx_dlss.dll from the release's native folder.
         result["KF2VR_DLSS"] = role["dlss"]
@@ -364,6 +412,8 @@ def configure_role(run, name, user, game, args):
     if name == "server":
         # Persist host capability through ordinary map travel. Individual
         # desktop players keep stock weapons; VR owners opt in via tracking.
+        text = set_ini(text, "Engine.GameReplicationInfo", {
+            "ServerName": getattr(args, "server_name", None) or DEFAULT_SERVER_NAME})
         text = set_ini(text, "KF2VRNet.KF2VRNetGame", {
             "bServerAdapter": "true", "bIndependentWeapons": "false" if replay and not locomotion else "true",
             "bInventoryFocusEnabled": "true" if getattr(args, "inventory_focus", False) else "false",
@@ -377,7 +427,8 @@ def configure_role(run, name, user, game, args):
     path.write_text(text, encoding="utf-16")
     server_url = host_url(args)
     role["args"][0] = (server_url
-                        if name == "server" else f"{args.address}:{args.port}?Password={args.password}" + breacher.options(args))
+                        if name == "server" else f"{args.address}:{args.port}"
+                        + (f"?Password={args.password}" if args.password else "") + breacher.options(args))
     if name == "server" and replay and not test_map:
         role["args"][0] += "?VRNetDiagnostics=1?VRNetAutoReady=1?VRNet9mm=1?VRNetClients=2"
         if not args.replay_match:
@@ -411,6 +462,9 @@ def configure_role(run, name, user, game, args):
             if path.exists():
                 path.write_text(preview_camera_binding(read_ini(path), f8_command), encoding="utf-16", newline="")
         if args.vr:
+            path = configs / "KFInput.ini"
+            if path.exists():
+                path.write_text(disable_mouse_look(read_ini(path)), encoding="utf-16", newline="")
             path = configs / "KFEngine.ini"
             path.write_text(set_ini(read_ini(path), "Engine.Engine", {
                 "GameViewportClientClassName": "KF2VRNetClient.KF2VRNetViewportClient",
@@ -423,6 +477,16 @@ def configure_role(run, name, user, game, args):
                 "PostProcessAA": "False", "UseVsync": "False", "AmbientOcclusion": "False",
                 "HBAO": "False", "AllowScreenSpaceReflections": "False", "LensFlares": "False",
                 "ImageGrainScaler": "0.500000"}
+            # Optional screen effects. HBAO+ is KF2's AmbientOcclusion effect
+            # with the HBAO+ technique selected. Lens flares and grain stay off.
+            hbao = getattr(args, "hbao", False) is True
+            reflections = getattr(args, "reflections", False) is True
+            if hbao:
+                settings.update({"AmbientOcclusion": "True", "HBAO": "True"})
+            if reflections:
+                settings["AllowScreenSpaceReflections"] = "True"
+            if hbao or reflections:
+                settings["ImageGrainScaler"] = "0.000000"
             path = configs / "KFSystemSettings.ini"
             text = read_ini(path) if path.exists() else "[SystemSettings]\n"
             text = set_ini(text, "SystemSettings", settings)
@@ -441,6 +505,8 @@ def configure_role(run, name, user, game, args):
                 # Coarse stage timers and a non-blocking GPU query every 30th
                 # frame; the costly per-script-call tracing stays off.
                 role["args"].append("-kf2vr-frame-timings")
+            if getattr(args, "single_pass", False):
+                role["args"].append("-kf2vr-single-pass")
             if getattr(args, "threaded_render", False):
                 # Experimental: UE3's render thread draws frame N while the
                 # game thread ticks N+1. Replaces -onethread; no portals.
@@ -449,9 +515,17 @@ def configure_role(run, name, user, game, args):
             role["dlss"] = getattr(args, "dlss", None) or "off"
             role["dlss_sharpness"] = int(getattr(args, "dlss_sharpness", None) or 0)
             role["hide_bile_lens"] = getattr(args, "hide_bile_lens", True) is not False
+            role["hide_blood_lens"] = getattr(args, "hide_blood_lens", True) is not False
             requested_percent = getattr(args, "eye_render_percent", None)
             role["eye_render_percent"] = import_preferences(configs, eye_percent=requested_percent,
                                                             root=getattr(args, "profile_root", None))
+            # The VR script forces AO, HBAO+, reflections, lens flares and grain
+            # off unless screen effects are allowed; the session INI above
+            # then decides each one (lens flares and grain stay off).
+            path = configs / "KFGame.ini"
+            path.write_text(set_ini(read_ini(path), "KF2VR.VRHandsBridge", {
+                "bVRScreenEffects": "True"}),
+                encoding="utf-16")
     if getattr(args, "solo", False):
         role["args"][0] = (f"{args.map}?Game=KFGameContent.KFGameInfo_Survival"
             f"?Difficulty={DIFFICULTIES[args.difficulty]}?GameLength={LENGTHS[args.game_length]}"
@@ -474,7 +548,7 @@ def configure_role(run, name, user, game, args):
     if test_map:
         add_map_path(configs, args.test_map_path)
     configure_content(configs, args, server=name == "server")
-    breacher.configure_content(configs, args)
+    breacher.configure_content(configs, args, game_root=game)
     configure_mod_settings(role, args, game, user)
     if name == "driver" and not args.vr:
         desktop_settings.apply(configs, user, getattr(args, "profile_root", None))
@@ -496,7 +570,7 @@ def parse_options(argv=None):
     parser.add_argument("--game-length", type=str.lower, choices=LENGTHS,
                         help="short (4), medium (7), long (10 waves), then boss; default short; requires --host or --solo")
     parser.add_argument("--test-map", action="store_true",
-                        help="Host Remilly's Workshop test map with the normal VR game; requires --host")
+                        help="Remilly: --host, or explicit --solo --store steam using the verified existing cache only")
     parser.add_argument("--vr", action="store_true")
     parser.add_argument("--desktop", action="store_true",
                         help="Flat screen for this session; without either flag Host/Solo uses the saved play mode")
@@ -510,6 +584,10 @@ def parse_options(argv=None):
                         help="Experimental host grab permission for every VR player (saved, initially off); requires --host")
     parser.add_argument("--breacher", action=argparse.BooleanOptionalAction, default=None,
                         help="Optional Deadbolt/Cascade experiment; every player needs the same local compiled package (default OFF)")
+    parser.add_argument("--breacher-level", type=int, metavar="LEVEL",
+                        help="Development only, not saved: hold every player's Breacher perk at this level (1-25) so skills can be tested without progression; implies --breacher")
+    parser.add_argument("--breacher-skills", metavar="DIGITS",
+                        help="Development only, not saved: Breacher skill build for --breacher-level, five digits of 1 (left) or 2 (right), e.g. 12121")
     parser.add_argument("--portal-gun", action=argparse.BooleanOptionalAction, default=None,
                         help="Solo only: offer the experimental Portal Gun at the trader (saved, initially off)")
     parser.add_argument("--test-map-players", type=int, choices=(0, 6),
@@ -530,8 +608,25 @@ def parse_options(argv=None):
                         help="NVIDIA DLSS for the headset image (saved, initially off); requires --vr")
     parser.add_argument("--hide-bile-lens", action=argparse.BooleanOptionalAction, default=None,
                         help="VR: skip the Bloat bile screen splatter particles, a large GPU cost (saved, initially on)")
+    parser.add_argument("--hide-blood-lens", action=argparse.BooleanOptionalAction, default=None,
+                        help="VR: skip the on-screen blood splatter particles when hit; the red damage tint stays "
+                             "(saved, initially on)")
     parser.add_argument("--dlss-sharpness", type=int, default=None,
                         help="Sharpening after DLSS, 0 (off) to 100 (saved, initially 0)")
+    parser.add_argument("--hbao", action=argparse.BooleanOptionalAction, default=None,
+                        help="HBAO+ ambient occlusion (saved, initially on); VR")
+    parser.add_argument("--reflections", action=argparse.BooleanOptionalAction, default=None,
+                        help="Screen-space reflections (saved, initially on); VR")
+    parser.add_argument("--server-name", help="Host: name shown in the server browser (saved; initially "
+                        + DEFAULT_SERVER_NAME + ")")
+    parser.add_argument("--open-server", action=argparse.BooleanOptionalAction, default=None,
+                        help="Host without a server password: anyone who reaches the server can join "
+                             "(saved, initially off)")
+    parser.add_argument("--workshop-desktop", action=argparse.BooleanOptionalAction, default=None,
+                        help="Host: desktop players with plain KF2 download the mod from its Steam Workshop "
+                             "item when they join (saved, initially off); requires exactly matching published packages")
+    parser.add_argument("--single-pass", action=argparse.BooleanOptionalAction, default=None,
+                        help="Experimental: render both eyes in one scene submission (Steam; saved, initially on); VR")
     parser.add_argument("--threaded-render", action=argparse.BooleanOptionalAction, default=None,
                         help="Experimental: render on UE3's render thread instead of -onethread (saved, initially off). "
                              "The portal gun's see-through view works only with this off; requires --vr")
@@ -569,9 +664,11 @@ def parse_options(argv=None):
     except RuntimeError as error:
         parser.error(str(error))
     args.breacher_requested_off = args.breacher is False
+    if not args.host and (args.server_name is not None or args.open_server is not None or args.workshop_desktop is not None):
+        parser.error("--server-name, --open-server and --workshop-desktop require --host")
     if args.share_address and (not args.host or not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", args.share_address)):
         parser.error("--share-address requires --host and an IP address or hostname without a port or URL")
-    if args.solo and (args.host or args.address or args.test_map or args.replay_teammate or args.avatar_preview):
+    if args.solo and (args.host or args.address or args.replay_teammate or args.avatar_preview):
         parser.error("--solo cannot be combined with Host/Join or diagnostic sessions")
     args.mods_requested = args.mods is not None
     # Which selections the caller made, as opposed to which ones the profile
@@ -587,6 +684,18 @@ def parse_options(argv=None):
         parser.error("--multiplayer-grabs requires --host")
     if args.portal_gun is not None and not args.solo:
         parser.error("--portal-gun requires --solo; portals are local-only and hosted or joined games never offer the gun")
+    if args.breacher_level is not None and not 1 <= args.breacher_level <= 25:
+        parser.error("--breacher-level takes a perk level from 1 to 25")
+    if args.breacher_skills is not None and not re.fullmatch(r"[12]{5}", args.breacher_skills):
+        parser.error("--breacher-skills takes five digits of 1 or 2, one per skill tier, e.g. 12121")
+    if args.breacher_skills is not None and args.breacher_level is None:
+        parser.error("--breacher-skills requires --breacher-level")
+    if args.breacher_level is not None:
+        if args.breacher is False:
+            parser.error("--breacher-level needs Breacher; omit --no-breacher")
+        if not (args.solo or args.host):
+            parser.error("--breacher-level requires --solo or --host; the host's level applies to every player")
+        args.breacher = True
     if args.inventory_focus and not args.host:
         parser.error("--inventory-focus requires --host; the remote host controls shared slowdown")
     if args.test_map_players is not None and not args.host:
@@ -602,8 +711,10 @@ def parse_options(argv=None):
     if args.test_map and args.map and args.map != MAP_NAME:
         parser.error("Choose either --test-map or a different --map")
     args.test_map = args.test_map or args.map == MAP_NAME
-    if args.test_map and (not args.host or args.replay_teammate or args.avatar_preview):
-        parser.error("--test-map requires --host and cannot be combined with replay/preview modes")
+    if args.test_map and (not (args.host or args.solo) or args.replay_teammate or args.avatar_preview):
+        parser.error("--test-map requires --host or --solo and cannot be combined with replay/preview modes")
+    if args.solo and args.test_map and args.store != "steam":
+        parser.error("The cached Solo test map requires explicit --store steam.")
     args.vr_quality_requested = args.vr_quality
     # Checked against an explicit flat-screen request only: with neither flag
     # the play mode is still the profile's to decide.
@@ -615,6 +726,8 @@ def parse_options(argv=None):
         parser.error("--dlss requires --vr")
     if args.dlss_sharpness is not None and not 0 <= args.dlss_sharpness <= 100:
         parser.error("--dlss-sharpness must be from 0 to 100")
+    if args.desktop and any(getattr(args, key) is not None for key in ("single_pass", "hbao", "reflections", "hide_blood_lens")):
+        parser.error("Single-pass, HBAO, reflections and blood lens choices require VR play; omit --desktop")
     if args.threaded_render and not args.vr:
         parser.error("--threaded-render requires --vr")
     if (args.eye_render_percent is not None and not args.vr
@@ -653,6 +766,11 @@ def validate_play_mode(args):
         raise RuntimeError("VR graphics and headset render scale require VR play; choose --vr or remove the override.")
 
 
+def validate_dlss_package(args, manifest):
+    if args.vr and getattr(args, "dlss", "off") not in (None, "off") and not manifest.get("native_build", {}).get("dlss_enabled", False):
+        raise ValueError("This package has no DLSS runtime. Choose DLSS Off or use a DLSS-enabled package.")
+
+
 def preflight(manifest, game, vr):
     print("Build: " + manifest.get("build_id", ROOT.name), flush=True)
     print(f"KF2 installation: {game}; executable SHA-256: {manifest['game_sha256']}", flush=True)
@@ -684,12 +802,11 @@ def main():
     for name, expected in manifest["files_sha256"].items():
         if not (ROOT / name).resolve().is_relative_to(ROOT.resolve()) or digest(ROOT / name) != expected:
             raise RuntimeError(f"Package file changed or missing: {name}. Extract a fresh copy.")
-    if args.vr and args.dlss != "off" and not manifest.get("native_build", {}).get("dlss_enabled", False):
-        raise ValueError("This package has no DLSS runtime. Choose DLSS Off or use a DLSS-enabled package.")
     saved_path = ROOT / "settings.json"
     saved = json.loads(saved_path.read_text(encoding="utf-8")) if saved_path.exists() else {}
     install = game_install.select_for_launch(store=args.store, root=args.game_root, saved_root=saved.get("game_root"))
     game_install.validate_native(install, manifest.get("supported_game_sha256", [manifest["game_sha256"]]))
+    args.store = install.store
     game, exe = install.root, install.executable
     for notice in launch_notices(install.store):
         print(notice, flush=True)
@@ -712,14 +829,14 @@ def main():
         if not args.test_map and args.map not in maps:
             raise RuntimeError(f"Map {args.map} is not installed on both client and server. Use --menu to choose an available map.")
     validate_play_mode(args)
+    validate_dlss_package(args, manifest)
     preflight(manifest, game, args.vr)
     if args.solo:
         args.address, args.password = "127.0.0.1", "solo-unused"
         args.mods = []
     elif args.host:
         args.address = "127.0.0.1"
-        args.password = args.password or saved.get("host_password") or secrets.token_hex(4)
-        saved["host_password"] = args.password
+        resolve_host_identity(args, saved)
     else:
         args.address = args.address or input(f"Paste join code (or host address) [{saved.get('address', '')}]: ").strip() or saved.get("address", "")
         if args.address.startswith(join_code.PREFIX):
@@ -734,11 +851,12 @@ def main():
             args.test_map = args.map == MAP_NAME
             print("Join code accepted. Host connection and content settings applied.", flush=True)
         else:
-            args.password = args.password or input("Session password: ").strip()
+            if args.password is None:
+                args.password = input("Session password (Enter for none): ").strip()
     if not re.fullmatch(r"[a-zA-Z0-9.-]+", args.address or ""):
         raise RuntimeError("Enter the host IP address or hostname, without a port or URL.")
-    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", args.password or ""):
-        raise RuntimeError("Use a session password containing letters, numbers, underscore or hyphen.")
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{0,64}", args.password or ""):
+        raise RuntimeError("Use a session password containing letters, numbers, underscore or hyphen, or none.")
     breacher.prepare(args, ROOT, manifest)
     if args.breacher:
         print("Breacher ON: experimental Deadbolt/Cascade; all players require matching local content. No automatic download.", flush=True)
@@ -755,8 +873,12 @@ def main():
         raise RuntimeError("Start standard KF2 once, then close it and run this launcher again.")
     steam_root = args.server_root.parent / "steamcmd"
     if args.test_map:
-        args.test_map_path = ensure_map(args.cache_root, steam_root, download=not args.prepare_only)
+        args.test_map_path = (cached_solo_map(args.cache_root) if args.solo else
+                             ensure_map(args.cache_root, steam_root, download=not args.prepare_only))
     prepare_content(args, game, steam_root)
+    if args.host and args.workshop_desktop:
+        from workshop_loadout import verify_desktop_workshop
+        verify_desktop_workshop(args, game, steam_root, ROOT)
     run = ROOT / "sessions" / datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     names = ["server", "driver"] if args.host else ["driver"]
     if args.replay_teammate:
@@ -898,10 +1020,7 @@ def main():
                     raise RuntimeError("Dedicated server exited. See the server log in session details.")
                 try:
                     info = query_server(args.address, args.query_port)
-                    if info["secure"]:
-                        raise RuntimeError("Server reports VAC enabled. This prototype requires the KF2-VR VAC-off host.")
-                    if info["folder"] != "kf2" or not info["password"]:
-                        raise ValueError("Expected a password-protected KF2 server")
+                    validate_server_query(info, args.password)
                     if server and "OnServerDataUpdateResponse complete successfully" not in log_text(roles[0]):
                         raise ValueError("Server registration is still starting")
                     record["server_query"] = info
@@ -919,7 +1038,7 @@ def main():
             save()
             deployment.install()
         if args.host:
-            print(f"Host ready. Session password: {args.password}\nFriends use your LAN/VPN/public address. Game UDP {args.port}; query UDP {args.query_port}.", flush=True)
+            print(f"Host ready. Session password: {args.password or '(none: anyone can join)'}\nFriends use your LAN/VPN/public address. Game UDP {args.port}; query UDP {args.query_port}.", flush=True)
             address = args.share_address or join_code.public_address(log_text(roles[0]))
             if address:
                 code = join_code.encode(dict(address=address, password=args.password, port=args.port,
@@ -929,7 +1048,8 @@ def main():
                     "\n\nUnzip it, open Start KF2-VR, click Join a friend and paste the code. "
                     "Keep the KF2-VR window open while playing.\n\n"
                     f"Host: forward UDP {args.port} and UDP {args.query_port} to your PC for internet play. "
-                    "This code contains the session password; share it privately. "
+                    + ("This code contains the session password; share it privately. " if args.password else
+                       "This server has no password: anyone who reaches it can join. ") +
                     "Generating a code does not verify internet reachability.\n")
                 (ROOT / "JOIN-SERVER.txt").write_text(instructions, encoding="utf-8")
                 print(instructions + "Copy/share instructions from: " + str(ROOT / "JOIN-SERVER.txt"), flush=True)

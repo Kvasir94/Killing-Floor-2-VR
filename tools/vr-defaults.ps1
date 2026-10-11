@@ -24,10 +24,18 @@ function Repair-VRPreferenceValues([string]$Text) {
                 if (-not $defaults.Contains($key)) { continue }
                 $body = [regex]::Replace($body, '(?im)^' + $key + '\s*=\s*0(?:\.0*)?\s*$', ($key + '=' + $defaults[$key]))
             }
-            $body = $body.Replace('ChestGrenadeOffset=(X=12,Y=0,Z=0)', 'ChestGrenadeOffset=' + $defaults['ChestGrenadeOffset'])
-            $body = $body.Replace('ChestGrenadeOffset=(X=10,Y=-18,Z=-6)', 'ChestGrenadeOffset=' + $defaults['ChestGrenadeOffset'])
-            $body = $body.Replace('ChestGrenadeOffset=(X=10,Y=-18,Z=-29)', 'ChestGrenadeOffset=' + $defaults['ChestGrenadeOffset'])
-            $body = $body.Replace('ChestGrenadeOffset=(X=10,Y=-20,Z=-18)', 'ChestGrenadeOffset=' + $defaults['ChestGrenadeOffset'])
+            # Numeric equality cannot distinguish an old preset from a palm
+            # capture. Preserve every saved offset and mark unlabelled ones
+            # as legacy before the new centre-based defaults are seeded.
+            if ($section -eq 'KF2VR.VRHandsBridge' -and $body -match '(?im)^ChestGrenadeOffset\s*=') {
+                if ($body -notmatch '(?im)^bChestGrenadeCentered\s*=') {
+                    $body = $body.TrimEnd() + "`r`nbChestGrenadeCentered=False`r`n`r`n"
+                } else {
+                    $body = [regex]::Replace($body, '(?im)^bChestGrenadeCentered\s*=([^\r\n]*)', [Text.RegularExpressions.MatchEvaluator]{ param($mode)
+                        'bChestGrenadeCentered=' + $(if ($mode.Groups[1].Value.Trim() -ieq 'True') { 'True' } else { 'False' })
+                    })
+                }
+            }
             return $body
         })
     }

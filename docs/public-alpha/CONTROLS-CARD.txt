@@ -19,7 +19,9 @@ WEAPONS AND HANDS
   Point/move controller   Highlight a sector; squeeze AND RELEASE trigger to confirm.
                           Stick tilt does not select. Y/B or an unhighlighted-centre
                           trigger click cancels. Centre the stick after closing.
-  Grip at support contact Hold two-hand support by default; release/move away to detach.
+  Grip at support contact Hold two-hand support by default; release grip to detach.
+                          Acquired firearm support stays held across distance drift;
+                          valid tracking is required.
                           Primary weapons stay equipped when fingers relax.
   Support-only carry      After old primary is stowed, move to primary grip and pull
                           trigger to claim it; release then pull again to fire.
@@ -64,6 +66,11 @@ MOVE AND MENU (DEFAULT MOVEMENT HAND LEFT)
 SETTINGS AND SPECIAL ITEMS
   VR SETTINGS > INTERACTION > RELOAD MODE: BUTTON / PHYSICAL / PHYSICAL + PUMP.
   Button is default. Unsupported weapons keep stock reloads; hints default ON.
+  Hip reloads (Physical): with the other hand occupied, press the gun hand's
+  reload button and bring the compatible gun to its hip loader. Each hand can
+  reload independently; paired guns share reserve. New waist-triggered mode is planned.
+  Fresh graphics: Performance / 100%; Steam single-pass, HBAO+ and reflections ON.
+  Epic single-pass OFF. Authored grenade grips ON. Saved preferences win.
   BODY HOLSTERS default OFF: fresh grip at compatible shoulder/hip slot stows;
   empty-hand grip draws. Set HOLSTER FIT; syringe/welder are excluded.
   LOCOMOTION AND COMFORT changes movement hand/direction, turn and crouch.

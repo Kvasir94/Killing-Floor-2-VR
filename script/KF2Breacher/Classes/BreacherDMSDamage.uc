@@ -1,0 +1,1 @@
+class BreacherDMSDamage extends BreacherStoredExplosion abstract hidedropdown;

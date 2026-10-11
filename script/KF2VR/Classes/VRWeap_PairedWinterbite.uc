@@ -68,16 +68,36 @@ function int AddAmmo(int Amount)
     return Pair != None ? Pair.AddReserve(self, Amount) : 0;
 }
 
+// Managed reloads use the owner-channel token, never an untagged late RPC.
+reliable server function ServerSendToReload(byte ClientReloadAmount)
+{
+    if (Pair == None || !Pair.AllowsReloadStart(self)) return;
+    Super.ServerSendToReload(ClientReloadAmount);
+}
+
+reliable server function ServerStartFire(byte FireModeNum)
+{
+    if (Pair != None && Pair.BlocksPhysicalFire(self, FireModeNum)) return;
+    Super.ServerStartFire(FireModeNum);
+}
+
+simulated function SendToFiringState(byte FireModeNum)
+{
+    if (Pair != None && Pair.BlocksPhysicalFire(self, FireModeNum)) return;
+    Super.SendToFiringState(FireModeNum);
+}
+
 simulated function InitializeReload()
 {
-    if (Pair == None || !Pair.BorrowAmmo(self)) return;
+    if (Pair == None || !Pair.AllowsReloadStart(self) || !Pair.BorrowAmmo(self)) return;
     Super.InitializeReload();
     Pair.ReturnAmmo(self);
 }
 
 simulated function PerformReload(optional byte FireModeNum)
 {
-    if (GetAmmoType(FireModeNum) != 0 || Pair == None || !Pair.BorrowAmmo(self)) return;
+    if (GetAmmoType(FireModeNum) != 0 || Pair == None
+        || !Pair.AllowsReloadPayment(self) || !Pair.BorrowAmmo(self)) return;
     // A second reload may already have spent the reserve since InitializeReload.
     ReloadAmountLeft = Min(ReloadAmountLeft, Max(0, MagazineCapacity[0] - AmmoCount[0]));
     Super.PerformReload(FireModeNum);

@@ -26,6 +26,18 @@ var bool bBoxSeated, bBeltSeated, bBeltEngaged, bBeltGripWasDown;
 var float BeltAmount;
 var vector BeltGrabOffset;
 var int BeltPartStart;
+var bool bRequestGrip, bOpeningByGrip;
+var quat GrabHandQ, LastHandQ;
+var float TapRadius, InspectSeconds;
+var VRReloadMotionGuard TouchMotion;
+var bool bTapBlocked;
+
+function Initialize(VRInteractiveReload O)
+{
+    super.Initialize(O);
+    TouchMotion = new(self) class'VRReloadMotionGuard';
+    TouchMotion.SpeedLimit = 1500;
+}
 
 static function bool Supported(KFWeapon W)
 {
@@ -61,7 +73,11 @@ function float HingeAngle(quat Delta)
 
 function bool Enabled() { return Owner != None && Owner.Enabled(); }
 function bool BlocksFire(KFWeapon W) { return Enabled() && Gun == W && !bClosed; }
-function bool ReadyForShell() { return bOpened && !bClosed && !bEngaged && !bBoxSeated && SeatedShells < RequiredShells; }
+function bool ReadyForShell()
+{
+    return bOpened && !bClosed && !bEngaged && !bBoxSeated && SeatedShells < RequiredShells
+        && (Gun.Class != class'KFWeap_GrenadeLauncher_HX25' || bEjected || AmmoAtBind > 0);
+}
 function bool OwnsHand(int Hand)
 {
     return Enabled() && Owner.InputOwner.ContextValid() && Gun != None && (bEngaged || bBeltEngaged) && Hand == OffHand();
@@ -73,7 +89,7 @@ function Update()
 {
     local VRWeaponRuntime R;
     local int H;
-    local bool Down;
+    local bool Down, Grip, Edge;
     local vector ContactPosition, ContactLocal;
     local SkeletalMeshComponent Ref;
     if (!Enabled() || !Owner.InputOwner.ContextValid())
@@ -85,6 +101,18 @@ function Update()
     {
         bQueuedOpening = false; bQueuedReload = false; QueuedGun = None;
         if (!Owner.bActive || !Owner.StillValid()) { Unbind(); return; }
+        // A loaded-gun inspection has no insertion to wait for. Let the gun
+        // hand finish it, or close after the donor's short inspection window.
+        if (Owner.bBreakInspection && bOpened && !bClosed
+            && Owner.HandMode == 0 && (Owner.TriggerDown(GunHand)
+                || Owner.Now() - EjectStarted > InspectSeconds))
+        {
+            Amount = 0; bClosed = true; bEngaged = false; bFlickClosing = false; Motion.Reset();
+            PlaceVisuals();
+            Owner.Pulse(3, 0.5, 0.03);
+            Owner.Audio.EmitCue(5, bPath ? Contact() : Hinge());
+            return;
+        }
         UpdateHand();
         return;
     }
@@ -118,22 +146,42 @@ function Update()
                     Owner.TryBreakAction(R, H);
                 }
                 bRequestTrigger = Owner.TriggerDown(1-H);
+                bRequestGrip = Owner.GripDown(1-H);
                 return;
             }
         }
+        Grip = Owner.GripDown(1-H);
         Down = Owner.TriggerDown(1-H);
+        Edge = (Down && !bRequestTrigger) || (SingleShotLauncher(R.Item) && Grip && !bRequestGrip);
         Ref = R.Presenter.GripPoseMesh;
-        if (!Down || QueuedGun != R.Item) { bQueuedOpening = false; QueuedGun = None; }
-        if (Down && (!bRequestTrigger || bQueuedOpening) && !R.Item.IsInState('Reloading')
-            && Ref != None && Owner.InputOwner.Inventory.Registry.GetPrimary(1-H) == None
-            && !Owner.InputOwner.Inventory.HasWorldGrab(1-H) && !Owner.InputOwner.IsSelectorOpen(1-H))
+        if ((!Down && !Grip) || QueuedGun != R.Item) { bQueuedOpening = false; QueuedGun = None; }
+        if ((Edge || bQueuedOpening) && !R.Item.IsInState('Reloading')
+            && (Ref != None || (R.Item.Class == class'KFWeap_GrenadeLauncher_HX25'
+                && R.Item.MySkelMesh.MatchRefBone('RW_Barrel') >= 0))
+            && Owner.InputOwner.Inventory.Registry.GetPrimary(1-H) == None
+            && !Owner.InputOwner.Inventory.HasWorldGrab(1-H) && !Owner.InputOwner.IsSelectorOpen(1-H)
+            && (R.Item.Class != class'KFWeap_GrenadeLauncher_HX25'
+                || (!Owner.InputOwner.HandCarrying(1-H)
+                    && !Owner.InputOwner.Inventory.HasGauntletHand(1-H)
+                    && !Owner.InputOwner.Inventory.IsTransferPending(1-H)
+                    && (Owner.InputOwner.Deployables == None || !Owner.InputOwner.Deployables.IsHeld(1-H))
+                    && (Owner.InputOwner.Inventory.Registry.GetSupport(1-H) == None
+                        || Owner.InputOwner.Inventory.Registry.GetSupport(1-H) == R))))
         {
-            ContactLocal = QuatRotateVector(QuatInvert(Ref.GetBoneQuaternion('RW_Weapon')),
-                Ref.GetBoneLocation(Bridge.HandBone(0)) - Ref.GetBoneLocation('RW_Weapon'));
-            if (1-H == 1) ContactLocal.Y = -ContactLocal.Y;
-            ContactPosition = R.Item.MySkelMesh.GetBoneLocation('RW_Weapon')
-                + QuatRotateVector(R.Item.MySkelMesh.GetBoneQuaternion('RW_Weapon'), ContactLocal * Owner.ScaleOf(R.Item));
-            if (VSize(ContactPosition - Bridge.Hands[1-H].Position) <= Radius)
+            // HX25's highlighted front contact is on the live barrel. Its
+            // palm route must not depend on the separate cached idle hand pose.
+            if (Ref != None)
+            {
+                ContactLocal = QuatRotateVector(QuatInvert(Ref.GetBoneQuaternion('RW_Weapon')),
+                    Ref.GetBoneLocation(Bridge.HandBone(0)) - Ref.GetBoneLocation('RW_Weapon'));
+                if (1-H == 1) ContactLocal.Y = -ContactLocal.Y;
+                ContactPosition = R.Item.MySkelMesh.GetBoneLocation('RW_Weapon')
+                    + QuatRotateVector(R.Item.MySkelMesh.GetBoneQuaternion('RW_Weapon'), ContactLocal * Owner.ScaleOf(R.Item));
+            }
+            if ((Ref != None && VSize(ContactPosition - Bridge.Hands[1-H].Position) <= Radius)
+                || (SingleShotLauncher(R.Item) && VSize(Bridge.PalmPosition(1-H)
+                    - (R.Item.MySkelMesh.GetBoneLocation('RW_Barrel')
+                        + QuatRotateVector(R.Item.MySkelMesh.GetBoneQuaternion('RW_Barrel'), vect(4,0,0) * Owner.ScaleOf(R.Item)))) <= Radius))
             {
                 // A squeeze during the shot recovery must survive until stock
                 // returns to Active. Keep it only while held at this contact.
@@ -145,9 +193,10 @@ function Update()
         }
         else { bQueuedOpening = false; QueuedGun = None; }
         bRequestTrigger = Down;
+        bRequestGrip = Grip;
         return;
     }
-    bRequestTrigger = true; bQueuedOpening = false; bQueuedReload = false; QueuedGun = None;
+    bRequestTrigger = true; bRequestGrip = true; bQueuedOpening = false; bQueuedReload = false; QueuedGun = None;
 }
 
 function bool BeginSession(VRWeaponRuntime R, int Hand)
@@ -158,6 +207,8 @@ function bool BeginSession(VRWeaponRuntime R, int Hand)
     local float T, Angle;
     local int I;
     Gun = R.Item; Runtime = R; GunHand = Hand; RootBone = Owner.RootBone;
+    bTapBlocked = false;
+    TouchMotion.Begin(LocalHandPosition(), Owner.Now());
     Profile = class'VRBreakCatalog'.static.FindClass(Gun.Class);
     if (Profile < 0) { Gun = None; return false; }
     Capacity = class'VRBreakCatalog'.default.Profiles[Profile].Capacity;
@@ -187,8 +238,9 @@ function bool BeginSession(VRWeaponRuntime R, int Hand)
     }
     Amount = 0; bOpened = false; bClosed = false; bCloseReady = false;
     bFlickClosing = false;
+    bOpeningByGrip = false;
     bEngaged = false; SeatedShells = 0;
-    RequiredShells = Min(Capacity - Gun.AmmoCount[0], Gun.SpareAmmoCount[0]);
+    RequiredShells = Min(Capacity - Gun.AmmoCount[0], Gun.GetSpareAmmoForHUD());
     if (Owner.bBreakInspection) RequiredShells = 0;
     bManualOpening = bRequestOpening; bRequestOpening = false;
     if (!Owner.bInsertSampled || !Owner.EnsureRefMesh()) { Gun = None; return false; }
@@ -230,6 +282,13 @@ function bool BeginSession(VRWeaponRuntime R, int Hand)
     if (Tree == None || Tree == Gun.MySkelMesh.AnimTreeTemplate || Abs(OpenAngle) < 0.2
         || Parts.Length != (bClip ? 2 : Capacity + 1))
     { Tree = None; Parts.Length = 0; Gun = None; return false; }
+    if (Gun.Class == class'KFWeap_GrenadeLauncher_HX25' && Gun.MySkelMesh.MatchRefBone('RW_Empty_Shell') >= 0)
+    {
+        Bridge.AttachComponent(Owner.RefMesh);
+        Owner.PoseRef(Seq, 0);
+        AddPart(Owner.RefMesh, 'RW_Empty_Shell', false);
+        Bridge.DetachComponent(Owner.RefMesh);
+    }
     if (bCylinder) AddCylinderParts(Owner.RefMesh);
     bSavedPooling = Tree.bEnablePooling; Tree.bEnablePooling = false;
     for (I = 0; I < Parts.Length; ++I) Parts[I].Control = AppendControl(Parts[I].Bone);
@@ -237,12 +296,15 @@ function bool BeginSession(VRWeaponRuntime R, int Hand)
     LastTime = 0; FlickTravel = 0;
     Motion.Reset();
     bTriggerWasDown = false;
-    if (bManualOpening && Owner.TriggerDown(OffHand()))
+    if (bManualOpening && (Owner.TriggerDown(OffHand()) || Owner.GripDown(OffHand())))
     {
         bEngaged = true; GrabAmount = Amount; GrabAngle = HandAngle();
+        GrabHandQ = LocalHandQ(); LastHandQ = GrabHandQ;
+        bOpeningByGrip = SingleShotLauncher(Gun) && Owner.GripDown(OffHand());
         Motion.Begin(LocalHandPosition(), Owner.Now());
         Owner.InputOwner.Inventory.ReleaseHand(OffHand());
         bTriggerWasDown = true;
+        bGripWasDown = true;
     }
     `log("KF2VR_BREAK_ACTION phase=begin manual=" $ bManualOpening @ "shells=" $ RequiredShells @ "angle=" $ OpenAngle @ "grip_time=" $ GripTime);
     return true;
@@ -409,27 +471,89 @@ function float HandAngle()
     return Atan2(P dot HingeV, P dot HingeU);
 }
 
-function UpdateHand()
+function quat LocalHandQ()
 {
-    local float Time, DT, A, Rate;
-    local bool Down, CanClose;
-    Time = Owner.Now(); DT = Time - LastTime;
-    if ((Bridge.NativeValidMask & 3) != 3 || !Owner.HandFree(OffHand(), true))
-    { CancelHand(OffHand()); LastTime = 0; return; }
-    if (bEngaged && !Motion.Check(LocalHandPosition(), Time))
-    { CancelHand(OffHand()); return; }
-    if (BeltPath != None && bBoxSeated && !bBeltSeated)
-    { UpdateBelt(); LastTime = 0; return; }
-    CanClose = bOpened && (Owner.bAwaitAmmo || Owner.bBreakInspection)
+    return QuatProduct(QuatInvert(QuatProduct(RootQ(), ClosedQ)),
+        QuatFromRotator(Owner.OffHandRotation()));
+}
+
+// HX25 is driven by controller twist, so position continuity alone cannot
+// reject an orientation jump. Use the existing flick's angular bounds, while
+// the shared motion guard still owns positional jumps and long frame gaps.
+function bool TwistContinuous(float Time)
+{
+    local quat Q, Delta;
+    local vector V;
+    local float Angle, DT;
+    Q = LocalHandQ();
+    if (!class'VRReloadHandPose'.static.ValidQ(Q)
+        || !class'VRReloadHandPose'.static.ValidQ(LastHandQ)) return false;
+    Delta = QuatProduct(Q, QuatInvert(LastHandQ));
+    V.X = Delta.X; V.Y = Delta.Y; V.Z = Delta.Z;
+    Angle = 2 * Atan2(VSize(V), Abs(Delta.W));
+    DT = Time - Motion.LastTime;
+    // Duplicate evaluations may differ by quaternion roundoff. Do not move
+    // the reference on a same-time sample or accept actual tracked rotation.
+    if (DT == 0) return Angle <= 0.0001;
+    if (!(DT >= 0 && DT <= Motion.MaxGap && Angle <= 0.35 && Angle <= 12 * DT)) return false;
+    LastHandQ = Q;
+    return true;
+}
+
+function bool CloseReady()
+{
+    return bOpened && (Owner.bAwaitAmmo || Owner.bBreakInspection
+            || (SingleShotLauncher(Gun) && SeatedShells >= RequiredShells))
         && (SeatedShells >= RequiredShells
             || (!bClip && !Gun.bInfiniteSpareAmmo && Gun.bReloadFromMagazine
                 && (AmmoAtBind > 0 || SeatedShells > 0)));
+}
+
+function bool CloseButton()
+{
+    if (!SingleShotLauncher(Gun)) return false;
+    if (CloseReady() && !bClosed && Owner.HandMode != 1 && Owner.HandMode != 4)
+    {
+        bEngaged = false; Motion.Reset(); bFlickClosing = true;
+    }
+    return true;
+}
+
+function UpdateHand()
+{
+    local float Time, DT, A, Rate;
+    local bool Down, Grip, Edge, CanClose, bTouchContinuous;
+    local vector Bore;
+    Time = Owner.Now(); DT = Time - LastTime;
+    if ((Bridge.NativeValidMask & 3) != 3 || !Owner.HandFree(OffHand(), true))
+    { CancelHand(OffHand()); LastTime = 0; return; }
+    if (bEngaged && ((Gun.Class == class'KFWeap_GrenadeLauncher_HX25' && !TwistContinuous(Time))
+        || !Motion.Check(LocalHandPosition(), Time)))
+    { CancelHand(OffHand()); return; }
+    if (BeltPath != None && bBoxSeated && !bBeltSeated)
+    { UpdateBelt(); LastTime = 0; return; }
+    CanClose = CloseReady();
+    if (bCylinder)
+    {
+        bTouchContinuous = TouchMotion.Check(LocalHandPosition(), Time);
+        if (!bTouchContinuous)
+        { bTapBlocked = true; TouchMotion.Begin(LocalHandPosition(), Time); }
+        else if (VSize(Bridge.Hands[OffHand()].Position - Contact()) > TapRadius
+            && VSize(Bridge.Hands[OffHand()].Position - Gun.MySkelMesh.GetBoneLocation('RW_Cylinder')) > TapRadius)
+            bTapBlocked = false;
+    }
     if (CanClose != bCloseReady) { bCloseReady = CanClose; LastTime = 0; FlickTravel = 0; }
     Down = Owner.TriggerDown(OffHand());
-    if (!bEngaged && !bFlickClosing && Down && !bTriggerWasDown && Owner.HandMode == 0
-        && VSize(Bridge.Hands[OffHand()].Position - Contact()) <= Radius && !bClosed)
+    Grip = Owner.GripDown(OffHand());
+    Edge = (Down && !bTriggerWasDown) || (SingleShotLauncher(Gun) && Grip && !bGripWasDown);
+    if (!bEngaged && !bFlickClosing && Edge && Owner.HandMode == 0
+        && (VSize(Bridge.Hands[OffHand()].Position - Contact()) <= Radius
+            || (SingleShotLauncher(Gun) && VSize(Bridge.PalmPosition(OffHand())
+                - (Hinge() + QuatRotateVector(BarrelQ(), vect(4,0,0) * GunScale()))) <= Radius)) && !bClosed)
     {
         bEngaged = true; GrabAmount = Amount; GrabAngle = HandAngle();
+        GrabHandQ = LocalHandQ(); LastHandQ = GrabHandQ;
+        bOpeningByGrip = SingleShotLauncher(Gun) && Grip;
         if (bPath) ActionPath.GrabOffset = LocalHandPosition() / GunScale() - ActionPath.ContactLocal(Amount);
         Motion.Begin(LocalHandPosition(), Time);
         Owner.InputOwner.Inventory.ReleaseHand(OffHand());
@@ -437,9 +561,10 @@ function UpdateHand()
         Owner.Pulse(1 << OffHand(), 0.25, 0.02);
     }
     bTriggerWasDown = Down;
+    bGripWasDown = Grip;
     if (bEngaged)
     {
-        if (!Down) { bEngaged = false; Motion.Reset(); }
+        if (bOpeningByGrip ? !Grip : !Down) { bEngaged = false; Motion.Reset(); }
         else
         {
             if (bPath)
@@ -448,7 +573,9 @@ function UpdateHand()
             }
             else
             {
-                A = HandAngle() - GrabAngle;
+                if (Gun.Class == class'KFWeap_GrenadeLauncher_HX25')
+                    A = HingeAngle(QuatProduct(LocalHandQ(), QuatInvert(GrabHandQ)));
+                else A = HandAngle() - GrabAngle;
                 if (A > Pi) A -= 2*Pi;
                 if (A < -Pi) A += 2*Pi;
                 if (!bOpened || CanClose) Amount = FClamp(GrabAmount + A / OpenAngle, 0, 1);
@@ -474,6 +601,16 @@ function UpdateHand()
         ShowCylinderRounds(false);
         bEjected = true;
     }
+    // The HX25's open spent case slides toward the breech only when tilted
+    // backward. No stock ammo is touched; insertion waits for this ejection.
+    Bore = Owner.GunForward();
+    if (Gun.Class == class'KFWeap_GrenadeLauncher_HX25' && bOpened && !bEjected
+        && AmmoAtBind == 0 && Bore.Z > 0.45)
+    {
+        Owner.Audio.OpenEffects();
+        bEjected = true;
+        Owner.Pulse(1 << GunHand, 0.25, 0.02);
+    }
     // Loaded, hands free: a deliberate pitch snap flicks the barrels shut.
     // Either direction counts: muzzle up (the Pavlov/H3VR flick) or the
     // receiver swung down onto the barrels. Travel accumulates in one
@@ -481,11 +618,21 @@ function UpdateHand()
     if (CanClose && !bClosed && !bFlickClosing && !bEngaged && Owner.HandMode != 1 && LastTime > 0 && DT > 0 && DT < 0.1)
     {
         A = HingeAngle(QuatProduct(QuatInvert(LastQ), RootQ()));
+        // A forward/back pitch flip closes the HX25's rotating breech too.
+        if (Gun.Class == class'KFWeap_GrenadeLauncher_HX25')
+            A = PitchAngle(QuatProduct(QuatInvert(LastQ), RootQ()));
         Rate = Abs(A) / DT;
         if (Rate > 0.5 && Rate < 12 && Abs(A) < 0.35) FlickTravel = (A * FlickTravel >= 0) ? FlickTravel + A : A;
         else FlickTravel = 0;
         if (Rate > 2.5 && Abs(FlickTravel) > 0.22) bFlickClosing = true;
     }
+    // A loaded cylinder can also be pushed shut against the free hand. The
+    // ammunition and its hand ownership must already have been released.
+    if (bCylinder && bTouchContinuous && !bTapBlocked && CanClose && !bClosed
+        && !bFlickClosing && !bEngaged && Owner.HandMode == 0
+        && (VSize(Bridge.Hands[OffHand()].Position - Contact()) <= TapRadius
+            || VSize(Bridge.Hands[OffHand()].Position - Gun.MySkelMesh.GetBoneLocation('RW_Cylinder')) <= TapRadius))
+    { bFlickClosing = true; Owner.Pulse(1 << OffHand(), 0.25, 0.02); }
     if (bFlickClosing && DT > 0 && DT < 0.1) Amount = FMax(0, Amount - DT / 0.1);
     if (CanClose && !bClosed && Amount <= 0.05)
     {
@@ -497,6 +644,12 @@ function UpdateHand()
         `log("KF2VR_BREAK_ACTION phase=closed shells=" $ SeatedShells);
     }
     LastQ = RootQ(); LastTime = Time;
+}
+
+function float PitchAngle(quat Delta)
+{
+    if (Delta.W < 0) { Delta.Y = -Delta.Y; Delta.W = -Delta.W; }
+    return 2 * Atan2(Delta.Y, Delta.W);
 }
 
 // A fresh offhand squeeze acquires the authored wrist contact. Release at
@@ -625,6 +778,11 @@ function PlaceVisuals()
         if (I < SeatedShells || I >= Capacity - Owner.AmmoAtStart) Gun.MySkelMesh.UnHideBoneByName(ShellBone(I));
         else Gun.MySkelMesh.HideBoneByName(ShellBone(I), PBO_None);
     }
+    if (Gun.Class == class'KFWeap_GrenadeLauncher_HX25' && Gun.MySkelMesh.MatchRefBone('RW_Empty_Shell') >= 0)
+    {
+        if (bOpened && !bEjected && AmmoAtBind == 0) Gun.MySkelMesh.UnHideBoneByName('RW_Empty_Shell');
+        else Gun.MySkelMesh.HideBoneByName('RW_Empty_Shell', PBO_None);
+    }
     Gun.MySkelMesh.ForceSkelUpdate(); Gun.MySkelMesh.ForceUpdate(true);
 }
 
@@ -632,10 +790,12 @@ function CancelHand(int Hand)
 {
     // Input context cancellation returns before Update can discard recovery intent.
     bQueuedOpening = false; bQueuedReload = false; QueuedGun = None; bRequestTrigger = true;
+    bTapBlocked = true; TouchMotion.Reset();
     Motion.Reset();
     bBeltEngaged = false; bBeltGripWasDown = true;
     if (!bBeltSeated) BeltAmount = 0;
-    bEngaged = false; bTriggerWasDown = true; LastTime = 0; FlickTravel = 0; bFlickClosing = false;
+    bEngaged = false; bTriggerWasDown = true; bGripWasDown = true; bRequestGrip = true;
+    LastTime = 0; FlickTravel = 0; bFlickClosing = false;
 }
 function Unbind()
 {
@@ -658,4 +818,6 @@ function Unbind()
 defaultproperties
 {
     Radius=12
+    TapRadius=16
+    InspectSeconds=1.5
 }

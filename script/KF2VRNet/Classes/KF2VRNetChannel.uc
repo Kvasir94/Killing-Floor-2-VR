@@ -1,5 +1,5 @@
 // Only this server-created, controller-owned actor accepts pose/held RPCs.
-class KF2VRNetChannel extends Actor dependsOn(KF2VRNetTypes, KF2VRNetHeldInventory)
+class KF2VRNetChannel extends Actor dependsOn(KF2VRNetTypes, KF2VRNetHeldInventory, KF2VRNetVampireReload, KF2VRNetPairedReload)
     implements(VRTrackedPawnSource);
 
 var int WorldEpoch;
@@ -90,6 +90,285 @@ var GrenadeAuthorityState GrenadeState;
 var private KFPawn_Human LocalGrenadePawn;
 var private int LocalGrenadeRequest, GrenadeRateCount;
 var private float GrenadeRateStart;
+
+// One authority object survives terminal reloads during this pawn lifetime:
+// its native fence also rejects late stock weapon-channel reload requests.
+var KF2VRNetPairedReload PairedReloads[2];
+var KF2VRNetPairedReload.ReloadState PairedStates[2];
+var private int LocalPairedReloadRequest;
+
+var KF2VRNetVampireReload VampireReload;
+var KF2VRNetVampireReload.ReloadState VampireState;
+var private KFPawn_Human LocalVampirePawn;
+var private KFPawn_Human LocalVampireManagedPawn;
+var private int LocalVampireManagedWorld, LocalVampireManagedConnection, LocalVampireManagedEpoch;
+var private int LocalVampireRequest;
+
+function bool PairedReloadContext(int Hand)
+{
+    return Hand >= 0 && Hand < 2 && HeldCommandsAvailable() && HeldState.bIndependentWeapons
+        && IsInventoryFocusEligible() && !bInventoryFocusRequested
+        && class'VRPhysicalInteraction'.static.Allowed(BoundPawn)
+        && (PublicPose.Snapshot.Sample.TrackingFlags & (2 << Hand)) != 0;
+}
+
+function UpdatePairedReloads()
+{
+    local int H;
+    for (H = 0; H < 2; ++H)
+    {
+        if (PairedReloads[H] == None)
+        {
+            PairedReloads[H] = new(self) class'KF2VRNetPairedReload';
+            PairedReloads[H].Initialize(self, HeldInventory, H);
+        }
+        PairedReloads[H].Tick();
+        PairedStates[H] = PairedReloads[H].Snapshot;
+    }
+}
+
+function ShutdownPairedReloads()
+{
+    local int H;
+    for (H = 0; H < 2; ++H)
+    {
+        if (PairedReloads[H] != None) PairedReloads[H].Cancel(PairedReloads[H].Snapshot.SessionId);
+        PairedReloads[H] = None;
+        PairedStates[H].Human = None;
+        PairedStates[H].Weapon = None;
+        PairedStates[H].LastBeginWeapon = None;
+        PairedStates[H].BeginRequest = 0;
+        PairedStates[H].LastBeginRequest = 0;
+        PairedStates[H].Status = 0;
+    }
+}
+
+simulated function bool PairedReloadAvailable()
+{
+    return CanRequestHeldWeapons() && HeldState.bIndependentWeapons && bVRTrackingEnabled
+        && PairedStates[0].Human == HeldState.Human && HeldState.Human != None
+        && PairedStates[0].WorldEpoch == WorldEpoch && PairedStates[0].ConnectionEpoch == ConnectionEpoch
+        && PairedStates[0].PawnEpoch == PawnEpoch;
+}
+
+simulated function int PairedReloadBegin(KFWeapon W, int Hand, optional bool bStock)
+{
+    if (!PairedReloadAvailable() || Hand < 0 || Hand > 1 || W == None
+        || class'VRWeaponPair'.static.ForMember(W) == None
+        || (Hand == 0 ? HeldState.LeftWeapon : HeldState.RightWeapon) != W
+        || LocalPairedReloadRequest >= MaxInt - 1) return 0;
+    ++LocalPairedReloadRequest;
+    ServerPairedReloadBegin(WorldEpoch, ConnectionEpoch, PawnEpoch, LocalPairedReloadRequest, W, Hand, HeldState.Revision, W.AmmoCount[0], bStock);
+    return LocalPairedReloadRequest;
+}
+
+simulated function bool PairedReloadRead(KFWeapon W, int BeginRequest, out int Session,
+    out byte Status, out int Ammo, out int Reserve)
+{
+    local int H;
+    Session = 0; Status = 0; Ammo = 0; Reserve = 0;
+    if (BeginRequest <= 0 || W == None) return false;
+    for (H = 0; H < 2; ++H)
+    {
+        if (PairedStates[H].PawnEpoch != PawnEpoch || PairedStates[H].WorldEpoch != WorldEpoch
+            || PairedStates[H].ConnectionEpoch != ConnectionEpoch) continue;
+        if (PairedStates[H].LastBeginRequest == BeginRequest && PairedStates[H].LastBeginWeapon == W
+            && !PairedStates[H].bBeginAccepted)
+        { Session = BeginRequest; Status = 3; return true; }
+        if (PairedStates[H].Weapon != W || PairedStates[H].BeginRequest != BeginRequest) continue;
+        Session = PairedStates[H].SessionId; Status = byte(PairedStates[H].Status);
+        Ammo = PairedStates[H].PrimaryAmmo; Reserve = PairedStates[H].PrimaryReserve;
+        return true;
+    }
+    return false;
+}
+
+simulated function bool PairedReloadCommit(KFWeapon W, int BeginRequest, int Session)
+{
+    local int H;
+    if (!PairedReloadAvailable() || Session <= 0 || Session != BeginRequest) return false;
+    for (H = 0; H < 2; ++H)
+        if (PairedStates[H].Weapon == W && PairedStates[H].SessionId == Session && PairedStates[H].Status == 1)
+        {
+            ServerPairedReloadFinish(WorldEpoch, ConnectionEpoch, PawnEpoch, W, H, Session, true);
+            return true;
+        }
+    return false;
+}
+
+simulated function PairedReloadCancel(KFWeapon W, int BeginRequest, int Session)
+{
+    if (W != None && BeginRequest > 0 && (Session == 0 || Session == BeginRequest))
+        ServerPairedReloadFinish(WorldEpoch, ConnectionEpoch, PawnEpoch, W, -1, BeginRequest, false);
+}
+
+reliable server function ServerPairedReloadBegin(int WE, int CE, int PE, int Request,
+    KFWeapon W, int Hand, int ExpectedHeldRevision, int ExpectedAmmo, bool bStock)
+{
+    if (WE != WorldEpoch || CE != ConnectionEpoch || PE != PawnEpoch || Hand < 0 || Hand > 1
+        || PairedReloads[Hand] == None) return;
+    PairedReloads[Hand].Tick();
+    PairedReloads[Hand].Begin(Request, W, ExpectedHeldRevision, ExpectedAmmo, bStock);
+    PairedStates[Hand] = PairedReloads[Hand].Snapshot;
+    bForceNetUpdate = true;
+}
+
+reliable server function ServerPairedReloadFinish(int WE, int CE, int PE,
+    KFWeapon W, int Hand, int Session, bool bCommit)
+{
+    local int H;
+    if (WE != WorldEpoch || CE != ConnectionEpoch || PE != PawnEpoch || Session <= 0) return;
+    for (H = 0; H < 2; ++H)
+        if (PairedReloads[H] != None && PairedReloads[H].Snapshot.Weapon == W
+            && PairedReloads[H].Snapshot.SessionId == Session && (!bCommit || Hand == H))
+        {
+            if (bCommit) PairedReloads[H].Commit(Session, W);
+            else PairedReloads[H].Cancel(Session);
+            PairedStates[H] = PairedReloads[H].Snapshot;
+            bForceNetUpdate = true;
+        }
+}
+
+function bool VampireContextAllowed()
+{
+    return HeldCommandsAvailable() && HeldState.bIndependentWeapons
+        && bVRTrackingEnabled && !bInventoryFocusRequested;
+}
+
+function PublishVampireState()
+{
+    if (VampireReload == None) return;
+    VampireState = VampireReload.Snapshot;
+    bForceNetUpdate = true;
+}
+
+simulated function bool VampireAvailable()
+{
+    return CanRequestHeldWeapons() && HeldState.bIndependentWeapons && bVRTrackingEnabled
+        && VampireState.Human == HeldState.Human && VampireState.NativeVersion == 1
+        && VampireState.WorldEpoch == WorldEpoch && VampireState.ConnectionEpoch == ConnectionEpoch
+        && VampireState.PawnEpoch == PawnEpoch;
+}
+
+simulated function bool VampireManaged()
+{
+    local KF2VRNetPlayerController PC;
+    PC = KF2VRNetPlayerController(Owner);
+    // Remember a capability-gated begin even while its acknowledgement is
+    // pending. A request on the weapon actor cannot safely replace it.
+    return PC != None && LocalVampireManagedPawn != None
+        && LocalVampireManagedPawn == PC.Pawn
+        && LocalVampireManagedWorld == WorldEpoch
+        && LocalVampireManagedConnection == ConnectionEpoch
+        && LocalVampireManagedEpoch == PawnEpoch;
+}
+
+simulated function int NextVampireRequest()
+{
+    if (!VampireAvailable()) return 0;
+    if (LocalVampirePawn != HeldState.Human)
+    {
+        LocalVampirePawn = HeldState.Human;
+        LocalVampireRequest = 0;
+    }
+    if (VampireState.Human == LocalVampirePawn)
+        LocalVampireRequest = Max(LocalVampireRequest, VampireState.AcknowledgedRequest);
+    if (LocalVampireRequest >= MaxInt - 1) return 0;
+    return ++LocalVampireRequest;
+}
+
+simulated function int VampireBegin(KFWeapon W, int Hand, bool bStock)
+{
+    local int Request;
+    if (!VampireAvailable() || !class'VRVampireReloadAuthority'.static.Supports(W)
+        || Hand < 0 || Hand > 1
+        || (Hand == 0 ? HeldState.LeftWeapon : HeldState.RightWeapon) != W) return 0;
+    Request = NextVampireRequest();
+    if (Request == 0) return 0;
+    LocalVampireManagedPawn = HeldState.Human;
+    LocalVampireManagedWorld = WorldEpoch;
+    LocalVampireManagedConnection = ConnectionEpoch;
+    LocalVampireManagedEpoch = PawnEpoch;
+    ServerVampireBegin(WorldEpoch, ConnectionEpoch, PawnEpoch, Request, W, Hand, HeldState.Revision, bStock);
+    return Request;
+}
+
+simulated function bool VampireRead(KFWeapon W, int BeginRequest, out int Session,
+    out byte Status, out int Ammo, out int Reserve)
+{
+    Session = 0; Status = 0; Ammo = 0; Reserve = 0;
+    if (!VampireAvailable() || VampireState.Human != HeldState.Human
+        || VampireState.WorldEpoch != WorldEpoch || VampireState.ConnectionEpoch != ConnectionEpoch
+        || VampireState.PawnEpoch != PawnEpoch || BeginRequest <= 0) return false;
+    if (VampireState.LastBeginRequest == BeginRequest && VampireState.LastBeginWeapon == W
+        && !VampireState.bBeginAccepted)
+    {
+        Session = BeginRequest;
+        Status = byte(class'VRVampireReloadAuthority'.const.Cancelled);
+        return true;
+    }
+    if (VampireState.BeginRequest != BeginRequest || VampireState.Weapon != W
+        || VampireState.SessionId != BeginRequest) return false;
+    Session = VampireState.SessionId;
+    Status = byte(VampireState.Status);
+    Ammo = VampireState.PrimaryAmmo;
+    Reserve = VampireState.PrimaryReserve;
+    return true;
+}
+
+simulated function bool VampireCommit(KFWeapon W, int BeginRequest, int Session)
+{
+    local int Request;
+    if (!VampireAvailable() || Session != BeginRequest || Session <= 0
+        || VampireState.Human != HeldState.Human || VampireState.Weapon != W
+        || VampireState.BeginRequest != BeginRequest || VampireState.SessionId != Session
+        || VampireState.Status != class'VRVampireReloadAuthority'.const.Held) return false;
+    Request = NextVampireRequest();
+    if (Request == 0) return false;
+    ServerVampireCommit(WorldEpoch, ConnectionEpoch, PawnEpoch, Request, W,
+        VampireState.Hand, VampireState.ItemId, VampireState.ItemRevision, Session);
+    return true;
+}
+
+simulated function VampireCancel(KFWeapon W, int BeginRequest, int Session)
+{
+    local int Request;
+    // Cancel can follow a still-pending begin on this same reliable actor.
+    // The authority resolves that begin's tuple; no client item ID is needed.
+    if (W == None || BeginRequest <= 0 || (Session != 0 && Session != BeginRequest)) return;
+    Request = NextVampireRequest();
+    if (Request == 0) return;
+    ServerVampireCancel(WorldEpoch, ConnectionEpoch, PawnEpoch, Request, W, BeginRequest);
+}
+
+reliable server function ServerVampireBegin(int W, int C, int P, int Request,
+    KFWeapon Weapon, int Hand, int ExpectedHeldRevision, bool bStock)
+{
+    if (W != WorldEpoch || C != ConnectionEpoch || P != PawnEpoch || VampireReload == None) return;
+    VampireReload.Tick(VampireContextAllowed());
+    VampireReload.Begin(Request, Weapon, Hand, ExpectedHeldRevision, W, C, P, bStock);
+    PublishVampireState();
+}
+
+reliable server function ServerVampireCommit(int W, int C, int P, int Request,
+    KFWeapon Weapon, int Hand, int Id, int Revision, int Session)
+{
+    if (W != WorldEpoch || C != ConnectionEpoch || P != PawnEpoch || VampireReload == None) return;
+    VampireReload.Tick(VampireContextAllowed());
+    VampireReload.Commit(Request, Weapon, Hand, Id, Revision, Session, W, C, P);
+    PublishVampireState();
+}
+
+reliable server function ServerVampireCancel(int W, int C, int P, int Request,
+    KFWeapon Weapon, int BeginRequest)
+{
+    if (W != WorldEpoch || C != ConnectionEpoch || P != PawnEpoch || VampireReload == None
+        || VampireReload.Snapshot.Weapon != Weapon
+        || VampireReload.Snapshot.BeginRequest != BeginRequest) return;
+    VampireReload.Cancel(Request, Weapon, VampireReload.Snapshot.Hand,
+        VampireReload.Snapshot.ItemId, VampireReload.Snapshot.ItemRevision, BeginRequest, W, C, P);
+    PublishVampireState();
+}
 
 function PublishGrenadeState()
 {
@@ -480,7 +759,7 @@ replication
         WorldEpoch, ConnectionEpoch, PawnEpoch, CalibrationEpoch,
         bSyntheticAllowed, bMotionReplayAllowed, bMotionReplayEnabled, bMotionResetPassed, bMotionResetFailed, MotionResetId, bDiagnosticAutoReady, bDiagnosticPerkReady, bDiagnosticClientsReady,
         bHandshakeAccepted, bHandshakeRejected, bSyntheticEnabled, bVRTrackingEnabled,
-        AcceptedPoses, RejectedPoses, LastAcceptedSequence, HeldState, GrenadeState,
+        AcceptedPoses, RejectedPoses, LastAcceptedSequence, HeldState, GrenadeState, VampireState, PairedStates,
         bMultiplayerZedGrabAllowed, bGrabOptIn, GrabPolicyEpoch;
 }
 
@@ -517,6 +796,7 @@ function bool PhysicalHandEligible(byte Hand, vector HitLocation)
 {
     local vector HandLocation;
     if (Role != ROLE_Authority || Hand > 1 || !IsInventoryFocusEligible() || HeldInventory == None
+        || !class'VRPhysicalInteraction'.static.Allowed(BoundPawn)
         || (PublicPose.Snapshot.Sample.TrackingFlags & (2 << Hand)) == 0) return false;
     HeldInventory.Refresh();
     if ((Hand == 0 ? HeldInventory.Snapshot.LeftWeapon : HeldInventory.Snapshot.RightWeapon) != None) return false;
@@ -531,6 +811,7 @@ function bool GrabCommandsAllowed()
     Game = KF2VRNetGame(WorldInfo.Game);
     return Role == ROLE_Authority && Game != None && Game.bMultiplayerZedGrabAllowed
         && bGrabOptIn && GrabIntentPawnEpoch == PawnEpoch && WorldInfo.RealTimeSeconds < GrabOptInLease && IsInventoryFocusEligible()
+        && class'VRPhysicalInteraction'.static.Allowed(BoundPawn)
         && (PublicPose.Snapshot.Sample.TrackingFlags & 7) == 7;
 }
 
@@ -811,14 +1092,15 @@ unreliable server function ServerSubmitPose(NetPoseSample Sample, optional NetMo
 {
     local float Now;
     Now = WorldInfo.RealTimeSeconds;
-    // Fixed work and storage per owner, at most 60 samples in one real second.
+    // Fixed work and storage per owner, at most 150 samples in one real
+    // second (senders run at 120 Hz).
     if (Now - RateWindowStart >= 1.0)
     {
         RateWindowStart = Now;
         RateWindowCount = 0;
     }
-    RateWindowCount = Min(RateWindowCount + 1, 61);
-    if (RateWindowCount > 60 || !bHandshakeAccepted || (!bSyntheticEnabled && !bVRTrackingEnabled)
+    RateWindowCount = Min(RateWindowCount + 1, 151);
+    if (RateWindowCount > 150 || !bHandshakeAccepted || (!bSyntheticEnabled && !bVRTrackingEnabled)
         || (bSyntheticEnabled && !bSyntheticAllowed) || BoundPawn == None || PublicPose == None
         || BoundPawn.bDeleteMe || BoundPawn.Health <= 0
         || KF2VRNetPlayerController(Owner) == None
@@ -896,6 +1178,18 @@ function UpdatePawnBinding()
     EndMotionReplay("pawn_changed");
     bInventoryFocusRequested = false;
     InventoryFocusLeaseUntil = 0.0;
+    ShutdownPairedReloads();
+    if (VampireReload != None) VampireReload.Shutdown();
+    VampireReload = None;
+    VampireState.Human = None;
+    VampireState.Weapon = None;
+    VampireState.LastBeginWeapon = None;
+    VampireState.BeginRequest = 0;
+    VampireState.LastBeginRequest = 0;
+    VampireState.AcknowledgedRequest = 0;
+    VampireState.SessionId = 0;
+    VampireState.Status = 0;
+    VampireState.NativeVersion = 0;
     RestoreWeaponPairs();
     if (PublicPose != None)
     {
@@ -1098,7 +1392,20 @@ simulated event Tick(float DeltaTime)
                 && Game != None && Game.bServerAdapter && !bPendingFireChecked)
                 bPendingFireChecked = class'KF2VRNetHeldInventoryProbe'.static.RunPending(BoundPawn, HeldInventory);
             PublishHeldState();
+            if (VampireReload == None)
+            {
+                VampireReload = new(self) class'KF2VRNetVampireReload';
+                if (!VampireReload.Initialize(self, HeldInventory, WorldEpoch, ConnectionEpoch, PawnEpoch))
+                    VampireReload = None;
+                else PublishVampireState();
+            }
+            if (VampireReload != None)
+            {
+                VampireReload.Tick(VampireContextAllowed());
+                if (VampireState.Status != VampireReload.Snapshot.Status) PublishVampireState();
+            }
             UpdateWeaponPairs();
+            UpdatePairedReloads();
         }
         if (PublicPose != None && PublicPose.Snapshot.Sample.TrackingFlags != 0
             && WorldInfo.RealTimeSeconds - LastAcceptedRealTime
@@ -1136,6 +1443,9 @@ simulated event Tick(float DeltaTime)
 
 event Destroyed()
 {
+    ShutdownPairedReloads();
+    if (VampireReload != None) VampireReload.Shutdown();
+    VampireReload = None;
     EndMotionReplay("pawn_changed");
     bInventoryFocusRequested = false;
     InventoryFocusLeaseUntil = 0.0;

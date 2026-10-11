@@ -29,7 +29,147 @@ var int HordeSpawnSlot;
 // (KF2VRNetPlayerController) has already confined it to the host.
 var bool bNetworkSession;
 
+// Session-only sandbox state. Never config: normal launches cannot inherit it.
+var bool bSandbox, bSandboxTraderWasOpen;
+var float SandboxOriginalMoney;
+var KFPlayerReplicationInfo SandboxPRI;
+var array<string> SandboxZeds;
+var array<KFWeapon> SandboxGranted;
+var KFInventoryManager SandboxInventory;
+var int SandboxOriginalCarry;
+var float LastSandboxGrant;
+
 const MaxTargets = 12;
+
+static function int SandboxZedCount()
+{
+    return default.SandboxZeds.Length;
+}
+
+static function string SandboxZedName(int Index)
+{
+    if (Index < 0 || Index >= default.SandboxZeds.Length) return "Unavailable";
+    return default.SandboxZeds[Index];
+}
+
+function bool SandboxAuthorized(KFPlayerController Sender)
+{
+    if (Role != ROLE_Authority || Sender == None || Sender.PlayerReplicationInfo == None) return false;
+    // A sole remote player is not necessarily the host. Dedicated-server
+    // users must authenticate as admin; do not reuse that practice shortcut.
+    return WorldInfo.NetMode == NM_Standalone || Sender.PlayerReplicationInfo.bAdmin;
+}
+
+function BeginSandbox()
+{
+    if (bSandbox) { Tell("SANDBOX / UNRANKED / NO XP already active."); return; }
+    if (!SandboxAuthorized(PC)) { Tell("Sandbox requires authenticated server admin authority."); return; }
+    if (!(WorldInfo.GetMapName(true) ~= "KF-Remilly_Test_Map"))
+    { Tell("Sandbox is limited to KF-Remilly_Test_Map. Original map stays unchanged."); return; }
+    if (bActive) { Tell("End ordinary practice before entering the sandbox."); return; }
+    if (Game == None || Game.MyKFGRI == None || !Game.IsInState('PlayingWave')
+        || Game.MyKFGRI.IsBossWave() || PC.Pawn == None || PC.Pawn.Health <= 0)
+    { Tell("Sandbox needs a living player during a normal Survival wave."); return; }
+    // Unlike AddCheats alone, stock EnableCheats also disables stats and
+    // marks the game unranked. Never reverse that flag on sandbox exit.
+    PC.EnableCheats();
+    Game.SetGameUnranked(true);
+    Game.UpdateGameSettings();
+    BeginPractice();
+    if (!bActive) return;
+    bSandbox = true;
+    SandboxPRI = KFPlayerReplicationInfo(PC.PlayerReplicationInfo);
+    SandboxOriginalMoney = SandboxPRI.Score;
+    SandboxInventory = KFInventoryManager(PC.Pawn.InvManager);
+    if (SandboxInventory != None) SandboxOriginalCarry = SandboxInventory.MaxCarryBlocks;
+    bSandboxTraderWasOpen = Game.MyKFGRI.bTraderIsOpen;
+    MaintainSandbox();
+    Tell("SANDBOX / UNRANKED / NO XP. Money refills; trader and combat remain available. Start a fresh session for normal play.");
+    Tell("Zed catalog excludes Versus, Mixer, friendly-test and event-specific variants. Boss behavior requires playtesting.");
+}
+
+function MaintainSandbox()
+{
+    if (!bSandbox || !bActive || Game == None || Game.MyKFGRI == None) return;
+    if (SandboxPRI != None) SandboxPRI.Score = 999999;
+    // Keep DebugSuspendWave and world time running. Do not enter TraderOpen
+    // game state, which would end combat or restart the wave lifecycle.
+    Game.MyKFGRI.bTraderIsOpen = true;
+    if (Game.MyKFGRI.OpenedTrader == None && Game.MyKFGRI.NextTrader != None)
+        Game.MyKFGRI.OpenTrader();
+}
+
+function EndSandbox()
+{
+    local int I;
+    if (!bSandbox) return;
+    bSandbox = false;
+    if (SandboxPRI != None) SandboxPRI.Score = SandboxOriginalMoney;
+    SandboxPRI = None;
+    for (I = 0; I < SandboxGranted.Length; ++I)
+        if (SandboxGranted[I] != None && !SandboxGranted[I].bDeleteMe) SandboxGranted[I].Destroy();
+    SandboxGranted.Length = 0;
+    if (SandboxInventory != None && !SandboxInventory.bDeleteMe)
+        SandboxInventory.MaxCarryBlocks = SandboxOriginalCarry;
+    SandboxInventory = None;
+    if (Game != None && Game.MyKFGRI != None)
+    {
+        if (!bSandboxTraderWasOpen) Game.MyKFGRI.CloseTrader();
+        Game.MyKFGRI.bTraderIsOpen = bSandboxTraderWasOpen;
+    }
+    if (OwnerUsable() && PC.Pawn != None && KFInventoryManager(PC.Pawn.InvManager) != None)
+        KFInventoryManager(PC.Pawn.InvManager).ServerCloseTraderMenu();
+}
+
+function GrantSandboxWeapon(string ClassName)
+{
+    local int I;
+    local class<KFWeapon> WeaponClass;
+    local KFWeapon W;
+    local string ClassPath;
+    if (!bSandbox || !SandboxAuthorized(PC) || PC.Pawn == None || PC.Pawn.Health <= 0
+        || SandboxInventory == None || PC.Pawn.InvManager != SandboxInventory) return;
+    if (WorldInfo.RealTimeSeconds < LastSandboxGrant + 0.5) return;
+    LastSandboxGrant = WorldInfo.RealTimeSeconds;
+    // Resolve only an authored identity; never load an arbitrary RPC path.
+    for (I = 0; I < class'VRHandsBridge'.default.WeaponProfiles.Length; ++I)
+        if (string(class'VRHandsBridge'.default.WeaponProfiles[I].WeaponClassName) ~= ClassName) break;
+    if (I == class'VRHandsBridge'.default.WeaponProfiles.Length)
+    { Tell("Unsupported VR weapon profile: " $ ClassName); return; }
+    ClassName = string(class'VRHandsBridge'.default.WeaponProfiles[I].WeaponClassName);
+    if (Left(ClassName, 7) ~= "KFWeap_") ClassPath = "KFGameContent." $ ClassName;
+    else if (Left(ClassName, 7) ~= "VRWeap_") ClassPath = "KF2VR." $ ClassName;
+    else { Tell("Optional/test weapon unavailable in this sandbox."); return; }
+    // Local-only portals must not be silently granted in a network session.
+    if (ClassName ~= "VRWeap_PortalGun") { Tell("Portal gun is unsupported in network sandbox."); return; }
+    WeaponClass = class<KFWeapon>(DynamicLoadObject(ClassPath, class'Class', true));
+    if (WeaponClass == None) { Tell("Weapon class unavailable: " $ ClassPath); return; }
+    foreach SandboxInventory.InventoryActors(class'KFWeapon', W)
+        if (W.Class == WeaponClass) { Tell("Weapon already owned; equip it from the armory."); return; }
+    if (SandboxGranted.Length >= 16) { Tell("Sandbox grant limit reached; end and restart sandbox to clear grants."); return; }
+    if (SandboxInventory.CurrentCarryBlocks + WeaponClass.static.GetDefaultModifiedWeightValue(0) > 255)
+    { Tell("Inventory weight limit reached; clear weapons before another grant."); return; }
+    SandboxInventory.MaxCarryBlocks = Max(SandboxInventory.MaxCarryBlocks,
+        SandboxInventory.CurrentCarryBlocks + WeaponClass.static.GetDefaultModifiedWeightValue(0));
+    W = KFWeapon(SandboxInventory.CreateInventory(WeaponClass, true));
+    if (W == None) { Tell("Weapon grant failed: " $ ClassName); return; }
+    W.bGivenAtStart = true;
+    W.Class.static.TriggerAsyncContentLoad(W.Class);
+    SandboxGranted.AddItem(W);
+    Tell("Granted " $ ClassName $ "; waiting for VR inventory readiness.");
+}
+
+function SpawnSandboxZeds(int Index, int Count, bool bAttacker)
+{
+    local int I;
+    if (!bSandbox || Index < 0 || Index >= SandboxZedCount()) return;
+    Count = Clamp(Count, 1, 6);
+    // Boss requests are always one at a time, within the shared live cap.
+    if (Index >= 18) Count = 1;
+    for (I = 0; I < Count && PruneTargets() < MaxTargets; ++I)
+        SpawnTarget(SandboxZedName(Index), bAttacker);
+    Tell("Sandbox has " $ PruneTargets() $ "/" $ MaxTargets $ " live targets. Blocked spawn positions are skipped.");
+}
 
 function bool OwnerUsable()
 {
@@ -122,6 +262,9 @@ function HandleCommand(string Command, KFPlayerController Sender, optional bool 
     ParseStringIntoArray(Command, Words, " ", true);
     if (Words.Length == 0) { Help(); return; }
     Verb = Caps(Words[0]);
+    if ((bSandbox || Verb == "SANDBOX") && !SandboxAuthorized(Sender))
+    { Tell("Sandbox requires authenticated server admin authority."); return; }
+    if (Verb == "SANDBOX") { BeginSandbox(); return; }
     if (Verb == "OFF") { EndPractice("requested"); return; }
     if (Verb == "ON") { BeginPractice(); return; }
     if (Verb == "HELP") { Help(); return; }
@@ -129,6 +272,11 @@ function HandleCommand(string Command, KFPlayerController Sender, optional bool 
     // Status stays readable while down; everything else needs a living player.
     if (Verb == "STATUS") { ReportStatus(); return; }
     if (PC.Pawn == None || PC.Pawn.Health <= 0) { Tell("A living player is required."); return; }
+    if (bSandbox && Verb == "MONEY") { MaintainSandbox(); Tell("Sandbox money refilled."); return; }
+    if (bSandbox && Verb == "TRADER") { MaintainSandbox(); PC.OpenTraderMenu(true); return; }
+    if (bSandbox && Verb == "WEAPON" && Words.Length == 2) { GrantSandboxWeapon(Words[1]); return; }
+    if (bSandbox && (Verb == "ZED" || Verb == "PASSIVE") && Words.Length == 3)
+    { SpawnSandboxZeds(int(Words[1]), int(Words[2]), Verb == "ZED"); return; }
     if (Verb == "DAMAGE") { SetInvulnerable(false); return; }
     if (Verb == "INVULN" || Verb == "GOD") { SetInvulnerable(true); return; }
     if (Verb == "HORDE") { SpawnMixedHorde(); return; }
@@ -182,6 +330,7 @@ function BeginPractice()
 
 function EndPractice(optional string Reason)
 {
+    EndSandbox();
     if (bSavedGodMode && OwnerUsable()) PC.bGodMode = bOriginalGodMode;
     bSavedGodMode = false;
     bInvulnerable = false;
@@ -270,10 +419,16 @@ function SpawnTarget(string Kind, bool bAttacker)
     if (!bActive || !OwnerUsable() || KFCheatManager(PC.CheatManager) == None) return;
     Live = PruneTargets();
     if (Live >= MaxTargets) { Tell("Clear the range before adding more than " $ MaxTargets $ " live targets."); return; }
-    if (!(Kind ~= "ClotC" || Kind ~= "ClotA" || Kind ~= "ClotS" || Kind ~= "GF"
+    if (bSandbox && default.SandboxZeds.Find(Kind) != INDEX_NONE)
+    {
+        PawnClass = class<KFPawn_Monster>(DynamicLoadObject("KFGameContent." $ Kind, class'Class', true));
+        if (PawnClass == None) { Tell("Unavailable in this game build: " $ Kind); return; }
+    }
+    else if (!(Kind ~= "ClotC" || Kind ~= "ClotA" || Kind ~= "ClotS" || Kind ~= "GF"
         || Kind ~= "SC" || Kind ~= "FP" || Kind ~= "Crawler" || Kind ~= "Bloat" || Kind ~= "Husk"))
     { Tell("Types: ClotC, ClotA, ClotS, GF, SC, FP, Crawler, Bloat, Husk."); return; }
-    if (bSpawningHorde && bFixedBenchmarkHorde)
+    if (PawnClass != None) { /* Exact sandbox class; no random elite replacement. */ }
+    else if (bSpawningHorde && bFixedBenchmarkHorde)
     {
         // LoadMonsterByName rolls random elite replacements. Keep the exact
         // baseline mix constant for resolution comparisons instead.
@@ -403,10 +558,12 @@ event Tick(float DeltaTime)
     local int I, Delta;
     if (!bActive) return;
     if (PC == None || PC.bDeleteMe) { EndPractice("owner lost"); return; }
+    if (bSandbox && !SandboxAuthorized(PC)) { EndPractice("admin authority lost"); return; }
     if (Game == None || !Game.IsInState('DebugSuspendWave')) { EndPractice("wave state changed"); return; }
     if (PC.Pawn == None || PC.Pawn.Health <= 0) { EndPractice("player down"); return; }
     if (WorldInfo.TimeSeconds - LastReport < 0.25) return;
     LastReport = WorldInfo.TimeSeconds;
+    MaintainSandbox();
     if (Patient != None && !Patient.bDeleteMe && Patient.Health != LastPatientHealth)
     {
         LastPatientHealth = Patient.Health;
@@ -434,4 +591,27 @@ event Destroyed()
 defaultproperties
 {
     RemoteRole=ROLE_None
+    SandboxZeds(0)="KFPawn_ZedClot_Cyst"
+    SandboxZeds(1)="KFPawn_ZedClot_Alpha"
+    SandboxZeds(2)="KFPawn_ZedClot_Slasher"
+    SandboxZeds(3)="KFPawn_ZedClot_AlphaKing"
+    SandboxZeds(4)="KFPawn_ZedCrawler"
+    SandboxZeds(5)="KFPawn_ZedCrawlerKing"
+    SandboxZeds(6)="KFPawn_ZedGorefast"
+    SandboxZeds(7)="KFPawn_ZedGorefastDualBlade"
+    SandboxZeds(8)="KFPawn_ZedStalker"
+    SandboxZeds(9)="KFPawn_ZedSiren"
+    SandboxZeds(10)="KFPawn_ZedBloat"
+    SandboxZeds(11)="KFPawn_ZedHusk"
+    SandboxZeds(12)="KFPawn_ZedScrake"
+    SandboxZeds(13)="KFPawn_ZedFleshpound"
+    SandboxZeds(14)="KFPawn_ZedFleshpoundMini"
+    SandboxZeds(15)="KFPawn_ZedDAR_EMP"
+    SandboxZeds(16)="KFPawn_ZedDAR_Laser"
+    SandboxZeds(17)="KFPawn_ZedDAR_Rocket"
+    SandboxZeds(18)="KFPawn_ZedHans"
+    SandboxZeds(19)="KFPawn_ZedPatriarch"
+    SandboxZeds(20)="KFPawn_ZedFleshpoundKing"
+    SandboxZeds(21)="KFPawn_ZedBloatKing"
+    SandboxZeds(22)="KFPawn_ZedMatriarch"
 }

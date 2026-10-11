@@ -37,6 +37,32 @@ class LocalTestLaunchTests(unittest.TestCase):
         control.configure_role({"args": ["KF-Outpost?Mutator=KF2VR.VRDemo"]}, other, "driver")
         self.assertNotEqual(args.local_test_session, other.local_test_session)
 
+    def test_diagnostic_requires_control_solo_and_live_vr(self):
+        for enabled, solo, vr in ((False, True, True), (True, False, True), (True, True, False)):
+            args = Namespace(local_test_control=enabled, local_test_diagnostic=True,
+                             solo=solo, vr=vr, replay_teammate=False, avatar_preview=False)
+            with self.subTest(enabled=enabled, solo=solo, vr=vr), self.assertRaises(RuntimeError):
+                control.validate_options(args)
+
+    def test_diagnostic_isolated_viewport_and_flag_only_in_explicit_copied_role(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "KFEngine.ini"
+            config.write_text("[Engine.Engine]\nGameViewportClientClassName=KF2VR.VRGameViewportClient\n", encoding="utf-16")
+            role = {"args": ["KF-Outpost?Mutator=KF2VR.VRDemo", "-kf2vr-stereo"], "config_root": directory}
+            control.configure_role(role, self.options(True, local_test_diagnostic=True), "driver")
+            self.assertIn("?KF2VRLocalDiagnostic=1", role["args"][0])
+            self.assertIn("-kf2vr-local-test-diagnostic", role["args"])
+            self.assertIn("KF2VR.VRLocalDiagnosticViewportClient", config.read_text(encoding="utf-16"))
+            self.assertEqual(16, role["local_test_control"]["diagnostic"]["maximum_cases"])
+
+    def test_diagnostic_protocol_fixed_cases_only_no_count_or_class_injection(self):
+        for token in control.DIAGNOSTIC_CASES:
+            self.assertIn(token, control.request_wire("a"*32, "b"*32, "diagnostic", 0, token))
+        for token, count in (("case-deadbolt-left-manual", 1), ("case-anything-left-manual", 0),
+                             ("KF2Breacher.BreacherDeadbolt", 0), ("fire-all", 0)):
+            with self.subTest(token=token, count=count), self.assertRaises(ValueError):
+                control.request_wire("a"*32, "b"*32, "diagnostic", 0, token, count)
+
     def test_refuses_network_client_server_desktop_and_missing_owned_chain(self):
         args = self.options(True)
         for key in ("solo", "vr"):

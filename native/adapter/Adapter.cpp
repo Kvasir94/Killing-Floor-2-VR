@@ -31,6 +31,8 @@
 #include "AtlasBlit.h"
 #include "LoadingPlate.h"
 #include "StereoViews.h"
+#include "StereoReflections.h"
+#include "StereoAmbientOcclusion.h"
 #include "Dlss.h"
 #include "XrGamepad.h"
 #include "HeadAim.h"
@@ -38,6 +40,7 @@
 #include "HandWrist.h"
 #include "PresentHandoff.h"
 #include "GameScript.h"
+#include "VampireReloadGuard.h"
 #include "EpicSession.h"
 #include "include/kf2vr/adapter/GameBuild.h"
 #include "ScriptField.h"
@@ -53,10 +56,13 @@
 #include "WeaponContext.h"
 #include "WeaponHandling.h"
 #include "PerkContext.h"
+#include "CorpseDamageObserver.h"
 #include "DamagePopupScore.h"
 #include "PromoEventLog.h"
 #include "PromoSyncMarker.h"
 #include "ReloadMeshPop.h"
+#include "ConsumedPieceRender.h"
+#include "ConsumedPieceQuery.h"
 #include "WeaponRuntimeDispatch.h"
 #include "VmCallbackFilter.h"
 #include "VmEntryIdentity.h"
@@ -112,10 +118,70 @@ bool dlssRenderActive=false; // Game-thread viewport decision, stable throughout
 std::uint32_t dlssPhase=0;            // Game thread: one jitter phase per stereo pair.
 adapter::DlssJitter dlssJitter{};     // Game thread: this pair's sample offset.
 std::uint64_t dlssSkips=0,dlssFailures=0,dlssFrames=0;
+// -kf2vr-single-pass (Steam build only): both eyes in one scene family, side
+// by side in a double-width target, so the game thread draws the viewport and
+// the renderer builds visibility/shadows once per frame instead of per eye.
+// KF2's world lighting only takes its special path for exactly one view
+// (KFGame.exe 0x9116b3, tools/re/audit_multiview_lighting.py); the lighting
+// diagnostic lighting hook can run it per eye; the default keeps stock two-view lighting.
+bool singlePass=false;
+std::uint64_t singlePassLightingSplits=0,singlePassPairs=0;
+// Game thread: the keep-world-depth choice of this pair's presentation, so the
+// right eye's renderer re-arms foreground depth exactly as the left eye did.
+bool keepWorldDepthRequested=false;
+// Single-pass diagnostics: -kf2vr-sp-split submits each eye separately (fixes
+// translucency/flicker but costs the render-thread savings);
+// -kf2vr-sp-split-lighting selects the diagnostic per-eye lighting path.
+// -kf2vr-sp-separate-state gives the right eye its own view state (left eye then
+// lost objects); -kf2vr-sp-right-occlusion keeps occlusion culling on the right
+// eye, which shares the left eye's occlusion history (right eye flickered).
+bool singlePassSplit=false,singlePassStockLighting=false;
+// -kf2vr-sp-left-occlusion keeps occlusion culling on the left eye.
+bool singlePassSeparateState=false,singlePassRightOcclusion=false,singlePassLeftOcclusion=false;
+// Adapted from optimumbox 8c571ce: only the left eye owns occlusion queries.
+bool singlePassOcclusion=false;
+std::atomic<void*> rightEyeLateState{nullptr};
+std::atomic<bool> occlusionConstantsFailed{false};
+bool leftOcclusionTests=false;
+std::array<std::byte,0xa0> leftQueryConstants{};
+bool leftQueryConstantsPending=false;
+bool leftQueryConstantsReady=false;
+std::uint64_t queryConstantWrites=0;
+adapter::StereoAmbientOcclusion stereoAmbientOcclusion;
+adapter::StereoReflections stereoReflections;
+const std::byte* ssrEyeView=nullptr;
+bool ssrPairFailed=false;
+struct HbaoPendingPair {
+    int eye=-1;
+    const void* self=nullptr; const void* input=nullptr; const void* params=nullptr;
+    ID3D11DeviceContext* context=nullptr;
+    std::uint32_t mask=0;
+    ComPtr<ID3D11ShaderResourceView> depth;
+    ComPtr<ID3D11RenderTargetView> output;
+    ComPtr<ID3D11Resource> target;
+    std::int32_t rects[2][4]{};
+    std::byte projections[2][64]{};
+    std::byte inputBytes[0x70]{}; // Known HBAO depth input through the SRV.
+} hbaoPending;
+void ResetStereoRenderResources() {
+    stereoAmbientOcclusion.Reset(); stereoReflections.Reset();
+    ssrEyeView=nullptr; ssrPairFailed=false; hbaoPending={};
+    leftOcclusionTests=false; leftQueryConstantsPending=false; leftQueryConstantsReady=false;
+}
+// Render thread: the game's D3D11 context, from OMSetRenderTargets (single-pass only).
+ID3D11DeviceContext* gameContext=nullptr;
+std::byte* singlePassPairViews=nullptr; // Borrowed only while the renderer runs.
+void* singlePassRenderer=nullptr;
+void SplitBeforeEye(unsigned eye);
+void SplitAfterEye(unsigned eye);
 // KF2VR_HIDE_BILE_LENS=1: skip the Bloat bile camera-lens particles, a
 // full-view translucent emitter whose overdraw is very costly per VR eye.
 bool hideBileLens=false;
 std::uint64_t bileLensSkipped=0;
+// KF2VR_HIDE_BLOOD_LENS=1: likewise skip the hit blood-splatter lens particles.
+// The red damage tint is a separate post-process effect and stays.
+bool hideBloodLens=false;
+std::uint64_t bloodLensSkipped=0;
 // Everything Present needs from the game side for one frame. The game thread
 // fills it after the frame's last draw and hands it over through renderQueue,
 // so it reaches the render side in draw order and Present never reads script.
@@ -138,6 +204,7 @@ struct RenderSide {
     std::array<bool,2> eyeCopied{};
     bool fault=false; // A command for the next packet failed.
     ComPtr<ID3D11Texture2D> sceneDepth; // DLSS: the HDR scene's depth target, as last bound.
+    std::array<ComPtr<ID3D11Texture2D>,2> eyeDepth; // Split-submit diagnostic depth copies.
     std::array<ComPtr<ID3D11Texture2D>,2> sourceEyes;
     std::array<bool,2> dlssSucceeded{};
     std::array<ComPtr<ID3D11Texture2D>,2> dlssOutput; // DLSS: per-eye output-size images.
@@ -258,6 +325,7 @@ static adapter::motion::Runtime motionRuntime;
 using ProcessExit=void(WINAPI*)(UINT);
 ProcessExit originalProcessExit=nullptr;
 static kf2vr::localtest::Bridge localTestControl;
+bool localDiagnosticRequested=false;
 bool portalRequested=false;
 bool singleViewDiagnostic=false;
 wchar_t stopRequestPath[32768]{};
@@ -392,7 +460,8 @@ bool HashFile(const wchar_t* path,std::string& result) {
     if (algorithm) BCryptCloseAlgorithmProvider(algorithm,0);
     CloseHandle(file); return success;
 }
-bool Interesting(unsigned long long count) { return count<6 || count%300==0; }
+bool verboseLog=false;
+bool Interesting(unsigned long long count) { return count<6 || (verboseLog && count%300==0); }
 bool Readable(const void* pointer,size_t bytes) {
     const uintptr_t start=reinterpret_cast<uintptr_t>(pointer);
     if (!start || start+bytes<start) return false;
@@ -623,6 +692,28 @@ std::uint64_t SupplyHands(void* bridge) {
     }
     demo->leanMetres=adapter::SanitiseLeanMetres(script.Read<float>(bridge,L"NativeLeanAllowance"));
     if (!handReplayRequested) adapter::BoundRoomView(aim,frame,demo->leanMetres);
+    if (localDiagnosticRequested) {
+        // This is after the existing live XR freshness/focus/head gate. The
+        // headset/eyes stay live; only the explicit diagnostic's controllers
+        // are authored. Failed/expired IPC authorization remains neutral.
+        const auto now=GetTickCount64();
+        const auto& input=localTestControl.Input();
+        const bool live=input.Fresh(now) && frame.headPoseTracked;
+        const auto hand=[&](auto& h,int index) {
+            h.triggerAxis=h.gripAxis=h.stickX=h.stickY=0;
+            h.primaryPressed=h.secondaryPressed=h.stickPressed=h.menuPressed=h.menuHoldPressed=false;
+            h.triggerActive=h.gripActive=h.stickActive=h.primaryActive=h.secondaryActive=
+                h.stickClickActive=h.menuActive=h.menuHoldActive=live;
+            h.poseValid=h.poseTracked=h.aimPoseValid=h.aimPoseTracked=live;
+            if (!live) return;
+            h.grip.pos=frame.head.pos+frame.head.rot.Rotate({index==0?-.2f:.2f,-.25f,-.45f});
+            h.aim.pos=h.grip.pos; h.aim.rot=frame.head.rot;
+            h.grip.rot=frame.head.rot*kf2vr::Quat::FromAxisAngle({0,0,1},index==0?1.5707963f:-1.5707963f);
+            h.triggerAxis=(input.Triggers(now)&(1<<index))?1.f:0.f;
+            h.primaryPressed=(input.Buttons(now)&(index==0?1:8))!=0;
+        };
+        hand(frame.handLeft,0); hand(frame.handRight,1);
+    }
     if(script.Read<int>(bridge,L"MotionPlayback") && script.Read<int>(bridge,L"MotionNetwork")) {
         frame.handLeft.triggerAxis=frame.handRight.triggerAxis=0;
         frame.handLeft.gripAxis=frame.handRight.gripAxis=0;
@@ -873,6 +964,11 @@ void HookProcessInternal(void* object,void* stack,void* result) {
         function=adapter::GameScript::At<void*>(stack,0x14);
         name=adapter::GameScript::ObjectName(function);
     }
+    if (adapter::RouteVampireReloadGuard(script,object,function,demo->handsBridge)) return;
+    adapter::SwipeDispatchScope swipeDispatch(script,object,function,adapter::GameScript::At<void*>(stack,0x2c));
+    if (adapter::RouteHeldSwipeContact(script,object,function,adapter::GameScript::At<void*>(stack,0x2c))) return;
+    adapter::RadiusDamageScope radiusDamage(script,object,function);
+    if (adapter::RouteHeldHuskContact(script,object,function,adapter::GameScript::At<void*>(stack,0x2c))) return;
     adapter::promo::Log::PhysicalScope promoPhysical(promoLog,script,object,name);
     static thread_local const auto commandoHudName=script.Intern(L"DrawSpecialPerkHUD");
     if (stereoRequested && name==commandoHudName &&
@@ -882,11 +978,18 @@ void HookProcessInternal(void* object,void* stack,void* result) {
         adapter::SuppressLockOnIcon(script,object,function,adapter::GameScript::At<void*>(stack,0x2c),
                                     demo->handsBridge,demo->controlledController)) return;
     // Coordinated local test hook: exact owned callback, existing validated
-    // world/game thread only. No property writes or general console dispatch.
+    // world/game thread only. No general console dispatch; diagnostic authority
+    // additionally requires the current real XR head sample.
     static thread_local const auto localTestName=script.Intern(L"NativeLocalTestPoll");
     if (name==localTestName && script.IsClass(object,L"VRLocalTestControl") &&
         script.FindFunction(object,L"NativeLocalTestPoll")==function) {
-        localTestControl.Poll(script,object);
+        const auto now=GetTickCount64();
+        const bool liveDiagnosticXr=demo->ready && !demo->failed &&
+            !demo->failureRequested.load(std::memory_order_acquire) && demo->sampleTick &&
+            now>=demo->sampleTick && now-demo->sampleTick<=250 &&
+            demo->frame.state==xr::SessionState::Focused && demo->frame.actionsSynced &&
+            demo->frame.headPoseValid && demo->frame.headPoseTracked;
+        localTestControl.Poll(script,object,liveDiagnosticXr);
         ForwardProcessInternal(object,stack,result);return;
     }
     static thread_local const auto motionName=script.Intern(L"NativeMotionUpdate");
@@ -914,22 +1017,29 @@ void HookProcessInternal(void* object,void* stack,void* result) {
     if (callback==Callback::Unrelated) {
         ForwardProcessInternal(object,stack,result); return;
     }
-    if (callback==Callback::AddCameraLensEffect && hideBileLens) {
+    if (callback==Callback::AddCameraLensEffect && (hideBileLens || hideBloodLens)) {
         // The only parameter is the lens emitter class.
         auto* lensLocals=adapter::GameScript::At<void*>(stack,0x2c);
         void* lens=lensLocals ? adapter::GameScript::At<void*>(lensLocals,0) : nullptr;
-        bool bile=false;
+        bool bile=false,blood=false;
         if (lens && adapter::GameScript::ObjectName(adapter::GameScript::ObjectClass(lens))==script.Intern(L"Class")) {
             const auto puke=script.Intern(L"KFCameraLensEmit_Puke"),light=script.Intern(L"KFCameraLensEmit_Puke_Light");
+            const auto bloodBase=script.Intern(L"KFCameraLensEmit_BloodBase"),gorge=script.Intern(L"KFCameraLensEmit_BloodGorge");
             void* type=lens;
-            for (unsigned depth=0;type && depth<64 && !bile;++depth,type=adapter::GameScript::SuperStruct(type)) {
+            for (unsigned depth=0;type && depth<64 && !bile && !blood;++depth,type=adapter::GameScript::SuperStruct(type)) {
                 const auto name=adapter::GameScript::ObjectName(type);
-                bile=name==puke || name==light;
+                bile=hideBileLens && (name==puke || name==light);
+                blood=hideBloodLens && (name==bloodBase || name==gorge);
             }
         }
         if (bile) {
             if (Interesting(++bileLensSkipped)) Log("Bloat bile lens effect skipped count=%llu",
                 static_cast<unsigned long long>(bileLensSkipped));
+            return;
+        }
+        if (blood) {
+            if (Interesting(++bloodLensSkipped)) Log("Hit blood lens effect skipped count=%llu",
+                static_cast<unsigned long long>(bloodLensSkipped));
             return;
         }
     }
@@ -941,6 +1051,9 @@ void HookProcessInternal(void* object,void* stack,void* result) {
     if (portalRequested && callback==Callback::HitWall && portalHitscan.ProjectileWall(object,stack)) return;
     const auto groups=Vm::Groups(callback);
     auto* locals=adapter::GameScript::At<void*>(stack,0x2c);
+    if (callback==Callback::TakeDamage)
+        adapter::ObserveCorpseDamage(script,object,function,locals);
+    adapter::LiveDamageScope liveDamage(script,callback==Callback::TakeDamage ? object : nullptr,function,locals);
     adapter::promo::Log::DamageScope promoDamage(promoLog,script,
         callback==Callback::TakeDamage?object:nullptr,function);
     if (callback==Callback::NativeHandsUpdate) promoLog.LocalPlayer(script,demo->controlledController);
@@ -967,11 +1080,43 @@ void HookProcessInternal(void* object,void* stack,void* result) {
                 if(index>=0 && index<static_cast<int>(adapter::HudTextAlpha::SelectorCount))
                     slot=static_cast<int>(adapter::HudTextAlpha::PanelCount)+index;
             }
-            // The panel's clear is already queued and its draws follow this
-            // callback, so registration lands between them on the render side.
+            // Pinned Steam/Epic CheckUpdate (0x3136b0/0x313fe0) installs
+            // FCanvas at UCanvas+0x98 with its render target at FCanvas+8.
+            // Match the owned Display's resource, not a same-sized last clear.
+            const auto display=script.Read<void*>(object,L"Display");
+            auto* resource=adapter::GameScript::At<void*>(display,0xf8);
+            const auto nativeCanvas=adapter::GameScript::At<void*>(canvas,0x98);
+            if(!resource || adapter::GameScript::At<void*>(nativeCanvas,8)!=
+                static_cast<std::byte*>(resource)+0x5c) resource=nullptr;
+            // The same engine FIFO already contains resource initialization
+            // and clear; Canvas flush/draws follow this callback. UpdateResource
+            // releases and flushes before deleting (0x30cc40/0x30d7d0), while
+            // BeginDestroy queues release then a resource fence. Only the render
+            // thread may read the RHI surface; no UObject is used by this command.
             renderQueue.Enqueue([=] {
-                const bool registered=panel ? hudTextAlpha.RegisterPanel(index,owner,expected,width,height) :
-                    hudTextAlpha.RegisterSelector(index,owner,expected,width,height);
+                ComPtr<ID3D11Resource> target;
+                ComPtr<ID3D11DeviceContext> context;
+                const bool epic=adapter::build::selected==adapter::build::Store::Epic;
+                const auto resourceVtable=gameBase+(epic ? 0x17fe410 : 0x1729ef0);
+                const auto surfaceVtable=gameBase+(epic ? 0x1b61ae0 : 0x1a84dc8);
+                if(adapter::build::selected!=adapter::build::Store::Unknown && resource
+                    && adapter::GameScript::At<uintptr_t>(resource,0)==resourceVtable) {
+                    // InitRHI (0x319260/0x319b50) stores the render-target
+                    // surface at +0x64; +0x98 is the separate sampling copy.
+                    const auto surface=adapter::GameScript::At<std::byte*>(resource,0x64);
+                    if(surface && adapter::GameScript::At<uintptr_t>(surface-0x14,0)==surfaceVtable) {
+                        // D3D11 surface ctor (0xcb15a0/0xcbcd40) and clear
+                        // (0xcb6cb0/0xcc2420) establish this owning RTV field.
+                        ComPtr<ID3D11RenderTargetView> view=adapter::GameScript::At<ID3D11RenderTargetView*>(surface,0);
+                        if(view) {
+                            view->GetResource(&target);
+                            ComPtr<ID3D11Device> device;view->GetDevice(&device);
+                            device->GetImmediateContext(&context);
+                        }
+                    }
+                }
+                const bool registered=panel ? hudTextAlpha.RegisterPanel(index,owner,expected,width,height,context.Get(),target.Get()) :
+                    hudTextAlpha.RegisterSelector(index,owner,expected,width,height,context.Get(),target.Get());
                 if(selectorDiagnostics && !panel && selectorRegistrations++<16)
                     Log("KF2VR_SELECTOR_REGISTER hand=%d owner=%p expected=%p canvas=%.0fx%.0f registered=%d",
                         index,owner,expected,width,height,registered);
@@ -982,8 +1127,10 @@ void HookProcessInternal(void* object,void* stack,void* result) {
     }
     const bool walkBob=object==demo->controlledPawn && callback==Callback::UpdateWalkBob && LocalComfortActive();
     // KFPlayerInput adds these forced yaw/pitch deltas after raw player input.
-    // Leave those out parameters untouched: physical head motion and intended
-    // stick/mouse turns still flow through normal UpdateRotation, as do grab
+    // Normally leave those out parameters untouched; the stock-synchronized
+    // grab-turn preference can opt into yaw-only restraint turning below.
+    // Physical head motion and intended stick/mouse turns still flow through
+    // normal UpdateRotation, as do grab
     // movement restrictions, damage and release. Friction instead scales the
     // stick turn by up to half whenever the head view crosses a zed, which
     // reads as stutter; skipping it leaves CurrTurn/CurrLookUp as the stick set
@@ -993,6 +1140,37 @@ void HookProcessInternal(void* object,void* stack,void* result) {
         callback==Callback::ApplyAutoTarget || callback==Callback::ApplyTargetAdhesion ||
         callback==Callback::ApplyTargetFriction;
     if (forcedLook && object==script.Read<void*>(demo->controlledController,L"PlayerInput") && LocalComfortActive()) {
+        // The script mirrors the stock AutoTurnOff option and validates a
+        // current non-critical Zed restraint. Other aim assistance and strong
+        // grab camera coercion retain VR comfort suppression.
+        const bool allowGrabTurn=callback==Callback::ApplyForceLookAtPawn && demo->session &&
+            script.Read<int>(demo->session,L"NativeAllowGrabTurn")==1;
+        if (allowGrabTurn && script.IsClass(object,L"KFPlayerInput") &&
+            script.FindFunction(object,L"ApplyForceLookAtPawn")==function) {
+            // Stock force-look writes both yaw and pitch. Its pitch is not an
+            // HMD delta, so HeadAim would retain it as a tilted body baseline
+            // after the grab ends. Keep stock yaw but preserve incoming pitch.
+            // Resolve the actual script out references: restoring VM locals
+            // alone does not restore the caller's DeltaRot.Pitch.
+            auto* yawOut=adapter::RPGOutParameter(function,stack,script.Intern(L"out_YawRot"),sizeof(std::int32_t));
+            auto* pitchOut=adapter::RPGOutParameter(function,stack,script.Intern(L"out_PitchRot"),sizeof(std::int32_t));
+            const auto yawAddress=reinterpret_cast<std::uintptr_t>(yawOut);
+            const auto pitchAddress=reinterpret_cast<std::uintptr_t>(pitchOut);
+            std::int32_t incomingPitch=0;
+            if (yawOut && pitchOut &&
+                (yawAddress+sizeof(incomingPitch)<=pitchAddress || pitchAddress+sizeof(incomingPitch)<=yawAddress) &&
+                adapter::GuardedCopy(&incomingPitch,pitchOut,sizeof(incomingPitch))) {
+                struct PreservePitch {
+                    void* address;
+                    std::int32_t value;
+                    ~PreservePitch() { adapter::GuardedCopy(address,&value,sizeof(value)); }
+                } preserve{pitchOut,incomingPitch};
+                ForwardProcessInternal(object,stack,result);
+                return;
+            }
+        }
+        // Missing/aliased output references fail closed, like disabled comfort
+        // turning. Never pass unbounded stock vertical adhesion through.
         if (Interesting(++demo->forcedLookSuppressions)) Log("VRComfort forcedLookSuppressed=%llu",
             static_cast<unsigned long long>(demo->forcedLookSuppressions));
         return;
@@ -1281,6 +1459,9 @@ void EnsureEyeResolution() {
         width=adapter::DlssRenderExtent(width,dlss.Mode());
         height=adapter::DlssRenderExtent(height,dlss.Mode());
     }
+    if (singlePass) width*=2; // Both eyes side by side in one target.
+    demo->stereo.SetSplitSubmit(singlePass && singlePassSplit,&SplitBeforeEye,&SplitAfterEye);
+    demo->stereo.SetSeparateRightState(singlePass && !singlePassSplit && singlePassSeparateState);
     if (!width || !height) return;
     unsigned currentWidth=0,currentHeight=0;
     std::memcpy(&currentWidth,static_cast<std::byte*>(viewport)+0xb4,4);
@@ -1877,7 +2058,9 @@ void UpdateSession(void* session) {
         left.aimPoseTracked && right.aimPoseTracked && left.triggerActive && right.triggerActive;
     const bool chord=chordActive && left.stickPressed && right.stickPressed && left.triggerAxis<.1f && right.triggerAxis<.1f &&
         std::abs(left.stickX)<.2f && std::abs(left.stickY)<.2f && std::abs(right.stickX)<.2f && std::abs(right.stickY)<.2f;
-    if (demo->sessionMenuInput.Update(fresh,left.menuActive || right.menuActive,menuDown,chordActive,chord,demo->frame.predictedDisplayTime)) {
+    const bool padHoldActive=right.menuHoldActive && right.aimPoseValid && right.aimPoseTracked && right.triggerActive;
+    const bool padHold=padHoldActive && right.menuHoldPressed && right.triggerAxis<.1f;
+    if (demo->sessionMenuInput.Update(fresh,left.menuActive || right.menuActive,menuDown,chordActive,chord,demo->frame.predictedDisplayTime,padHoldActive,padHold)) {
         CancelMenuPointer(); demo->menu.Recenter(); script.Write(session,L"NativeToggleRequested",1);
         return;
     }
@@ -2101,6 +2284,16 @@ void FreezeBenchmarkView(xr::FrameState& frame) {
 bool BeginDemoFrame(xr::FrameState& frame) {
     adapter::timing::Scope timing(adapter::timing::XrBegin);
     if (!demo->backend.BeginFrame(frame)) return false;
+    if (localDiagnosticRequested) {
+        // Block physical XR buttons/axes in menus and locomotion as well as
+        // weapon input. SupplyHands overlays only authenticated authored pulses.
+        const auto neutral=[](auto& hand) {
+            hand.triggerAxis=hand.gripAxis=hand.stickX=hand.stickY=0;
+            hand.primaryPressed=hand.secondaryPressed=hand.stickPressed=
+                hand.menuPressed=hand.menuHoldPressed=false;
+        };
+        neutral(frame.handLeft); neutral(frame.handRight);
+    }
     if (benchmarkFile) FreezeBenchmarkView(frame);
     return true;
 }
@@ -2114,7 +2307,10 @@ void HookSubmit(void* canvas,void* family) {
         ~DepthScope() { renderQueue.Enqueue([] {
             foregroundDepth=std::move(foregroundDepthStack.back()); foregroundDepthStack.pop_back(); }); }
     } depthScope;
-    const auto keepWorldDepth=[](bool keep) { renderQueue.Enqueue([keep] { foregroundDepth.Begin(keep); }); };
+    const auto keepWorldDepth=[](bool keep) {
+        keepWorldDepthRequested=keep;
+        renderQueue.Enqueue([keep] { foregroundDepth.Begin(keep); });
+    };
     const auto count=++families;
     if (Interesting(count)) Log("SubmitScene count=%llu canvas=%p family=%p caller_rva=%llx",count,canvas,family,
         static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(_ReturnAddress())-gameBase));
@@ -2131,6 +2327,27 @@ void HookSubmit(void* canvas,void* family) {
     }
     const bool localScene=demo && lastLocalFamily==family &&
         reinterpret_cast<uintptr_t>(_ReturnAddress())-gameBase==adapter::build::Rva(0x677831);
+    // World corpse skin data also belongs to desktop observers. The sequential
+    // eye loop below does not tick simulation between eyes; publish once on
+    // its left submission (single-pass also uses eyePass0), or desktop draw.
+    if (lastLocalFamily==family && (!demo || demo->eyePass!=1) &&
+        GetCurrentThreadId()==worldDrawThread.load(std::memory_order_acquire) &&
+        reinterpret_cast<uintptr_t>(_ReturnAddress())-gameBase==adapter::build::Rva(0x677831)) {
+        thread_local adapter::GameScript consumedScript(gameBase);
+        pinned::LocalWorldSnapshot consumedWorld{};
+        bool admitted=pinned::CheckStandaloneWorld(gameBase,reinterpret_cast<uintptr_t>(lastLocalPlayer),
+            [](uintptr_t source,void* target,size_t bytes) {
+                return adapter::GuardedCopy(target,reinterpret_cast<void*>(source),bytes);
+            },consumedWorld,adapter::build::Rva(pinned::kWorldPointerRva));
+        if (!admitted && networkRequested && consumedWorld.netMode==3) {
+            auto* controller=reinterpret_cast<void*>(consumedWorld.controller);
+            admitted=pinned::IsAdmittedNetworkClient(consumedWorld,networkRequested,
+                consumedScript.IsClass(controller,L"KF2VRNetPlayerController"),
+                consumedScript.Read<int>(controller,L"NativeNetworkReady"));
+        }
+        if (admitted) adapter::ApplyConsumedPieces(consumedScript,reinterpret_cast<void*>(consumedWorld.level),
+            reinterpret_cast<void*>(consumedWorld.worldInfo),gameBase);
+    }
     bool presentationFinalized=false;
     // reuseLeft: the right eye of an accepted pair keeps the left eye's
     // placement. Nothing ticks between the eyes and FinishRenderPair has
@@ -2235,7 +2452,7 @@ void HookSubmit(void* canvas,void* family) {
                             if (adapter::IsValidWorldViewOffset(offset)) demo->renderWorldViewOffset=offset;
                         }
                     }
-                    demo->stereo.SetSingleViewDiagnostic(true,demo->eyePass==1?1:0);
+                    demo->stereo.SetSingleViewDiagnostic(!singlePass,demo->eyePass==1?1:0);
                     if(demo->eyePass!=1 && (demo->frame.state!=xr::SessionState::Focused ||
                         (demo->session && demo->script.Read<float>(demo->session,L"NativeBlinkFX")>0)))
                         renderQueue.Enqueue([] { dlss.Reset(); });
@@ -2243,7 +2460,8 @@ void HookSubmit(void* canvas,void* family) {
                     if (dlssRenderActive) {
                         if (demo->eyePass!=1) {
                             const unsigned output=adapter::ScaledEyeExtent(demo->backend.RecommendedWidth(),eyeRenderPercent);
-                            dlssJitter=adapter::DlssJitterForPhase(++dlssPhase,demo->width.load(),output);
+                            dlssJitter=adapter::DlssJitterForPhase(++dlssPhase,
+                                singlePass ? demo->width.load()/2 : demo->width.load(),output);
                         }
                         demo->stereo.SetJitter(dlssJitter.x,dlssJitter.y);
                     } else { dlssJitter={}; demo->stereo.SetJitter(0,0); }
@@ -2254,6 +2472,8 @@ void HookSubmit(void* canvas,void* family) {
                             demo->gpuTimingSample=sample;demo->gpuTimingWidth=width;demo->gpuTimingHeight=height;
                         });
                     }
+                    if (singlePassOcclusion && !rightEyeLateState.load(std::memory_order_relaxed))
+                        rightEyeLateState.store(adapter::AllocateRightEyeViewState(gameBase),std::memory_order_release);
                     if (aimReady && demo->frame.shouldRender && demo->frame.viewsValid &&
                         demo->stereo.SubmitStereoPair(family,demo->frame,SubmitEye,canvas,gameBase,error,&applied,
                             demo->renderWorldViewOffset)) {
@@ -2283,7 +2503,8 @@ void HookSubmit(void* canvas,void* family) {
     finalizePresentation();
     originalSubmit(canvas,family);
 }
-bool SnapshotEye(unsigned eye,const adapter::DlssEyeInput& dlssInput={},unsigned dlssWidth=0,unsigned dlssHeight=0,bool requested=false) {
+bool SnapshotEye(unsigned eye,const adapter::DlssEyeInput& dlssInput={},unsigned dlssWidth=0,unsigned dlssHeight=0,bool requested=false,
+                 unsigned sourceX=0,unsigned sourceWidth=0,ID3D11Texture2D* eyeDepth=nullptr) {
     adapter::timing::Scope timing(adapter::timing::EyeCopy);
     if (!demo->ready) return false; // Queued before a stop that released the device.
     auto* swapchain=demo->ownerSwapchain.load(std::memory_order_acquire);
@@ -2291,6 +2512,10 @@ bool SnapshotEye(unsigned eye,const adapter::DlssEyeInput& dlssInput={},unsigned
     if (!swapchain || FAILED(swapchain->GetBuffer(0,IID_PPV_ARGS(&source)))) return false;
     D3D11_TEXTURE2D_DESC sourceDesc{}; source->GetDesc(&sourceDesc);
     if (eye>1 || sourceDesc.SampleDesc.Count!=1 || !sourceDesc.Width || !sourceDesc.Height || sourceDesc.Width>8192) return false;
+    // A sequential eye pass fills the target; a single-pass pair holds both eyes.
+    if (!sourceWidth) { sourceX=0; sourceWidth=sourceDesc.Width; }
+    if (sourceX>sourceDesc.Width || sourceWidth>sourceDesc.Width-sourceX) return false;
+    const D3D11_BOX sourceBox{sourceX,0,0,sourceX+sourceWidth,sourceDesc.Height,1};
     // Own a shader-readable atlas so XR can sample the two completed copies
     // directly. The pixels retain the existing display-encoded sRGB policy;
     // typeless storage permits the explicit sRGB view without another copy.
@@ -2313,8 +2538,8 @@ bool SnapshotEye(unsigned eye,const adapter::DlssEyeInput& dlssInput={},unsigned
     if(!requested) {
     D3D11_TEXTURE2D_DESC atlasDesc{};
     if (demo->eyeAtlas) demo->eyeAtlas->GetDesc(&atlasDesc);
-    if (!demo->eyeAtlas || !demo->eyeAtlasView || atlasDesc.Width!=sourceDesc.Width*2 || atlasDesc.Height!=sourceDesc.Height || atlasDesc.Format!=storageFormat) {
-        atlasDesc=sourceDesc; atlasDesc.Width*=2; atlasDesc.MipLevels=1; atlasDesc.ArraySize=1;
+    if (!demo->eyeAtlas || !demo->eyeAtlasView || atlasDesc.Width!=sourceWidth*2 || atlasDesc.Height!=sourceDesc.Height || atlasDesc.Format!=storageFormat) {
+        atlasDesc=sourceDesc; atlasDesc.Width=sourceWidth*2; atlasDesc.MipLevels=1; atlasDesc.ArraySize=1;
         atlasDesc.Format=storageFormat; atlasDesc.SampleDesc={1,0};
         atlasDesc.Usage=D3D11_USAGE_DEFAULT; atlasDesc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
         atlasDesc.CPUAccessFlags=0; atlasDesc.MiscFlags=0;
@@ -2327,7 +2552,7 @@ bool SnapshotEye(unsigned eye,const adapter::DlssEyeInput& dlssInput={},unsigned
         demo->eyeAtlasView=view;
         demo->eyeAtlas=atlas;
     }
-    demo->backend.Context()->CopySubresourceRegion(demo->eyeAtlas.Get(),0,eye*sourceDesc.Width,0,0,source.Get(),0,nullptr);
+    demo->backend.Context()->CopySubresourceRegion(demo->eyeAtlas.Get(),0,eye*sourceWidth,0,0,source.Get(),0,&sourceBox);
     return SUCCEEDED(demo->backend.Device()->GetDeviceRemovedReason());
     }
     // Retain the complete source eyes until both evaluations have finished.
@@ -2337,14 +2562,15 @@ bool SnapshotEye(unsigned eye,const adapter::DlssEyeInput& dlssInput={},unsigned
     if(eye==0) render.dlssSucceeded={};
     auto& saved=render.sourceEyes[eye];
     D3D11_TEXTURE2D_DESC savedDesc{};if(saved) saved->GetDesc(&savedDesc);
-    if(!saved || savedDesc.Width!=sourceDesc.Width || savedDesc.Height!=sourceDesc.Height || savedDesc.Format!=storageFormat) {
-        savedDesc=sourceDesc;savedDesc.Format=storageFormat;savedDesc.MipLevels=savedDesc.ArraySize=1;
+    if(!saved || savedDesc.Width!=sourceWidth || savedDesc.Height!=sourceDesc.Height || savedDesc.Format!=storageFormat) {
+        savedDesc=sourceDesc;savedDesc.Width=sourceWidth;savedDesc.Format=storageFormat;savedDesc.MipLevels=savedDesc.ArraySize=1;
         savedDesc.Usage=D3D11_USAGE_DEFAULT;savedDesc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
         savedDesc.CPUAccessFlags=savedDesc.MiscFlags=0;saved.Reset();
         if(FAILED(demo->backend.Device()->CreateTexture2D(&savedDesc,nullptr,&saved))) return false;
     }
     auto* context=demo->backend.Context();
-    context->CopyResource(saved.Get(),source.Get());
+    context->CopySubresourceRegion(saved.Get(),0,0,0,0,source.Get(),0,&sourceBox);
+    ID3D11Texture2D* depth=eyeDepth ? eyeDepth : render.sceneDepth.Get();
     if(!dlssInput.valid) { dlss.Fail("Missing eye matrices for DLSS pair");dlss.Reset(); }
     if(dlssInput.valid) {
         std::string error;
@@ -2352,7 +2578,7 @@ bool SnapshotEye(unsigned eye,const adapter::DlssEyeInput& dlssInput={},unsigned
         auto& output=render.dlssOutput[eye];D3D11_TEXTURE2D_DESC d{};if(output) output->GetDesc(&d);
         if(!dlssWidth || !dlssHeight || dlssWidth>8192 || dlssHeight>8192) error="DLSS output size refused";
         else if(format==DXGI_FORMAT_UNKNOWN) error="DLSS requires RGBA8 eye colour";
-        else if(!render.sceneDepth) error="Fresh scene depth not observed for this eye";
+        else if(!depth) error="Fresh scene depth not observed for this eye";
         else {
             if(!output || d.Width!=dlssWidth || d.Height!=dlssHeight || d.Format!=format) {
                 d={};d.Width=dlssWidth;d.Height=dlssHeight;d.MipLevels=d.ArraySize=d.SampleDesc.Count=1;
@@ -2360,7 +2586,7 @@ bool SnapshotEye(unsigned eye,const adapter::DlssEyeInput& dlssInput={},unsigned
                 output.Reset();
                 if(FAILED(demo->backend.Device()->CreateTexture2D(&d,nullptr,&output))) error="DLSS output allocation failed";
             }
-            if(error.empty()) render.dlssSucceeded[eye]=dlss.Evaluate(demo->backend.Device(),context,eye,source.Get(),render.sceneDepth.Get(),output.Get(),dlssInput,error);
+            if(error.empty()) render.dlssSucceeded[eye]=dlss.Evaluate(demo->backend.Device(),context,eye,source.Get(),depth,output.Get(),dlssInput,error);
         }
         if(!render.dlssSucceeded[eye]) {
             dlss.Fail(error);dlss.Reset();
@@ -2408,6 +2634,61 @@ void QueueEyeSnapshot(unsigned eye) {
         if (!demo->render.eyeCopied[eye]) Log("Eye snapshot failed: %s",eye?"right":"left");
     });
 }
+// Single-pass split submission: each eye's renderer starts its own foreground
+// depth preservation and leaves its depth behind for DLSS, because the next
+// eye's renderer clears the shared depth target.
+void CopyEyeDepth(unsigned eye) {
+    auto& depth=demo->render.sceneDepth;
+    if (!demo->ready || !depth || eye>1) return;
+    D3D11_TEXTURE2D_DESC d{}; depth->GetDesc(&d);
+    auto& copy=demo->render.eyeDepth[eye];
+    D3D11_TEXTURE2D_DESC c{}; if (copy) copy->GetDesc(&c);
+    if (!copy || c.Width!=d.Width || c.Height!=d.Height || c.Format!=d.Format) {
+        c=d; c.BindFlags=D3D11_BIND_SHADER_RESOURCE; c.CPUAccessFlags=0; c.MiscFlags=0; c.Usage=D3D11_USAGE_DEFAULT;
+        if (d.Format==DXGI_FORMAT_D24_UNORM_S8_UINT) c.Format=DXGI_FORMAT_R24G8_TYPELESS;
+        copy.Reset();
+        if (FAILED(demo->backend.Device()->CreateTexture2D(&c,nullptr,&copy))) { copy.Reset(); return; }
+    }
+    demo->backend.Context()->CopyResource(copy.Get(),depth.Get());
+}
+void SplitBeforeEye(unsigned eye) {
+    if (eye==1) renderQueue.Enqueue([keep=keepWorldDepthRequested] { foregroundDepth.Begin(keep); });
+}
+void SplitAfterEye(unsigned eye) {
+    if (dlssRenderActive) renderQueue.Enqueue([eye] { CopyEyeDepth(eye); });
+}
+// Single-pass stereo: both eyes from one submission, side by side.
+void QueuePairSnapshot() {
+    std::array<adapter::DlssEyeInput,2> inputs{};
+    unsigned outputWidth=0,outputHeight=0;
+    const auto& atlas=demo->stereo.LastAtlas();
+    const unsigned eyeWidth=atlas.left.width;
+    if (dlssRenderActive && demo->stereo.LastPairValid() && atlas.left.x==0 && atlas.left.y==0 && eyeWidth &&
+        atlas.right.x==eyeWidth && atlas.right.y==0 && atlas.right.width==eyeWidth && atlas.left.height) {
+        for (unsigned eye=0;eye<2;++eye) {
+            auto& input=inputs[eye];
+            input.view=demo->stereo.LastPair()[eye].view;
+            input.projection=demo->stereo.LastPair()[eye].projection;
+            input.jitter=dlssJitter;
+            input.renderX=eye*eyeWidth; input.renderWidth=eyeWidth; input.renderHeight=atlas.left.height;
+            input.valid=true;
+        }
+        outputWidth=adapter::ScaledEyeExtent(demo->backend.RecommendedWidth(),eyeRenderPercent);
+        outputHeight=adapter::ScaledEyeExtent(demo->backend.RecommendedHeight(),eyeRenderPercent);
+    }
+    const bool requested=dlssRenderActive;
+    renderQueue.Enqueue([inputs,outputWidth,outputHeight,eyeWidth,requested] {
+        // Both evaluations use this pair's depth; SnapshotEye consumes the
+        // shared observation after each eye to prevent stale-frame reuse.
+        const auto pairDepth=demo->render.sceneDepth;
+        for (unsigned eye=0;eye<2;++eye) {
+            auto* depth=singlePassSplit ? demo->render.eyeDepth[eye].Get() : pairDepth.Get();
+            demo->render.eyeCopied[eye]=SnapshotEye(eye,inputs[eye],outputWidth,outputHeight,requested,eye*eyeWidth,eyeWidth,depth);
+            if (!demo->render.eyeCopied[eye]) Log("Single-pass eye snapshot failed: %s",eye?"right":"left");
+        }
+        demo->render.eyeDepth={};
+    });
+}
 // Hand this frame's game-side state to Present, behind every draw it describes.
 void QueueFramePacket(bool needsEyes) {
     FramePacket packet;
@@ -2419,19 +2700,9 @@ void QueueFramePacket(bool needsEyes) {
     auto& script=demo->script;
     auto& effects=packet.effects;
     if (packet.atlasReady && demo->session && !demo->menuFrame) {
-        effects.puke=script.Read<float>(demo->session,L"NativePukeFX");
-        effects.fire=script.Read<float>(demo->session,L"NativeFireFX");
-        effects.damage=script.Read<float>(demo->session,L"NativeDamageFX");
-        effects.blood=script.Read<float>(demo->session,L"NativeBloodFX");
-        effects.heal=script.Read<float>(demo->session,L"NativeHealFX");
-        effects.energy=script.Read<float>(demo->session,L"NativeEnergyFX");
-        effects.rage=script.Read<float>(demo->session,L"NativeRageFX");
-        effects.flash=script.Read<float>(demo->session,L"NativeFlashFX");
+        // The compositor ignores retired status/focus channels; only blink is consumed.
         effects.blink=script.Read<float>(demo->session,L"NativeBlinkFX");
-        effects.nightVision=float(script.Read<int>(demo->session,L"NativeNightVision"));
     }
-    if (packet.atlasReady && demo->handsBridge && !demo->menuFrame)
-        effects.focus=script.Read<float>(demo->handsBridge,L"NativeFocusFX");
     if (benchmarkFile) {
         packet.benchmarkPhase=demo->handsBridge?script.Read<int>(demo->handsBridge,L"NativeBenchmarkPhase"):0;
         packet.pawnLocation=script.Read<kf2vr::Vec3>(demo->controlledPawn,L"Location");
@@ -2464,6 +2735,8 @@ struct GameMenuRenderSink final : adapter::MenuRenderSink {
         return Stage(L"BeginMenuWorldRender",1);
     }
     bool WorldEye(unsigned eye) override {
+        // Single-pass stereo draws both backdrop eyes in the left eye's pass.
+        if (singlePass && eye==1) return worldEyes==2;
         demo->eyePass=static_cast<int>(eye); demo->atlasReady=false;
         drewViewport=true;
         {
@@ -2471,7 +2744,8 @@ struct GameMenuRenderSink final : adapter::MenuRenderSink {
             originalViewportDraw(client,viewport,canvas);
         }
         const bool okay=demo->pending && demo->atlasReady && !demo->failed && generation==demo->resizeGeneration;
-        if (okay) { QueueEyeSnapshot(eye); ++worldEyes; }
+        if (okay && singlePass) { QueuePairSnapshot(); worldEyes+=2; }
+        else if (okay) { QueueEyeSnapshot(eye); ++worldEyes; }
         return okay;
     }
     bool BeginImage() override {
@@ -2656,6 +2930,14 @@ void HookViewportDraw(void* client,void* viewport,void* canvas) {
         demo->eyePass=-1; demo->atlasReady=false; return;
     }
     needsEyes=true;
+    if (singlePass) {
+        // One viewport draw submitted both eyes.
+        QueuePairSnapshot();
+        demo->eyePass=-1;
+        if (Interesting(++singlePassPairs)) Log("StereoPair sample=%llu eyeCount=2 nativeSubmits=1 singlePass=1 pairs=%llu",
+            static_cast<unsigned long long>(demo->frame.poseSampleId),static_cast<unsigned long long>(singlePassPairs));
+        return;
+    }
     QueueEyeSnapshot(0);
     demo->eyePass=1; demo->atlasReady=false;
     {
@@ -2670,7 +2952,11 @@ void HookViewportDraw(void* client,void* viewport,void* canvas) {
         static_cast<unsigned long long>(demo->frame.poseSampleId));
 }
 DWORD WINAPI HookGetPad(DWORD index,XINPUT_STATE* state) {
-    if (index==0 && virtualPadEnabled.load(std::memory_order_acquire)) {
+    if (localDiagnosticRequested && index!=0) {
+        if (state) *state={};
+        return state?ERROR_DEVICE_NOT_CONNECTED:ERROR_BAD_ARGUMENTS;
+    }
+    if (index==0 && (localDiagnosticRequested || virtualPadEnabled.load(std::memory_order_acquire))) {
         if (!state) return ERROR_BAD_ARGUMENTS;
         *state={}; // Native callbacks own VR input; avoid duplicate pad events.
         const auto result=ERROR_SUCCESS;
@@ -2686,6 +2972,10 @@ DWORD WINAPI HookGetPad(DWORD index,XINPUT_STATE* state) {
     return originalGetPad(index,state);
 }
 DWORD WINAPI HookGetPadCaps(DWORD index,DWORD flags,XINPUT_CAPABILITIES* caps) {
+    if (localDiagnosticRequested && index!=0) {
+        if (caps) *caps={};
+        return caps?ERROR_DEVICE_NOT_CONNECTED:ERROR_BAD_ARGUMENTS;
+    }
     if (index==0 && virtualPadEnabled.load(std::memory_order_acquire)) return demo->gamepad.GetCapabilities(index,flags,caps);
     return originalGetPadCaps(index,flags,caps);
 }
@@ -2725,7 +3015,10 @@ void StopDemoRuntime() {
     demo->blit.Shutdown();
     demo->eyeAtlasView.Reset();
     demo->eyeAtlas.Reset();
-    demo->render.sceneDepth.Reset(); demo->render.dlssOutput={}; demo->render.sourceEyes={};
+    demo->render.sceneDepth.Reset(); demo->render.dlssOutput={}; demo->render.sourceEyes={}; demo->render.eyeDepth={};
+    singlePassPairViews=nullptr; singlePassRenderer=nullptr; gameContext=nullptr; foregroundDepth.ClearEyes();
+    ResetStereoRenderResources(); rightEyeLateState.store(nullptr,std::memory_order_release);
+    occlusionConstantsFailed.store(false,std::memory_order_release);
     dlss.Shutdown();
     demo->backend.Shutdown(); demo->ready=false;
     // Keep the virtual pad connected but neutral to balance held input release.
@@ -3044,7 +3337,7 @@ HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* swapchain,UINT interval,UI
     // present and one line every 5 s, so "what frame rate did you get" is
     // answered without the opt-in stage timers or GPU queries. Owner-thread
     // only, like the full timers, so plain statics are safe.
-    if (!adapter::timing::enabled && !(flags&DXGI_PRESENT_TEST) && stereoRequested && demo &&
+    if (verboseLog && !adapter::timing::enabled && !(flags&DXGI_PRESENT_TEST) && stereoRequested && demo &&
         swapchain==demo->ownerSwapchain.load(std::memory_order_acquire) &&
         GetCurrentThreadId()==demo->ownerThread.load(std::memory_order_acquire)) {
         static adapter::timing::Intervals pacing;
@@ -3161,7 +3454,8 @@ HRESULT STDMETHODCALLTYPE HookResize(IDXGISwapChain* swapchain,UINT count,UINT w
         demo->blit.OnResize();
         demo->eyeAtlasView.Reset();
         demo->eyeAtlas.Reset();
-        dlss.Reset(); demo->render.sceneDepth.Reset();
+        ResetStereoRenderResources();
+        dlss.Reset(); demo->render.sceneDepth.Reset(); demo->render.eyeDepth={};
         demo->gamepad.Cancel();
         // A frame built for the old surface can never sample the resized one.
         // No eye image has been rendered before Present, so this ends zero layers.
@@ -3188,12 +3482,39 @@ void STDMETHODCALLTYPE HookClearDepth(ID3D11DeviceContext* context,ID3D11DepthSt
     if (OnRenderCommandThread() && foregroundDepth.Filter(context,view,flags,depth,stencil) &&
         Interesting(++preservedForegroundDepth))
         Log("Foreground world depth preserved count=%llu",static_cast<unsigned long long>(preservedForegroundDepth));
-    originalClearDepth(context,view,flags,depth,stencil);
+    if (flags) originalClearDepth(context,view,flags,depth,stencil);
+}
+// D3D11 RHIClear (0xcb60e0, RHI slot 0x7b8: rhi, bClearColor, color, bClearDepth,
+// depth, bClearStencil, stencil) clears with ClearDepthStencilView only when the
+// viewport covers the whole target; otherwise it draws a clear quad. In
+// single-pass every eye clear covers half the two-eye target, so the foreground
+// depth clear never reached HookClearDepth and DLSS lost world depth: its
+// motion vectors treated the world as infinitely far, which is right for head
+// rotation only, so the image softened while moving. Eye clears go through the
+// same guard here.
+using RhiClearFn=void(*)(void*,std::uint32_t,const float*,std::uint32_t,float,std::uint32_t,std::uint32_t);
+RhiClearFn originalRhiClear=nullptr;
+std::uint64_t preservedEyeDepth=0;
+void HookRhiClear(void* rhi,std::uint32_t clearColor,const float* color,std::uint32_t clearDepth,float depth,
+                  std::uint32_t clearStencil,std::uint32_t stencil) {
+    if (clearDepth && OnRenderCommandThread() && gameContext) {
+        ComPtr<ID3D11RenderTargetView> target; ComPtr<ID3D11DepthStencilView> bound;
+        gameContext->OMGetRenderTargets(1,&target,&bound);
+        UINT flags=D3D11_CLEAR_DEPTH|(clearStencil ? D3D11_CLEAR_STENCIL : 0u);
+        const bool kept=bound && foregroundDepth.Filter(gameContext,bound.Get(),flags,depth,static_cast<UINT8>(stencil))
+            && !(flags&D3D11_CLEAR_DEPTH);
+        if (kept) {
+            clearDepth=0;
+            if (Interesting(++preservedEyeDepth)) Log("SinglePass eye world depth preserved count=%llu",
+                static_cast<unsigned long long>(preservedEyeDepth));
+            if (!clearColor && !clearStencil) return;
+        }
+    }
+    originalRhiClear(rhi,clearColor,color,clearDepth,depth,clearStencil,stencil);
 }
 void STDMETHODCALLTYPE HookClearColor(ID3D11DeviceContext* context,ID3D11RenderTargetView* view,const FLOAT* rgba) {
     if (OnHudRenderThread()) {
         if(selectorDiagnostics && selectorClears<64) TraceSelectorTarget(context,view,"clear",false,rgba);
-        hudTextAlpha.Clear(context,view,rgba);
     }
     originalClearColor(context,view,rgba);
 }
@@ -3209,6 +3530,10 @@ void NoteSceneDepth(UINT count,ID3D11RenderTargetView* const* targets,ID3D11Dept
     demo->render.sceneDepth=depthTexture;
 }
 void STDMETHODCALLTYPE HookSetTargets(ID3D11DeviceContext* context,UINT count,ID3D11RenderTargetView* const* targets,ID3D11DepthStencilView* depth) {
+    if (singlePass && OnRenderCommandThread() && context->GetType()==D3D11_DEVICE_CONTEXT_IMMEDIATE && demo && demo->ready) {
+        ComPtr<ID3D11Device> device; context->GetDevice(&device);
+        if(device.Get()==demo->backend.Device()) gameContext=context;
+    }
     if (OnHudRenderThread()) {
         hudTextAlpha.Targets(context,count,targets);
         if(demo && dlss.Active()) NoteSceneDepth(count,targets,depth);
@@ -3225,6 +3550,39 @@ void STDMETHODCALLTYPE HookDrawIndexed(ID3D11DeviceContext* context,UINT count,U
         }
     }
     if (alpha.context && Interesting(++hudAlphaDraws)) Log("HUD text alpha corrected draw=%llu",static_cast<unsigned long long>(hudAlphaDraws));
+    if (OnRenderCommandThread() && context==gameContext && leftOcclusionTests) {
+        if (occlusionConstantsFailed.load(std::memory_order_acquire)) return;
+        if (leftQueryConstantsPending) {
+            leftQueryConstantsPending=false;
+            ComPtr<ID3D11Buffer> constants; context->VSGetConstantBuffers(1,1,&constants);
+            D3D11_BUFFER_DESC d{}; if(constants) constants->GetDesc(&d);
+            bool written=false;
+            // UpdateSubresource reads the complete buffer; WRITE_DISCARD also
+            // invalidates its tail. The shadow contains exactly 0xa0 bytes.
+            if(constants && d.ByteWidth==leftQueryConstants.size()) {
+                if(d.Usage==D3D11_USAGE_DYNAMIC && (d.CPUAccessFlags&D3D11_CPU_ACCESS_WRITE)) {
+                    D3D11_MAPPED_SUBRESOURCE map{};
+                    if(SUCCEEDED(context->Map(constants.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&map))) {
+                        std::memcpy(map.pData,leftQueryConstants.data(),leftQueryConstants.size());
+                        context->Unmap(constants.Get(),0); written=true;
+                    }
+                } else if(d.Usage==D3D11_USAGE_DEFAULT) {
+                    context->UpdateSubresource(constants.Get(),0,nullptr,leftQueryConstants.data(),0,0); written=true;
+                }
+            }
+            if(!written) {
+                occlusionConstantsFailed.store(true,std::memory_order_release);
+                Log("SinglePass query constants unavailable; returning to frustum culling"); return;
+            }
+            leftQueryConstantsReady=true;
+            if(Interesting(++queryConstantWrites)) Log("SinglePass left-eye query constants written count=%llu",
+                static_cast<unsigned long long>(queryConstantWrites));
+        }
+        if(!leftQueryConstantsReady) {
+            occlusionConstantsFailed.store(true,std::memory_order_release);
+            Log("SinglePass query constants not captured; returning to frustum culling"); return;
+        }
+    }
     originalDrawIndexed(context,count,start,base);
 }
 // KFGame's FBatchedElements quad path (0x8bc6cd) calls RHI slot 0x758.
@@ -3242,6 +3600,492 @@ void STDMETHODCALLTYPE HookDraw(ID3D11DeviceContext* context,UINT count,UINT sta
         }
     }
     originalDraw(context,count,start);
+}
+// FSceneRenderer lighting for one depth-priority group (KFGame.exe 0x911620):
+// renderer, DPG, accumulated result flags. Views TArray: data +0x6c, count
+// +0x74; FViewInfo stride 0x1380 (base pass loop, 0x90fbd2).
+using RenderLightingFn=void(*)(void*,std::int32_t,std::uint32_t*);
+RenderLightingFn originalRenderLighting=nullptr;
+void HookRenderLighting(void* renderer,std::int32_t dpg,std::uint32_t* flags) {
+    constexpr std::size_t viewsData=0x6c, viewsCount=0x74, viewStride=0x1380;
+    if (singlePass && !singlePassStockLighting && renderer && dpg==1) {
+        auto* base=static_cast<std::byte*>(renderer);
+        std::byte* views=nullptr;std::int32_t count=0;
+        std::memcpy(&views,base+viewsData,sizeof(views));std::memcpy(&count,base+viewsCount,sizeof(count));
+        if (views && count==2) {
+            // Restore the renderer's own view array on every exit path.
+            struct Restore {
+                std::byte* base; std::byte* views; std::int32_t count;
+                ~Restore() { std::memcpy(base+0x6c,&views,sizeof(views));std::memcpy(base+0x74,&count,sizeof(count)); }
+            } restore{base,views,count};
+            for (std::int32_t i=0;i<count;++i) {
+                std::byte* one=views+static_cast<std::size_t>(i)*viewStride;
+                const std::int32_t single=1;
+                std::memcpy(base+viewsData,&one,sizeof(one));std::memcpy(base+viewsCount,&single,sizeof(single));
+                originalRenderLighting(renderer,dpg,flags);
+            }
+            if (Interesting(++singlePassLightingSplits))
+                Log("SinglePass lighting split count=%llu views=2",static_cast<unsigned long long>(singlePassLightingSplits));
+            return;
+        }
+    }
+    originalRenderLighting(renderer,dpg,flags);
+}
+// FSceneRenderer::InitViews (KFGame.exe 0x909480). With one view and two
+// settings gates (0x1fbafec == 0, 0x1ec2388 != 0) KF2 replaces the stock
+// UE3 visibility code with its own path (0x3669a0 -> 0x36b210); any other view
+// count falls back to the stock path, which mishandles the mod's unlit
+// surfaces and flickers the second view. For a single-pass pair, run KF2's own
+// path for both views: per view visibility (0x36b490) and setup (0x360a30) and
+// the four per-DPG translucency sorts (0x950320), then the family steps once
+// (0x904df0, the 0x8f95e0-gated shadow setup 0x949970 over both views, and
+// the tail 0x8c2a20 whose result is returned).
+using InitViewsFn=std::uint64_t(*)(void*);
+InitViewsFn originalInitViews=nullptr;
+std::uint64_t singlePassVisibilityPairs=0,singlePassHiZOff=0;
+// FSceneRenderer::Render (Steam 0x90ef10) runs InitViews and all world passes.
+// The dispatcher destroys its views after this call. Scope the fork's borrowed
+// array here, and restore the parent's state if a scene render nests inside it.
+using RenderSceneFn=void(*)(void*);
+RenderSceneFn originalRenderScene=nullptr;
+void HookRenderScene(void* renderer) {
+    if(!OnRenderCommandThread()) { originalRenderScene(renderer); return; }
+    struct Restore {
+        std::byte* views=singlePassPairViews;
+        void* renderer=singlePassRenderer;
+        ID3D11DeviceContext* context=gameContext;
+        adapter::ForegroundDepth depth=foregroundDepth;
+        const std::byte* ssrView=ssrEyeView;
+        bool ssrFailed=ssrPairFailed,occlusion=leftOcclusionTests,pending=leftQueryConstantsPending,queryReady=leftQueryConstantsReady;
+        std::array<std::byte,0xa0> query=leftQueryConstants;
+        HbaoPendingPair aoPair=hbaoPending;
+        // HiZ is incompatible with a two-eye atlas. Scope its suppression so
+        // the player's settings and nested renderer's previous value survive.
+        volatile std::int32_t* hiz=reinterpret_cast<volatile std::int32_t*>(gameBase+0x1ec2398);
+        std::int32_t hizValue=*hiz;
+        ~Restore() {
+            singlePassPairViews=views; singlePassRenderer=renderer;
+            gameContext=context; foregroundDepth=std::move(depth);
+            ssrEyeView=ssrView; ssrPairFailed=ssrFailed; leftOcclusionTests=occlusion;
+            leftQueryConstantsPending=pending; leftQueryConstantsReady=queryReady; leftQueryConstants=query;
+            hbaoPending=std::move(aoPair); *hiz=hizValue;
+        }
+    } restore;
+    singlePassPairViews=nullptr;
+    singlePassRenderer=renderer;
+    ssrEyeView=nullptr; ssrPairFailed=false; hbaoPending={};
+    leftOcclusionTests=false; leftQueryConstantsPending=false; leftQueryConstantsReady=false;
+    foregroundDepth.ClearEyes();
+    originalRenderScene(renderer);
+}
+// DrawDenormalizedQuad (0x8e1bb0): X, Y, SizeX, SizeY, U, V, SizeU, SizeV,
+// TargetSizeX, TargetSizeY, TextureSizeX, TextureSizeY, ClipZ. Positions are
+// pixels relative to the viewport. Some KF2 passes (SPH fluid gore, the
+// directional moonlight) set the viewport to the view rectangle but pass the
+// view's own RenderTargetX as X. That only works for a view at x=0: the right
+// eye's quads landed just past its viewport and never drew. Such quads are
+// moved back while the viewport is exactly the right eye's rectangle.
+using QuadFn=void(*)(float,float,float,float,float,float,float,float,
+                     std::uint32_t,std::uint32_t,std::uint32_t,std::uint32_t,float);
+QuadFn originalQuad=nullptr;
+std::uint64_t rightEyeQuadFixes=0;
+void HookQuad(float x,float y,float sizeX,float sizeY,float u,float v,float sizeU,float sizeV,
+              std::uint32_t targetX,std::uint32_t targetY,std::uint32_t textureX,std::uint32_t textureY,float clipZ) {
+    if (std::byte* views=singlePassPairViews; views && gameContext) {
+        std::int32_t rx=0,ry=0; std::uint32_t w=0,h=0;
+        std::byte* right=views+0x1380;
+        std::memcpy(&rx,right+0x6c,4);std::memcpy(&ry,right+0x70,4);
+        std::memcpy(&w,right+0x74,4);std::memcpy(&h,right+0x78,4);
+        if (rx>0 && targetX==w && targetY==h && std::fabs(x-static_cast<float>(rx))<0.5f) {
+            D3D11_VIEWPORT viewport{}; UINT viewports=1;
+            gameContext->RSGetViewports(&viewports,&viewport);
+            if (viewports==1 && std::fabs(viewport.TopLeftX-static_cast<float>(rx))<0.5f &&
+                std::fabs(viewport.Width-static_cast<float>(w))<0.5f) {
+                x-=static_cast<float>(rx); y-=static_cast<float>(ry);
+                if (Interesting(++rightEyeQuadFixes)) Log("SinglePass right-eye quad moved into its viewport count=%llu",
+                    static_cast<unsigned long long>(rightEyeQuadFixes));
+            }
+        }
+    }
+    originalQuad(x,y,sizeX,sizeY,u,v,sizeU,sizeV,targetX,targetY,textureX,textureY,clipZ);
+}
+// Shadow projection for one light (0x935340: renderer, light, shadow list
+// TArray<FProjectedShadowInfo*>*, ...). Whole-scene shadows such as the
+// moonlight are fitted to one dependent view (shadow+0xa0) and carry a fade
+// per view (FadeAlphas: inline TArray, storage +0x518, heap pointer +0x520,
+// count +0x528) sized for that view alone. The projection loop skips views
+// other than the dependent one and reads FadeAlphas[view index], so the right
+// eye had no moonlight shadows. The eyes are 6 cm apart, so the left eye's
+// shadow also covers the right: while it projects, it has no dependent view
+// and a two-view fade array (a local buffer) holding the left eye's fade.
+using ShadowProjectionFn=std::uint64_t(*)(void*,void*,void*,std::uint64_t,std::uint64_t);
+ShadowProjectionFn originalShadowProjection=nullptr;
+std::uint64_t sharedEyeShadows=0;
+std::uint64_t HookShadowProjection(void* renderer,void* light,void* list,std::uint64_t dpg,std::uint64_t flag) {
+    constexpr int kMax=32;
+    // Right eye relevance: VisibleLightInfos (view+0x9f8, stride 0xc4) of the
+    // light (+0x17c id), ProjectedShadowViewRelevance dwords (+0xb4 data, +0xbc
+    // count) indexed by the shadow id (+0xa8); the projection (0x9313f0) needs
+    // bit 8 and the DPG bit, which setup left clear for a left-eye shadow.
+    struct Saved {
+        std::byte* shadow; void* dependent; float* fades; std::int32_t count; float pair[2];
+        std::byte* rightInfo; std::uint32_t* relevance; std::int32_t relevanceCount;
+        std::int32_t id; std::uint32_t oldValue; bool swapped; std::uint32_t local[64];
+    };
+    Saved saved[kMax]; int savedCount=0;
+    if (std::byte* views=singlePassPairViews; views && list) {
+        std::byte** shadows=nullptr; std::int32_t count=0;
+        std::memcpy(&shadows,list,sizeof(shadows));std::memcpy(&count,static_cast<std::byte*>(list)+8,sizeof(count));
+        for (std::int32_t i=0;shadows && i<count && savedCount<kMax;++i) {
+            std::byte* shadow=shadows[i];
+            if (!shadow) continue;
+            void* dependent=nullptr; float* fades=nullptr; std::int32_t fadeCount=0;
+            std::memcpy(&dependent,shadow+0xa0,sizeof(dependent));
+            std::memcpy(&fades,shadow+0x520,sizeof(fades));std::memcpy(&fadeCount,shadow+0x528,sizeof(fadeCount));
+            if (dependent!=views) continue;
+            if (fadeCount<1) continue;
+            const float left=(fades ? fades : reinterpret_cast<float*>(shadow+0x518))[0];
+            Saved& entry=saved[savedCount++];
+            entry={shadow,dependent,fades,fadeCount,{left,left},nullptr,nullptr,0,-1,0,false,{}};
+            std::int32_t lightId=-1,id=-1;
+            std::memcpy(&lightId,static_cast<std::byte*>(light)+0x17c,sizeof(lightId));
+            std::memcpy(&id,shadow+0xa8,sizeof(id));
+            std::byte* infos[2]{}; std::int32_t infoCounts[2]{};
+            for (int eye=0;eye<2;++eye) {
+                std::memcpy(&infos[eye],views+eye*0x1380+0x9f8,sizeof(infos[eye]));
+                std::memcpy(&infoCounts[eye],views+eye*0x1380+0xa00,sizeof(infoCounts[eye]));
+            }
+            if (lightId>=0 && id>=0 && infos[0] && infos[1] && lightId<infoCounts[0] && lightId<infoCounts[1]) {
+                std::byte* leftInfo=infos[0]+lightId*0xc4; std::byte* rightInfo=infos[1]+lightId*0xc4;
+                std::uint32_t* leftRel=nullptr; std::int32_t leftCount=0;
+                std::uint32_t* rightRel=nullptr; std::int32_t rightCount=0;
+                std::memcpy(&leftRel,leftInfo+0xb4,sizeof(leftRel));std::memcpy(&leftCount,leftInfo+0xbc,sizeof(leftCount));
+                std::memcpy(&rightRel,rightInfo+0xb4,sizeof(rightRel));std::memcpy(&rightCount,rightInfo+0xbc,sizeof(rightCount));
+                if (leftRel && id<leftCount) {
+                    entry.rightInfo=rightInfo; entry.relevance=rightRel; entry.relevanceCount=rightCount; entry.id=id;
+                    if (rightRel && id<rightCount) {
+                        entry.oldValue=rightRel[id]; rightRel[id]=leftRel[id];
+                    } else if (leftCount<=64) {
+                        for (std::int32_t k=0;k<leftCount;++k) entry.local[k]=rightRel && k<rightCount ? rightRel[k] : 0;
+                        entry.local[id]=leftRel[id]; entry.swapped=true;
+                        std::uint32_t* local=entry.local;
+                        std::memcpy(rightInfo+0xb4,&local,sizeof(local));std::memcpy(rightInfo+0xbc,&leftCount,sizeof(leftCount));
+                    } else entry.rightInfo=nullptr;
+                }
+            }
+            float* pair=entry.pair; const std::int32_t two=2; void* none=nullptr;
+            std::memcpy(shadow+0xa0,&none,sizeof(none));
+            std::memcpy(shadow+0x520,&pair,sizeof(pair));
+            std::memcpy(shadow+0x528,&two,sizeof(two));
+        }
+        if (savedCount && Interesting(++sharedEyeShadows))
+            Log("SinglePass left-eye shadow projected into both eyes count=%llu shadows=%d",
+                static_cast<unsigned long long>(sharedEyeShadows),savedCount);
+    }
+    struct Restore {
+        Saved* saved; int count;
+        ~Restore() {
+            for (int i=count-1;i>=0;--i) {
+                std::byte* shadow=saved[i].shadow;
+                std::memcpy(shadow+0xa0,&saved[i].dependent,sizeof(void*));
+                std::memcpy(shadow+0x520,&saved[i].fades,sizeof(float*));
+                std::memcpy(shadow+0x528,&saved[i].count,sizeof(std::int32_t));
+                if (std::byte* info=saved[i].rightInfo) {
+                    if (saved[i].swapped) {
+                        std::memcpy(info+0xb4,&saved[i].relevance,sizeof(std::uint32_t*));
+                        std::memcpy(info+0xbc,&saved[i].relevanceCount,sizeof(std::int32_t));
+                    } else saved[i].relevance[saved[i].id]=saved[i].oldValue;
+                }
+            }
+        }
+    } restore{saved,savedCount};
+    return originalShadowProjection(renderer,light,list,dpg,flag);
+}
+// NVIDIA HBAO+ 2.x (Steam RHI 0xcd03b0, RenderAO vtable slot 2).
+// Adapted from optimumbox 8c571ce, with both-eye preflight and owned resources.
+using RenderAoFn=adapter::StereoAmbientOcclusion::Render;
+RenderAoFn originalRenderAo=nullptr;
+std::uint64_t hbaoBothEyes=0,hbaoFallbacks=0;
+ID3D11RenderTargetView* QueryRenderTargetView(const void* object) {
+    ID3D11RenderTargetView* view=nullptr;
+    if(!object) return nullptr;
+    __try {
+        auto* unknown=static_cast<IUnknown*>(const_cast<void*>(object));
+        if(FAILED(unknown->QueryInterface(__uuidof(ID3D11RenderTargetView),reinterpret_cast<void**>(&view)))) view=nullptr;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { view=nullptr; }
+    return view;
+}
+std::int32_t HookRenderAo(void* self,void* context,void* input,const void* params,const void* output,std::uint32_t mask) {
+    if(!OnRenderCommandThread() || context!=gameContext) return originalRenderAo(self,context,input,params,output,mask);
+    auto* views=singlePassPairViews;
+    if(!views || !input || !context) { hbaoPending={}; return originalRenderAo(self,context,input,params,output,mask); }
+    auto* in=static_cast<std::byte*>(input); int eye=-1,matches=0;
+    for(int i=0;i<2;++i) if(std::memcmp(in+4,views+i*0x1380+0xc0,64)==0) { if(eye<0) eye=i; ++matches; }
+    if(eye<0) { hbaoPending={}; return originalRenderAo(self,context,input,params,output,mask); }
+    ComPtr<ID3D11RenderTargetView> target; target.Attach(QueryRenderTargetView(output));
+    ComPtr<ID3D11Resource> resource; if(target) target->GetResource(&resource);
+    ID3D11ShaderResourceView* depth=nullptr; std::memcpy(&depth,in+0x68,sizeof(depth));
+    std::int32_t rects[2][4]{}; const void* projections[2]{};
+    std::byte projectionBytes[2][64]{};
+    for(int i=0;i<2;++i) {
+        std::memcpy(rects[i],views+i*0x1380+0x6c,sizeof(rects[i]));
+        projections[i]=views+i*0x1380+0xc0;
+        std::memcpy(projectionBytes[i],projections[i],sizeof(projectionBytes[i]));
+    }
+    // Symmetric headset FOVs can produce identical projections. The next
+    // matching callback is still the pending mate of the pair already drawn;
+    // use exact known input identity rather than guessing its eye index.
+    const bool mate=hbaoPending.eye>=0 && (hbaoPending.eye==eye || matches==2)
+        && resource && hbaoPending.target.Get()==resource.Get() && hbaoPending.output.Get()==target.Get()
+        && hbaoPending.self==self && hbaoPending.context==context && hbaoPending.input==input
+        && hbaoPending.params==params && hbaoPending.mask==mask && hbaoPending.depth.Get()==depth
+        && std::memcmp(hbaoPending.rects,rects,sizeof(rects))==0
+        && std::memcmp(hbaoPending.projections,projectionBytes,sizeof(projectionBytes))==0
+        && (matches!=2 || std::memcmp(hbaoPending.inputBytes,in,sizeof(hbaoPending.inputBytes))==0);
+    hbaoPending={}; // One use, also invalidated by any unmatched callback.
+    if(mate) return 0;
+    std::int32_t result=0;
+    if(!stereoAmbientOcclusion.RenderPair(originalRenderAo,self,static_cast<ID3D11DeviceContext*>(context),
+            input,params,target.Get(),mask,rects,projections,result)) {
+        // White is neutral AO. No unisolated per-eye call may overwrite its
+        // neighbor when private state or either scratch texture is unavailable.
+        if(target) { const float neutral[4]{1,1,1,1}; static_cast<ID3D11DeviceContext*>(context)->ClearRenderTargetView(target.Get(),neutral); }
+        if(Interesting(++hbaoFallbacks)) Log("SinglePass HBAO+ pair unavailable; neutral AO count=%llu",
+            static_cast<unsigned long long>(hbaoFallbacks));
+        result=0;
+    } else if(Interesting(++hbaoBothEyes)) Log("SinglePass HBAO+ isolated both eyes count=%llu",
+        static_cast<unsigned long long>(hbaoBothEyes));
+    hbaoPending.eye=1-eye; hbaoPending.self=self; hbaoPending.context=static_cast<ID3D11DeviceContext*>(context);
+    hbaoPending.input=input; hbaoPending.params=params; hbaoPending.mask=mask;
+    hbaoPending.depth=depth; hbaoPending.output=target; hbaoPending.target=resource;
+    std::memcpy(hbaoPending.rects,rects,sizeof(rects));
+    std::memcpy(hbaoPending.projections,projectionBytes,sizeof(projectionBytes));
+    std::memcpy(hbaoPending.inputBytes,in,sizeof(hbaoPending.inputBytes));
+    return result;
+}
+using HbaoRhiFn=std::uint64_t(*)(void*,void*,void*,void*,void*);
+HbaoRhiFn originalHbaoRhi=nullptr;
+std::uint64_t HookHbaoRhi(void* rhi,void* depth,void* projection,void* settings,void* output) {
+    if (rhi) {
+        void* context=nullptr; std::memcpy(&context,static_cast<std::byte*>(rhi)+0x827c0,sizeof(context));
+        if (context) {
+            void** table=*static_cast<void***>(context);
+            DWORD protect=0;
+            if (table[2]!=reinterpret_cast<void*>(&HookRenderAo) && VirtualProtect(&table[2],sizeof(void*),PAGE_READWRITE,&protect)) {
+                originalRenderAo=reinterpret_cast<RenderAoFn>(table[2]);
+                table[2]=reinterpret_cast<void*>(&HookRenderAo);
+                VirtualProtect(&table[2],sizeof(void*),protect,&protect);
+                Log("SinglePass HBAO+ RenderAO hooked context=%p",context);
+            }
+        }
+    }
+    return originalHbaoRhi(rhi,depth,projection,settings,output);
+}
+// Lens flare occlusion material parameter (0x2a50f0: this, primitive, unused,
+// view -> valid): reads the view state's coverage of the flare's primitive
+// (0x908ad0, occlusion history +0x28) through a per-state cache refreshed by
+// the state's last render time. The right eye renders with its late state,
+// which runs no queries and whose time never advances, so its headlight
+// flares stayed hidden. For the right eye it evaluates with the left eye's
+// state (the eyes are 6 cm apart).
+using FlareOcclusionFn=std::uint32_t(*)(void*,void*,void*,void*);
+FlareOcclusionFn originalFlareOcclusion=nullptr;
+std::uint32_t HookFlareOcclusion(void* self,void* primitive,void* unused,void* view) {
+    if(!OnRenderCommandThread()) return originalFlareOcclusion(self,primitive,unused,view);
+    std::byte* views=singlePassPairViews;
+    if (!views || view!=static_cast<void*>(views+0x1380)) return originalFlareOcclusion(self,primitive,unused,view);
+    void* left=nullptr; std::memcpy(&left,views+8,sizeof(left));
+    void* right=nullptr; std::memcpy(&right,views+0x1380+8,sizeof(right));
+    if (!left) return originalFlareOcclusion(self,primitive,unused,view);
+    struct Restore { std::byte* view; void* state; ~Restore(){std::memcpy(view+8,&state,sizeof(state));} } restore{views+0x1380,right};
+    std::memcpy(views+0x1380+8,&left,sizeof(left));
+    return originalFlareOcclusion(self,primitive,unused,view);
+}
+// Adapted from optimumbox c7c0799: trace SSR inside each eye's rectangle.
+using SsrComputeFn=void(*)(void*);
+SsrComputeFn originalSsrCompute=nullptr;
+using DispatchFn=void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*,UINT,UINT,UINT);
+DispatchFn originalDispatch=nullptr;
+std::uint64_t ssrEyeDispatches=0,ssrFallbacks=0;
+void STDMETHODCALLTYPE HookDispatch(ID3D11DeviceContext* context,UINT x,UINT y,UINT z) {
+    if(!OnRenderCommandThread() || context!=gameContext) { originalDispatch(context,x,y,z); return; }
+    if(const std::byte* view=ssrEyeView) {
+        ssrEyeView=nullptr;
+        std::int32_t rect[4]{}; std::memcpy(rect,view+0x6c,sizeof(rect));
+        const float eye[4]{float(rect[0]),float(rect[1]),float(rect[2]),float(rect[3])};
+        if(!ssrPairFailed && stereoReflections.Dispatch(context,eye,originalDispatch)) {
+            if(Interesting(++ssrEyeDispatches)) Log("SinglePass reflections traced per eye count=%llu",
+                static_cast<unsigned long long>(ssrEyeDispatches)); return;
+        }
+        ssrPairFailed=true;
+        ComPtr<ID3D11UnorderedAccessView> output; context->CSGetUnorderedAccessViews(0,1,&output);
+        if(output) { const float neutral[4]{}; context->ClearUnorderedAccessViewFloat(output.Get(),neutral); }
+        if(Interesting(++ssrFallbacks)) Log("SinglePass reflections pair unavailable; neutral reflections count=%llu",
+            static_cast<unsigned long long>(ssrFallbacks));
+        return;
+    }
+    originalDispatch(context,x,y,z);
+}
+void HookSsrCompute(void* renderer) {
+    if(!OnRenderCommandThread()) { originalSsrCompute(renderer); return; }
+    auto* base=static_cast<std::byte*>(renderer); std::byte* views=nullptr; std::int32_t count=0;
+    if(base) { std::memcpy(&views,base+0x6c,sizeof(views)); std::memcpy(&count,base+0x74,sizeof(count)); }
+    ComPtr<ID3D11Device> device; if(gameContext) gameContext->GetDevice(&device);
+    if(!views || count!=2 || views!=singlePassPairViews || !stereoReflections.Ready(device.Get())) { originalSsrCompute(renderer); return; }
+    std::int32_t rects[2][4]{};
+    for(int eye=0;eye<2;++eye) std::memcpy(rects[eye],views+std::size_t(eye)*0x1380+0x6c,sizeof(rects[eye]));
+    if(!adapter::StereoReflections::ValidPair(rects)) { originalSsrCompute(renderer); return; }
+    struct Restore {
+        std::byte* base; std::byte* views; std::int32_t count;
+        const std::byte* eye; bool failed;
+        ~Restore(){ssrEyeView=eye; ssrPairFailed=failed; std::memcpy(base+0x6c,&views,sizeof(views)); std::memcpy(base+0x74,&count,sizeof(count));}
+    } restore{base,views,count,ssrEyeView,ssrPairFailed};
+    ssrPairFailed=false;
+    const std::int32_t one=1; std::memcpy(base+0x74,&one,sizeof(one));
+    for(int eye=0;eye<2;++eye) {
+        std::byte* view=views+std::size_t(eye)*0x1380;
+        std::memcpy(base+0x6c,&view,sizeof(view)); ssrEyeView=view; originalSsrCompute(renderer);
+    }
+}
+// View constants (0xcd61d0: rhi, view): keep the left eye's while its occlusion
+// queries are submitted.
+using ViewConstantsFn=void(*)(void*,void*);
+ViewConstantsFn originalViewConstants=nullptr;
+void HookViewConstants(void* rhi,void* view) {
+    originalViewConstants(rhi,view);
+    if (OnRenderCommandThread() && rhi && view && leftOcclusionTests && view==static_cast<void*>(singlePassPairViews)) {
+        std::byte* table=nullptr; std::memcpy(&table,static_cast<std::byte*>(rhi)+0x4f4,sizeof(table));
+        std::byte* constants=nullptr; if (table) std::memcpy(&constants,table+8,sizeof(constants));
+        std::byte* shadow=nullptr; if (constants) std::memcpy(&shadow,constants+0x5c,sizeof(shadow));
+        leftQueryConstantsPending=false; leftQueryConstantsReady=false;
+        if (shadow) { std::memcpy(leftQueryConstants.data(),shadow,leftQueryConstants.size()); leftQueryConstantsPending=true; }
+        else {
+            occlusionConstantsFailed.store(true,std::memory_order_release);
+            Log("SinglePass query constant shadow unavailable; returning to frustum culling");
+        }
+    }
+}
+// Occlusion query submission (0x902560: renderer). With left-eye culling the
+// right eye submits none (0x20), so the call runs as KF2's one-view case.
+using RendererFn=void(*)(void*);
+RendererFn originalBeginOcclusionTests=nullptr;
+void HookBeginOcclusionTests(void* renderer) {
+    if(!OnRenderCommandThread()) { originalBeginOcclusionTests(renderer); return; }
+    auto* base=static_cast<std::byte*>(renderer);
+    std::byte* views=nullptr; std::int32_t count=0;
+    if (base) { std::memcpy(&views,base+0x6c,sizeof(views)); std::memcpy(&count,base+0x74,sizeof(count)); }
+    const bool single=views && count==2 && views==singlePassPairViews && singlePassOcclusion
+        && rightEyeLateState.load(std::memory_order_acquire) && !occlusionConstantsFailed.load(std::memory_order_acquire);
+    if (!single) { originalBeginOcclusionTests(renderer); return; }
+    struct Restore {
+        std::byte* base; std::int32_t count; bool testing,pending,ready;
+        ~Restore(){std::memcpy(base+0x74,&count,sizeof(count)); leftOcclusionTests=testing; leftQueryConstantsPending=pending; leftQueryConstantsReady=ready;}
+    } restore{base,count,leftOcclusionTests,leftQueryConstantsPending,leftQueryConstantsReady};
+    const std::int32_t one=1; std::memcpy(base+0x74,&one,sizeof(one));
+    leftOcclusionTests=true; leftQueryConstantsPending=false; leftQueryConstantsReady=false;
+    originalBeginOcclusionTests(renderer);
+}
+std::uint64_t HookInitViews(void* renderer) {
+    if(!OnRenderCommandThread()) return originalInitViews(renderer);
+    constexpr std::size_t viewsData=0x6c, viewsCount=0x74, viewStride=0x1380;
+    if (singlePass && renderer) {
+        auto* base=static_cast<std::byte*>(renderer);
+        std::byte* views=nullptr;std::int32_t count=0;
+        std::memcpy(&views,base+viewsData,sizeof(views));std::memcpy(&count,base+viewsCount,sizeof(count));
+        singlePassPairViews=renderer==singlePassRenderer && views && count==2 ? views : nullptr;
+        // DLSS needs world depth: tell the foreground-clear guard where each
+        // eye's clears land in the shared two-eye depth target.
+        if (singlePassPairViews) {
+            D3D11_VIEWPORT eyes[2]{};
+            for (int eye=0;eye<2;++eye) {
+                std::int32_t rect[4]{}; std::memcpy(rect,views+eye*viewStride+0x6c,sizeof(rect));
+                eyes[eye]={static_cast<float>(rect[0]),static_cast<float>(rect[1]),
+                    static_cast<float>(rect[2]),static_cast<float>(rect[3]),0.0f,1.0f};
+            }
+            foregroundDepth.SetEyes(eyes[0],eyes[1]);
+            // The whole-atlas HiZ path is invalid even when left-eye query
+            // culling is disabled or has fallen back. RenderScene restores it.
+            auto* hiz=reinterpret_cast<volatile std::int32_t*>(gameBase+0x1ec2398);
+            if(*hiz) {
+                *hiz=0;
+                if(Interesting(++singlePassHiZOff)) Log("SinglePass HiZ culling disabled count=%llu",
+                    static_cast<unsigned long long>(singlePassHiZOff));
+            }
+        } else foregroundDepth.ClearEyes();
+        const auto gateOff=*reinterpret_cast<const volatile std::int32_t*>(gameBase+0x1fbafec);
+        const auto gateOn=*reinterpret_cast<const volatile std::int32_t*>(gameBase+0x1ec2388);
+        if (singlePassPairViews && gateOff==0 && gateOn!=0) {
+            using ViewStep=void(*)(void*,void*);
+            using SetStep=void(*)(void*);
+            using FamilyStep=void(*)(void*);
+            using Gate=std::int32_t(*)(void*);
+            using Finish=std::uint64_t(*)(void*);
+            const auto visibility=reinterpret_cast<ViewStep>(gameBase+0x36b490);
+            const auto setup=reinterpret_cast<ViewStep>(gameBase+0x360a30);
+            const auto sortTranslucency=reinterpret_cast<SetStep>(gameBase+0x950320);
+            // With left-eye occlusion, the right eye's state-free pass runs
+            // first so the left eye's occlusion pass is the last to touch any
+            // shared per-object visibility data before its queries render.
+            const bool rightFirst=singlePassOcclusion && !occlusionConstantsFailed.load(std::memory_order_acquire) && rightEyeLateState.load(std::memory_order_acquire);
+            for (std::int32_t step=0;step<count;++step) {
+                const std::int32_t i=rightFirst ? count-1-step : step;
+                std::byte* view=views+static_cast<std::size_t>(i)*viewStride;
+                // Both eyes share the player's view state. Its occlusion
+                // history holds one pending query per object, so a second
+                // view overwrites the first view's queries. The right eye
+                // runs visibility and setup without a state (KF2's own
+                // state-free path: frustum culling only, 0x3649b0/0x373810)
+                // and submits no queries (0x20 at view+0x1218, tested at
+                // 0x902856); its state returns for lighting and exposure.
+                // The left eye's own queries also misread in a two-view family
+                // (objects popped beyond close range), so it keeps its state
+                // (camera-cut and motion history) but ignores occlusion
+                // results and submits no queries: frustum culling only, as
+                // with KF2's own occlusion-disabled flags.
+                // With left-eye occlusion the right eye's state is restored
+                // as rightEyeLateState, so nothing else touches the left
+                // eye's view state in the frame.
+                const bool stateless=i==1 && !singlePassRightOcclusion && !singlePassSeparateState;
+                void* late=rightFirst ? rightEyeLateState.load(std::memory_order_acquire) : nullptr;
+                const bool leftCulls=singlePassOcclusion && late;
+                if (i==0 && !leftCulls && !singlePassLeftOcclusion && !singlePassSeparateState)
+                    *reinterpret_cast<std::uint32_t*>(view+0x1218)|=0x30;
+                void* state=nullptr;
+                std::memcpy(&state,view+8,sizeof(state));
+                if (stateless) {
+                    *reinterpret_cast<std::uint32_t*>(view+0x1218)|=0x30;
+                    void* none=nullptr;
+                    std::memcpy(view+8,&none,sizeof(none));
+                }
+                struct RestoreState {
+                    std::byte* view; void* state; bool active;
+                    ~RestoreState() { if (active) std::memcpy(view+8,&state,sizeof(state)); }
+                } restoreState{view,stateless && leftCulls && state ? late : state,stateless};
+                // KF2's visibility and setup only ever see one view: while the
+                // left eye culls, the renderer reports one view (views[0]).
+                struct RestoreCount {
+                    std::byte* base; std::int32_t count; bool active;
+                    ~RestoreCount() { if (active) std::memcpy(base+0x74,&count,sizeof(count)); }
+                } restoreCount{base,count,i==0 && leftCulls};
+                if (restoreCount.active) { const std::int32_t one=1; std::memcpy(base+viewsCount,&one,sizeof(one)); }
+                visibility(renderer,view);
+                setup(renderer,view);
+            }
+            for (std::int32_t i=0;i<count;++i) {
+                std::byte* set=views+static_cast<std::size_t>(i)*viewStride+0x7f8;
+                for (int dpg=0;dpg<4;++dpg) sortTranslucency(set+static_cast<std::size_t>(dpg)*0x70);
+            }
+            reinterpret_cast<FamilyStep>(gameBase+0x904df0)(renderer);
+            // Both views: this fills each view's per-light visibility
+            // (view+0x9f8), which the per-eye lighting pass reads.
+            if (reinterpret_cast<Gate>(gameBase+0x8f95e0)(base+8))
+                reinterpret_cast<FamilyStep>(gameBase+0x949970)(renderer);
+            if (Interesting(++singlePassVisibilityPairs))
+                Log("SinglePass visibility pair count=%llu kf2Path=1",static_cast<unsigned long long>(singlePassVisibilityPairs));
+            return reinterpret_cast<Finish>(gameBase+0x8c2a20)(renderer);
+        }
+    }
+    return originalInitViews(renderer);
 }
 bool InstallHooks(HINSTANCE module) {
     // The EXE hash is already verified. Refuse pre-existing detours or a
@@ -3310,6 +4154,53 @@ bool InstallHooks(HINSTANCE module) {
         if (stereoRequested || handReplayRequested)
             hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x7aed0)),
                 reinterpret_cast<void*>(&HookProcessInternal),reinterpret_cast<void**>(&originalProcessInternal)});
+        if (adapter::build::selected==adapter::build::Store::Steam) {
+            if (!adapter::consumedQuery::Configure(gameBase,false,[] {
+                    return GetCurrentThreadId()==worldDrawThread.load(std::memory_order_acquire);
+                })) {
+                Log("Consumed body query ABI gate refused");
+                DestroyWindow(window); UnregisterClassW(className,module); return false;
+            }
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::consumedQuery::matchRva),
+                reinterpret_cast<void*>(&adapter::consumedQuery::Hook),reinterpret_cast<void**>(&adapter::consumedQuery::original)});
+        }
+        singlePass=stereoRequested && wcsstr(GetCommandLineW(),L"-kf2vr-single-pass")!=nullptr;
+        if (singlePass && adapter::build::selected!=adapter::build::Store::Steam) {
+            Log("SinglePass refused: the multiview lighting evidence covers the Steam executable only");
+            singlePass=false;
+        }
+        if (singlePass) {
+            hooks.push_back({reinterpret_cast<void*>(gameBase+0x90ef10),
+                reinterpret_cast<void*>(&HookRenderScene),reinterpret_cast<void**>(&originalRenderScene)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+0x911620),
+                reinterpret_cast<void*>(&HookRenderLighting),reinterpret_cast<void**>(&originalRenderLighting)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+0x909480),
+                reinterpret_cast<void*>(&HookInitViews),reinterpret_cast<void**>(&originalInitViews)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+0x902560),reinterpret_cast<void*>(&HookBeginOcclusionTests),reinterpret_cast<void**>(&originalBeginOcclusionTests)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+0xcd61d0),reinterpret_cast<void*>(&HookViewConstants),reinterpret_cast<void**>(&originalViewConstants)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+0x2a50f0),reinterpret_cast<void*>(&HookFlareOcclusion),reinterpret_cast<void**>(&originalFlareOcclusion)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+0xcb60e0),reinterpret_cast<void*>(&HookRhiClear),reinterpret_cast<void**>(&originalRhiClear)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+0x3605d0),reinterpret_cast<void*>(&HookSsrCompute),reinterpret_cast<void**>(&originalSsrCompute)});
+            hooks.push_back({contextTable[41],reinterpret_cast<void*>(&HookDispatch),reinterpret_cast<void**>(&originalDispatch)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+0x8e1bb0),
+                reinterpret_cast<void*>(&HookQuad),reinterpret_cast<void**>(&originalQuad)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+0x935340),
+                reinterpret_cast<void*>(&HookShadowProjection),reinterpret_cast<void**>(&originalShadowProjection)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+0xcd03b0),
+                reinterpret_cast<void*>(&HookHbaoRhi),reinterpret_cast<void**>(&originalHbaoRhi)});
+        }
+        singlePassSplit=singlePass && wcsstr(GetCommandLineW(),L"-kf2vr-sp-split")!=nullptr;
+        // The game's own two-view lighting matches both eyes' shadows; the
+        // per-eye split (-kf2vr-sp-split-lighting) darkened the right eye.
+        singlePassStockLighting=singlePass && wcsstr(GetCommandLineW(),L"-kf2vr-sp-split-lighting")==nullptr;
+        singlePassSeparateState=singlePass && wcsstr(GetCommandLineW(),L"-kf2vr-sp-separate-state")!=nullptr;
+        singlePassRightOcclusion=singlePass && wcsstr(GetCommandLineW(),L"-kf2vr-sp-right-occlusion")!=nullptr;
+        singlePassLeftOcclusion=singlePass && wcsstr(GetCommandLineW(),L"-kf2vr-sp-left-occlusion")!=nullptr;
+        singlePassOcclusion=singlePass && !singlePassSeparateState && !singlePassRightOcclusion &&
+            wcsstr(GetCommandLineW(),L"-kf2vr-sp-no-occlusion")==nullptr;
+        Log("SinglePass revision=75 occlusion=%d stereoReflections=1 hbaoBothEyes=1 privateEffects=1 queryConstants=1 scopedViews=1 stereoDepthGuard=1 hbaoViewports=1 sharedEyeShadows=4 rightEyeQuads=1 kf2Visibility=1 leftOcclusion=%d rightEyeState=%d rightOcclusion=%d enabled=%d splitSubmit=%d stockLighting=%d",
+            singlePassOcclusion?1:0,singlePassLeftOcclusion?1:0,singlePassSeparateState?1:0,singlePassRightOcclusion?1:0,singlePass?1:0,
+            singlePassSplit?1:0,singlePassStockLighting?1:0);
         if (MH_Initialize()==MH_OK) {
             success=true;
             for (const auto& hook:hooks) {
@@ -3366,6 +4257,11 @@ DWORD WINAPI AdapterMain(void* parameter) {
     threadedRender=threadedRender && stereoRequested;
     handReplayRequested=wcsstr(GetCommandLineW(),L"-kf2vr-hand-replay")!=nullptr && wcsstr(GetCommandLineW(),L"-onethread")!=nullptr;
     networkRequested=wcsstr(GetCommandLineW(),L"-kf2vr-network")!=nullptr && (stereoRequested || handReplayRequested);
+    localDiagnosticRequested=kf2vr::localtest::Bridge::DiagnosticLaunchOptIn();
+    if (wcsstr(GetCommandLineW(),L"-kf2vr-local-test-diagnostic") &&
+        (!localDiagnosticRequested || !stereoRequested || networkRequested || handReplayRequested)) {
+        Log("Local diagnostic refused: explicit Solo live stereo/local-test-control required"); return 3;
+    }
     inputReplayRequested=wcsstr(GetCommandLineW(),L"-kf2vr-input-replay")!=nullptr;
     if (inputReplayRequested) {
         wchar_t path[32768]{};
@@ -3392,6 +4288,7 @@ DWORD WINAPI AdapterMain(void* parameter) {
     adapter::guardedScriptReads=wcsstr(GetCommandLineW(),L"-kf2vr-checked-reads")==nullptr;
     perEyePresentation=wcsstr(GetCommandLineW(),L"-kf2vr-per-eye-presentation")!=nullptr;
     adapter::timing::enabled=adapter::timing::scriptEnabled || wcsstr(GetCommandLineW(),L"-kf2vr-frame-timings")!=nullptr;
+    verboseLog=adapter::timing::enabled || wcsstr(GetCommandLineW(),L"-kf2vr-verbose-log")!=nullptr;
     adapter::timing::vmSamplingEnabled=adapter::timing::enabled && !adapter::timing::scriptEnabled;
     adapter::timing::drilldownEnabled=wcsstr(GetCommandLineW(),L"-kf2vr-frame-drilldown")!=nullptr;
     wchar_t percentText[16]{};
@@ -3436,6 +4333,10 @@ DWORD WINAPI AdapterMain(void* parameter) {
         const auto bileLength=GetEnvironmentVariableW(L"KF2VR_HIDE_BILE_LENS",bileText,4);
         hideBileLens=bileLength==1 && bileText[0]==L'1';
         Log("BileLens revision=1 hidden=%d",hideBileLens?1:0);
+        wchar_t bloodText[4]{};
+        const auto bloodLength=GetEnvironmentVariableW(L"KF2VR_HIDE_BLOOD_LENS",bloodText,4);
+        hideBloodLens=bloodLength==1 && bloodText[0]==L'1';
+        Log("BloodLens revision=1 hidden=%d",hideBloodLens?1:0);
     }
     Log("RenderPerformance eyeRenderPercent=%u frameTimings=%d vmTimings=%d",eyeRenderPercent,
         adapter::timing::enabled,adapter::timing::scriptEnabled);

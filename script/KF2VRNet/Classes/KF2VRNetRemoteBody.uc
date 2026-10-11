@@ -21,6 +21,7 @@ var float PelvisShift;        // UU the Spine bone may slide horizontally (feet 
 var float NeckReach;          // UU of final neck shift for what the spine cannot reach
 var float SpineBlendTime;     // seconds, tracked head offset smoothing
 var vector HeadEyeOffset;     // tracked eye point from the head bone, in head axes
+var float HandFitReach;       // UU the hands may shift to stay with the drawn head
 // Finger curl tunables (headset re-tune): degrees at full curl, by segment.
 var float FingerDegrees[3];   // index..pinky proximal, middle, distal
 var float ThumbDegrees[3];    // thumb segments, toward the palm centre
@@ -65,6 +66,12 @@ var private bool bStockSuppressed;
 var private SkelControlSingleBone Pelvis, SpineBend[2], NeckShift;
 var private vector PelvisOffset, NeckOffset, HeadError, HeadTarget, BendAxis;
 var private float ChestYaw, BendAngle;
+// The tracked hands' shift onto the drawn head (world space). The pose actor
+// moves the remote guns by the same amount.
+var vector HandCorrection;
+// Per hand, how far the arm's reach limit pulled the drawn hand back from the
+// tracked one. The remote gun moves by the same amount so it stays in the hand.
+var vector ReachShift[2];
 
 simulated function bool IsReady() { return BodyTree != None; }
 
@@ -436,6 +443,9 @@ simulated function ReleaseRig()
     Head = None;
     Pelvis = None; SpineBend[0] = None; SpineBend[1] = None; NeckShift = None;
     PelvisOffset = vect(0,0,0); NeckOffset = vect(0,0,0); HeadError = vect(0,0,0);
+    // A new rig must not inherit the old model's head fit or reach correction.
+    HandCorrection = vect(0,0,0);
+    ReachShift[0] = vect(0,0,0); ReachShift[1] = vect(0,0,0);
     BendAxis = vect(0,0,0); BendAngle = 0; ChestYaw = 0;
     for (I = 0; I < 2; ++I)
     {
@@ -590,7 +600,7 @@ simulated function rotator ReferenceSpineTurn(int I, quat Turn)
 // the stock head bone, so the stock stance, crouch and bob stay the base:
 // a bounded Spine lift, a Spine1/Spine2 lean, then a small neck shift. The
 // head control is absolute world rotation, so the lean does not turn it.
-simulated function UpdateSpine(NetPoseSnapshot Frame, float Delta)
+simulated function UpdateSpine(NetPoseSnapshot Frame, float Delta, rotator World)
 {
     local vector X, Y, Z, Forward, Up, Wanted, Spine1, Spine2, Lever, Chain, Reach, Rest, Slide;
     local rotator Body;
@@ -612,10 +622,12 @@ simulated function UpdateSpine(NetPoseSnapshot Frame, float Delta)
     if ((Tracking & 1) != 0)
     {
         // Body-relative: the replicated root lags the simulated pawn.
+        // World: the sender's yaw the sample was taken against; Body stays
+        // the rig's own facing for the chest turn.
         Wanted = (Frame.Sample.HeadPosition - (HeadEyeOffset >> Frame.Sample.HeadRotation)
-            + HeadEyeOffset - vect(0,0,1) * RigPawn.BaseEyeHeight) >> Body;
+            + HeadEyeOffset - vect(0,0,1) * RigPawn.BaseEyeHeight) >> World;
         Yaw = ChestYaw;
-        GetAxes(Normalize(Body + Frame.Sample.HeadRotation), X, Y, Z);
+        GetAxes(Normalize(World + Frame.Sample.HeadRotation), X, Y, Z);
         Forward = X; Forward.Z = 0;
         Up = Z; Up.Z = 0;
         if (X.Z > 0) Up = -Up;
@@ -671,11 +683,12 @@ simulated function UpdateSpine(NetPoseSnapshot Frame, float Delta)
 simulated function UpdateBody(NetPoseSnapshot Frame, bool bFresh)
 {
     local int I;
-    local vector Position, Shoulder, Direction, Pole, FollowTarget, Root;
+    local vector Position, Shoulder, Direction, Pole, FollowTarget, Root, Fit;
     local float Delta, Blend;
     local rotator Aim, Body;
     local bool bSolved;
     RigPawn = PoseOwner != None ? PoseOwner.TargetPawn : LocalPawn;
+    ReachShift[0] = vect(0,0,0); ReachShift[1] = vect(0,0,0);
     if (RigPawn == None || RigPawn.Health <= 0
         || RigPawn.Physics == PHYS_RigidBody) { ReleaseRig(); return; }
     if (BodyMesh != RigPawn.Mesh || (BodyMesh != None && BodyMesh.Animations != BodyTree)) ReleaseRig();
@@ -689,11 +702,21 @@ simulated function UpdateBody(NetPoseSnapshot Frame, bool bFresh)
     Tracking = 0;
     if (bFresh && (LocalPawn != None || !RigPawn.IsDoingSpecialMove())) Tracking = Frame.Sample.TrackingFlags;
     // Offsets hang from the simulated pawn, not the lagging replicated root.
-    if (PoseOwner != None) PoseOwner.PresentationRoot(Root, Body);
+    if (PoseOwner != None) PoseOwner.PresentationRoot(Frame, Root, Body);
     else { Root = RigPawn.Location; Body.Yaw = RigPawn.Rotation.Yaw; }
     Head.BoneRotation = QuatToRotator(QuatProduct(QuatFromRotator(Normalize(Body + Frame.Sample.HeadRotation)), HeadBasis));
     Head.SetSkelControlStrength((Tracking & 1) != 0 ? 1 : 0, 0.12);
-    UpdateSpine(Frame, Delta);
+    UpdateSpine(Frame, Delta, Body);
+    // Fit the hands to the drawn head. The tracked hands sit where the
+    // player's are, but the rig's head goes only where its spine reaches (a
+    // model taller or shorter than the player, a crouch past the waist's
+    // range), so the sights sat above or below the drawn eyes and close
+    // hands sank into the chest. Move the hands by the head's remainder.
+    Fit = vect(0,0,0);
+    if ((Tracking & 1) != 0)
+        Fit = ClampLength(BodyMesh.GetBoneLocation('head') - (Root + ((Frame.Sample.HeadPosition
+            - (HeadEyeOffset >> Frame.Sample.HeadRotation)) >> Body)), HandFitReach);
+    HandCorrection += (Fit - HandCorrection) * Blend;
     for (I = 0; I < 2; ++I)
     {
         bSolved = (Frame.Sample.PresentationFlags & (4 << I)) != 0;
@@ -706,7 +729,7 @@ simulated function UpdateBody(NetPoseSnapshot Frame, bool bFresh)
             Position = I == 0 ? Frame.Sample.LeftWristPosition : Frame.Sample.RightWristPosition;
             Aim = I == 0 ? Frame.Sample.LeftWristRotation : Frame.Sample.RightWristRotation;
         }
-        WantedHand[I] = Root + (Position >> Body);
+        WantedHand[I] = Root + (Position >> Body) + HandCorrection;
         WantedWrist[I] = Normalize(Body + Aim);
         WantedWrist[I] = QuatToRotator(QuatProduct(QuatFromRotator(WantedWrist[I]), WristBasis[I]));
         Shoulder = BodyMesh.GetBoneLocation(ShoulderBone[I]) - ShoulderOffset[I] * ShoulderFollow[I].ControlStrength;
@@ -721,6 +744,7 @@ simulated function UpdateBody(NetPoseSnapshot Frame, bool bFresh)
         ReachableHand[I] = WantedHand[I];
         if (VSize(Direction) > ArmLength[I] * 0.98)
             ReachableHand[I] = Shoulder + Normal(Direction) * ArmLength[I] * 0.98;
+        ReachShift[I] = (Tracking & (2 << I)) != 0 ? ReachableHand[I] - WantedHand[I] : vect(0,0,0);
         Pole = vect(-18,0,-28); Pole.Y = I == 0 ? -16 : 16;
         Arm[I].EffectorLocation = ReachableHand[I];
         Arm[I].JointTargetLocation = Shoulder + (Pole >> Body);
@@ -850,6 +874,7 @@ defaultproperties
     NeckReach=8
     SpineBlendTime=0.06
     HeadEyeOffset=(X=8,Y=0,Z=10)
+    HandFitReach=30
     FingerDegrees(0)=70
     FingerDegrees(1)=90
     FingerDegrees(2)=45

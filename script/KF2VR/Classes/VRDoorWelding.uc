@@ -118,7 +118,13 @@ function Update(float Delta)
     }
 }
 
-// The right stick click. Away from a door it does nothing.
+// Offered doors and an already held welder take priority over the wheel.
+function bool WantsStickClick()
+{
+    return Holding() || (Target != None && !Target.bDeleteMe && bOffer);
+}
+
+// The non-movement stick click; the tool remains in its stock right hand.
 function StickClick()
 {
     local VRWeaponRuntime R;

@@ -51,6 +51,9 @@ void DlssViewOrigin(const pinned::NativeMatrix4& view, double origin[3]) noexcep
 struct DlssEyeInput {
     pinned::NativeMatrix4 view{}, projection{}; // Unjittered, as given to the engine.
     DlssJitter jitter{};
+    // The eye's rectangle in the colour and depth targets: (0,0) for a
+    // sequential eye pass, (eye*width,0) for a single-pass stereo pair.
+    unsigned renderX=0, renderY=0;
     unsigned renderWidth=0, renderHeight=0;
     bool valid=false;
 };

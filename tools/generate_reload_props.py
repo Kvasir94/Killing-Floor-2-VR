@@ -77,6 +77,12 @@ def read_psk(path):
 MAGAZINE_BONES = ('RW_Magazine1', 'RW_Mag', 'RW_Magazine')
 SHELL_BONES = ('RW_Shell1', 'RW_Bullet1')
 DEFAULT_RIGS = (
+    'build/crossbow-audit/export/WEP_1P_Crossbow_MESH/SkeletalMesh3/Wep_1stP_Crossbow_Rig.psk',
+    'build/crossboom-audit/export/WEP_1P_HRG_Crossboom_MESH/SkeletalMesh3/Wep_1stP_HRG_Crossboom_Rig.psk',
+    'build/railgun-audit/export/WEP_1P_RailGun_MESH/SkeletalMesh3/WEP_1stP_RailGun_Rig.psk',
+    'build/incision-audit/export/WEP_1P_HRG_Incision_MESH/SkeletalMesh3/WEP_1stP_HRG_Incision.psk',
+    'build/compoundbow-audit/export/WEP_1P_CompoundBow_MESH/SkeletalMesh3/Wep_1stP_CompoundBow_Rig.psk',
+    'build/eviscerator-audit/export/WEP_1P_SawBlade_MESH/SkeletalMesh3/Wep_1stP_SawBlade_Rig.psk',
     'extract/weapons/WEP_1P_9MM_MESH/SkeletalMesh3/Wep_1stP_9mm_Rig.psk',
     'extract/weapons/WEP_1P_MB500_MESH/SkeletalMesh3/Wep_1stP_MB500_Rig.psk',
     'extract/weapons/WEP_1P_Double_Barrel_MESH/SkeletalMesh3/Wep_1stP_Double_Barrel.psk',
@@ -194,6 +200,12 @@ DEFAULT_RIGS = (
 RING_OUTER, RING_INNER, RING_SEGMENTS = 1.0, 0.8, 48
 # Hint shells: action bone per magazine rig, matching VRReloadCatalog.RackBone.
 GLOW_ACTION_BONES = {
+    'Wep_1stP_Crossbow_Rig': None,
+    'Wep_1stP_HRG_Crossboom_Rig': None,
+    'WEP_1stP_RailGun_Rig': None,
+    'WEP_1stP_HRG_Incision': None,
+    'Wep_1stP_CompoundBow_Rig': None,
+    'Wep_1stP_SawBlade_Rig': None,
     'Wep_1stP_9mm_Rig': 'RW_Bolt', 'Wep_1stP_M1911_Rig': 'RW_Bolt',
     'Wep_1stP_Deagle_Rig': 'RW_Slide', 'Wep_1stP_Medic_Pistol_Rig': 'RW_Bolt',
     'Wep_1stP_AK12_Rig': 'RW_Bolt', 'Wep_1stP_L85A2_Rig': 'RW_Bolt',
@@ -249,7 +261,10 @@ GLOW_ACTION_BONES = {
 GLOW_FRAME_BONES = ('Root', 'RW_Weapon', 'RW_Body')
 # Rigs whose part seats into a turning chamber, not a fixed well (the Freeze
 # Thrower's and Healthrower's cartridge): no well shell; the part's own shows.
-NO_WELL_SHELL = ('Wep_1stP_CryoGun_Rig', 'Wep_1stP_HRG_Healthrower_Rig')
+NO_WELL_SHELL = ('Wep_1stP_CryoGun_Rig', 'Wep_1stP_HRG_Healthrower_Rig',
+                 'Wep_1stP_Crossbow_Rig', 'Wep_1stP_HRG_Crossboom_Rig',
+                 'WEP_1stP_RailGun_Rig', 'WEP_1stP_HRG_Incision',
+                 'Wep_1stP_CompoundBow_Rig', 'Wep_1stP_SawBlade_Rig')
 # Hint shells cut from named bones, as AS2 paints them: only the pump fore-end
 # on its pump shotgun (slide band) and only the breech face with both chamber
 # mouths on its break-actions (grip band). Kind -> (the bone, or bones, that
@@ -316,6 +331,12 @@ WHOLE_MESH_PROPS = {
     'Wep_1stP_M32_MGL_Rig': 'build/m32-audit/export/WEP_1P_M32_MGL_MESH/SkeletalMesh3/Wep_1stP_M32_MGL_Shell.psk',
 }
 AMMO_OVERRIDES = {'WEP_1stP_Mosin_Rig': ('clip', 'RW_StripMag'),
+                  'Wep_1stP_Crossbow_Rig': ('shell', 'RW_Projectile'),
+                  'Wep_1stP_HRG_Crossboom_Rig': ('shell', 'RW_Projectile'),
+                  'WEP_1stP_RailGun_Rig': ('shell', 'RW_Bullets1'),
+                  'WEP_1stP_HRG_Incision': ('shell', 'RW_Bullets1'),
+                  'Wep_1stP_CompoundBow_Rig': ('shell', 'RW_Weapon'),
+                  'Wep_1stP_SawBlade_Rig': ('magazine', 'Magazine1'),
                   'Wep_1stP_SW_500_Rig': ('clip', 'RW_Speedloader'),
                   'Wep_1stP_ChiappaRhino_Rig': ('clip', 'RW_Speedloader'),
                   'Wep_1stP_HRG_SW_500_Rig': ('clip', 'RW_Speedloader'),
@@ -344,6 +365,10 @@ AMMO_OVERRIDES = {'WEP_1stP_Mosin_Rig': ('clip', 'RW_StripMag'),
 # geometry; the .500's are separate meshes on RW_Bullet_FX sockets (roll only,
 # from the package's socket table) drawn with that mesh's own material.
 RIDING_ROUNDS = {
+    'Wep_1stP_SawBlade_Rig': {
+        'psa': 'build/eviscerator-audit/export/WEP_1P_SawBlade_ANIM/AnimSet/wep_1p_sawblade_anim.psa',
+        'clip': 'Reload_Empty', 'frame': 40, 'bones': ['DiskSaw2'],
+    },
     'Wep_1stP_SW_500_Rig': {
         'psa': 'build/pistol-brace-20260919/pose-audit/export/WEP_1P_SW_500_ANIM/AnimSet/WEP_1stP_SW_500_Anim.psa',
         'clip': 'Reload_Half', 'frame': 84,

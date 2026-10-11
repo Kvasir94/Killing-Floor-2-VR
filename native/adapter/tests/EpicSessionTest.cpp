@@ -20,5 +20,8 @@ int main() {
  check(!GraphicsOptions("quality\nEVIL=1","0","1"));check(!GraphicsOptions("other","0","1"));
  check(!GraphicsOptions("dlaa","101","1"));check(!GraphicsOptions("dlaa","-1","1"));
  check(!GraphicsOptions("dlaa","0","true"));check(!GraphicsOptions("off","","0"));
+ check(GraphicsOptions("quality","50","1","0"));
+ check(!GraphicsOptions("off","0","1","true"));
+ check(!GraphicsOptions("off","0","1","1\nEVIL=1"));
  std::cout<<"Epic session checks failed: "<<failures<<'\n';return failures?1:0;
 }

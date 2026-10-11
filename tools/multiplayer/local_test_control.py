@@ -10,15 +10,22 @@ import uuid
 HEX_ID = re.compile(r"[0-9a-f]{32}\Z")
 TOKEN = re.compile(r"[A-Za-z0-9_.-]{1,96}\Z")
 ZEDS = ("cyst", "alpha", "slasher", "crawler", "gorefast", "bloat", "husk", "scrake", "fleshpound")
-OPERATIONS = ("status", "catalog", "give-all", "give-one", "spawn-zeds", "disable")
+DIAGNOSTIC_CASES = ("ready", "snapshot") + tuple(
+    f"case-{weapon}-{hand}-{mode}" for weapon in ("deadbolt", "ripcord")
+    for hand in ("left", "right") for mode in ("manual", "automatic"))
+OPERATIONS = ("status", "catalog", "give-all", "give-one", "spawn-zeds", "disable", "diagnostic")
 
 
 def add_options(parser):
     parser.add_argument("--local-test-control", action="store_true", default=False,
                         help="Solo VR only, this launch: UNRANKED local agent control and test capacity bypass; not saved")
+    parser.add_argument("--local-test-diagnostic", action="store_true", default=False,
+                        help="Explicit Solo live-XR diagnostic: neutral physical input, F10 abort, fixed Breacher cases; not saved")
 
 
 def validate_options(args):
+    if getattr(args, "local_test_diagnostic", False) and not getattr(args, "local_test_control", False):
+        raise RuntimeError("Local diagnostic requires --local-test-control --solo --vr.")
     if not getattr(args, "local_test_control", False):
         return
     if not getattr(args, "solo", False) or not getattr(args, "vr", False):
@@ -54,6 +61,19 @@ def configure_role(role, args, role_name):
     role["args"].append("-kf2vr-local-test-control")
     role["local_test_control"] = {"session": session, "test_unranked": True, "capacity_bypass": True,
                                   "scope": "standalone_local_authority", "hosted_lan_supported": False}
+    if getattr(args, "local_test_diagnostic", False):
+        from session import read_ini, set_ini
+        configs = Path(role["config_root"])
+        engine = configs / "KFEngine.ini"
+        if not engine.is_file() or engine.is_symlink():
+            raise RuntimeError("Diagnostic requires an existing copied engine config.")
+        role["args"][0] += "?KF2VRLocalDiagnostic=1"
+        role["args"].append("-kf2vr-local-test-diagnostic")
+        engine.write_text(set_ini(read_ini(engine), "Engine.Engine", {
+            "GameViewportClientClassName": "KF2VR.VRLocalDiagnosticViewportClient"}), encoding="utf-16")
+        role["local_test_control"]["diagnostic"] = {
+            "physical_input_blocked": True, "abort": "F10", "live_XR_required": True,
+            "maximum_cases": 16, "maximum_case_seconds": 10, "maximum_session_seconds": 300}
 
 
 def channel_path(session):
@@ -83,6 +103,8 @@ def request_wire(session, action_id, operation, player_id, argument="-", count=0
         raise ValueError("Catalog/give-all accepts no count")
     if operation == "give-one" and (argument == "-" or count != 1):
         raise ValueError("Give-one requires an allowlisted full class path and count 1")
+    if operation == "diagnostic" and (argument not in DIAGNOSTIC_CASES or count != 0):
+        raise ValueError("Diagnostic requires a fixed ready/snapshot/Breacher-case token and count 0")
     if operation == "spawn-zeds" and (argument not in ZEDS or not 1 <= count <= 6):
         raise ValueError("Spawn-zeds requires an allowlisted type and count 1..6")
     wire = f"{session}\t{action_id}\t{operation}\t{player_id}\t{argument}\t{count}"

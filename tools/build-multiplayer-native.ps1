@@ -11,6 +11,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 $buildRoot = Join-Path $projectRoot 'build/multiplayer/native'
+. (Join-Path $PSScriptRoot 'build-lock.ps1')
+Assert-KF2VRBuildOutput $buildRoot $projectRoot -InspectEntries
 function Read-NetworkNativeSources {
     $hashes = [ordered]@{}
     if (Get-Command rg -ErrorAction SilentlyContinue) {
@@ -53,11 +55,11 @@ if ($AllowRuntimeOverlap) {
 Push-Location $projectRoot
 $fixtureMutex = $null
 $fixtureLocked = $false
-$nativeMutex = [Threading.Mutex]::new($false, 'Local\KF2VR_NativeBuild')
+$nativeMutex = [Threading.Mutex]::new($false, (Get-KF2VRBuildMutexName $projectRoot))
 $nativeLocked = $false
 try {
-    # One native compiler at a time, independent of the SDK/deployment/runtime
-    # fixture. The default still takes the original broad fixture lease.
+    # Serialize this checkout's outputs; independent checkouts have their own
+    # compiler owner. The default still takes the SDK/deployment/runtime lease.
     try { $nativeLocked = $nativeMutex.WaitOne(0) }
     catch [Threading.AbandonedMutexException] { $nativeLocked = $true }
     if (-not $nativeLocked) { throw 'Another KF2-VR native build is running.' }

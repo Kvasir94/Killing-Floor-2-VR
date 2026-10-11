@@ -16,10 +16,16 @@ CAS sharpening adapts AMD FidelityFX CAS, pinned provenance `GPUOpen-Effects/Fid
 
 Public distribution is a separate step: NVIDIA licence obligations include attribution/trademark placement and pre-commercial-release notification. Resolve those obligations before publication; including a notice alone does not complete them. This experimental private integration does not authorize a public release.
 
-## Original fork DLSS licence disclaimer and credit
+Single-pass stereo is an experimental Steam option from optimumbox's
+`0e972979` contribution, initially On for Steam VR (saved Off choices remain).
+`--no-single-pass` or root `-SinglePass Off` restores sequential stereo. It renders
+both eye rectangles together, with the author's visibility, shadow and HBAO
+handling preserved. The combined render target is capped at 8192 pixels wide.
+DLSS still retains complete source images for pair-wide failure fallback.
 
-Adapted from [optimumbox's exact fork release](https://github.com/optimumbox/Killing-Floor-2-VR/releases/tag/v0.1.0-alpha.20261006-dlss), source commit `e080bc0e1e1a56e3de61498634f40ca2c29692ed`, authored by optimumbox with recorded Claude Opus 5.5 co-author attribution. The following licence disclaimer is carried verbatim from that release:
-
-> Original contributions use MIT. `nvngx_dlss.dll` is NVIDIA's DLSS runtime, redistributed under the NVIDIA DLSS SDK licence (`app/notices/NVIDIA-DLSS-LICENSE.txt`). Bundled components keep their own notices.
-
-The complete NVIDIA licence was retrieved from that fork's actual playable ZIP using bounded HTTP ranges. Its SHA-256 is `DC2778A3283427285984CDB5B3F7F03EAE7D8A06057F672F2999C5EE7FD4F67D`, identical to the official pinned SDK licence and this package's full notice. The integration retains the complete AMD CAS licence separately. Fork testing claims do not establish acceptance of this adapted build.
+HBAO and reflections are initially On; `--no-hbao` and `--no-reflections`
+disable them. `--hide-blood-lens` is initially On, independently of
+bile suppression; `--no-hide-blood-lens` restores blood lens splatter. These
+personal settings are available in the player window. Steam Solo/Host/Join
+share them; Epic Solo supports the effect choices but keeps sequential stereo.
+Frame timing logging does not capture eye images.

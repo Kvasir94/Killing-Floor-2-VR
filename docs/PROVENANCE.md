@@ -29,3 +29,19 @@ listed as CC0 by the publisher. `native/adapter/assets/NOTICE.txt` records the
 resource treatment. RAVEN-7's provenance and current atlas hash are in
 `assets/weapons/raven7/README.md`. These documented non-game assets are retained;
 there is no blanket exclusion of everything in a binary file format.
+
+## Donor source integration
+
+This project incorporates work from
+[OptimumBox/Killing-Floor-2-VR](https://github.com/OptimumBox/Killing-Floor-2-VR),
+pinned to `v0.5.0-alpha.20261011`
+(`e35ec355ae951dda72ee80b20cb1cef12345b9ac`). Keep upstream attribution and
+licence notices with incorporated source and dependencies. This repository's
+public history remains independent of the private development checkout.
+
+The integrated source retains local shared paired reserve accounting, authority
+validation and recovery repairs, haptics, current sight alignment and jump-zone
+choices. Fresh profiles use 100% render scale; Steam single-pass stereo, HBAO+
+and reflections remain ON. Saved player preferences take precedence. Source
+integration and successful compilation/offline checks do not establish headset
+or real-network parity with the donor release.

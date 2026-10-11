@@ -494,11 +494,12 @@ function UpdateHand()
         Motion.Begin(LocalHandPosition(), Owner.Now());
         return;
     }
-    // A discontinuous sample is skipped, not treated as letting go: the grip
-    // button and tracking validity decide release, never a noisy frame.
+    // A rejected sample abandons the stroke while retaining the spent chamber.
+    // Rebasing at that position could turn a rejected jump to the forward stop
+    // into a completed pump on the next stationary frame.
     if (!Motion.Check(LocalHandPosition(), Owner.Now()))
     {
-        Motion.Begin(LocalHandPosition(), Owner.Now());
+        CancelHand(Hand);
         return;
     }
     bHeld = bBySupport ? bSupport : (bByGrip ? bGrip : bTrigger);

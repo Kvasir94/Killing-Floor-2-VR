@@ -121,7 +121,14 @@ simulated function bool UpdateVisual(NetWeaponVisual Visual, vector Muzzle, rota
         Previous = Visual;
         return false;
     }
-    if (!Attachment.WeapMesh.GetSocketWorldLocationAndRotation('MuzzleFlash', Socket, SocketRotation)) return false;
+    if (!Attachment.WeapMesh.GetSocketWorldLocationAndRotation('MuzzleFlash', Socket, SocketRotation))
+    {
+        // Unsupported equipment falls back to the pawn's ordinary attachment.
+        // Never leave this unplaced tracked copy visible beside that fallback.
+        Attachment.WeapMesh.SetHidden(true);
+        Attachment.StopThirdPersonFireEffects(true);
+        return false;
+    }
     OldRotation = QuatFromRotator(Attachment.Rotation);
     RelativeSocket = QuatRotateVector(QuatInvert(OldRotation), Socket - Attachment.Location);
     SocketRelativeRotation = QuatProduct(QuatInvert(OldRotation), QuatFromRotator(SocketRotation));

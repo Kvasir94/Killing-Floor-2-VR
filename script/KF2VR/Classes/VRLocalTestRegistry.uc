@@ -33,6 +33,9 @@ function Build(optional bool bBreacher)
     {
         ClassName = class'VRHandsBridge'.default.WeaponProfiles[I].WeaponClassName;
         if (ClassName == '') continue;
+        // Optional profiles are resolved below from a fixed package allowlist.
+        // Their presence in the shared profile table never enables the mod.
+        if (ClassName == 'BreacherDeadbolt' || ClassName == 'BreacherRipcord') continue;
         // FName identity is case-insensitive; its displayed spelling need not
         // match the capitalization of a literal in this package.
         if (Left(string(ClassName), 7) ~= "VRWeap_") Path = "KF2VR." $ ClassName;
@@ -48,15 +51,21 @@ function Build(optional bool bBreacher)
     }
     // Include the authored optional alias only when this launch explicitly
     // enabled its mutator. An ordinary registry must never load Breacher.
-    if (bBreacher && class'VRHandsBridge'.static.HasAuthoredProfile('BreacherDeadbolt'))
+    if (bBreacher)
     {
-        Path = "KF2Breacher.BreacherDeadbolt";
-        WeaponClass = class<KFWeapon>(DynamicLoadObject(Path, class'Class', true));
-        if (WeaponClass != None && PathName(WeaponClass) ~= Path)
+        for (I = 0; I < 2; ++I)
         {
-            if (Weapons.Find(WeaponClass) == INDEX_NONE) Weapons.AddItem(WeaponClass);
+            ClassName = I == 0 ? 'BreacherDeadbolt' : 'BreacherRipcord';
+            if (!class'VRHandsBridge'.static.HasAuthoredProfile(ClassName)) continue;
+            Path = "KF2Breacher." $ ClassName;
+            WeaponClass = class<KFWeapon>(DynamicLoadObject(Path, class'Class', true));
+            if (WeaponClass != None && WeaponClass.Name == ClassName && PathName(WeaponClass) ~= Path)
+            {
+                ++LoadedClasses;
+                if (Weapons.Find(WeaponClass) == INDEX_NONE) Weapons.AddItem(WeaponClass);
+            }
+            else RecordMissing(Path, WeaponClass);
         }
-        else RecordMissing(Path, WeaponClass);
         OptionalPerk = class<KFPerk>(DynamicLoadObject("KF2Breacher.BreacherPerk", class'Class', true));
         if (OptionalPerk != None && PathName(OptionalPerk) ~= "KF2Breacher.BreacherPerk")
         {

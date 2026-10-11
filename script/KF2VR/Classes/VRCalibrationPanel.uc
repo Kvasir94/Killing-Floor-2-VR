@@ -35,6 +35,58 @@ var float NextPracticeScan;
 // sets the sidearm holsters (docs/re/ARIZONA_SUNSHINE_2_RIG.md).
 var bool bHolsterFitPending;
 var float HolsterFitUntil, HolsterFitSince;
+var int SandboxZedIndex, SandboxCount;
+var name PendingSandboxWeapon;
+var float PendingSandboxUntil;
+var Pawn PendingSandboxPawn;
+
+function bool SandboxActive()
+{
+    local VRPracticeRange Range;
+    Range = Practice();
+    return (Range != None && Range.bSandbox) || (Bridge != None && Bridge.NetworkSandboxActive());
+}
+
+function SandboxCommand(string Command)
+{
+    local VRPracticeRange Range;
+    if (Bridge == None || Bridge.PC == None) return;
+    if (Bridge.NetworkPracticeAvailable()) { Bridge.RequestNetworkPractice(Command); return; }
+    Range = Practice(true);
+    if (Range == None && Command == "sandbox") Range = Bridge.PC.Spawn(class'VRPracticeRange', Bridge.PC);
+    if (Range == None) return;
+    Range.HandleCommand(Command, Bridge.PC);
+    if (Range.bActive)
+    {
+        CachedRange = Range;
+        if (Range.bSandbox) bPracticeShown = true;
+    }
+    else Range.Destroy();
+}
+
+function UpdateSandboxGrant()
+{
+    local KFWeapon W;
+    if (PendingSandboxWeapon == '') return;
+    if (!SandboxActive() || Bridge.Human == None || Bridge.Human != PendingSandboxPawn
+        || Bridge.Human.Health <= 0 || Bridge.WorldInfo.RealTimeSeconds > PendingSandboxUntil)
+    {
+        Bridge.PC.ClientMessage("Sandbox weapon request ended without VR readiness; check server message or equip the owned weapon again.");
+        PendingSandboxWeapon = ''; PendingSandboxPawn = None;
+        return;
+    }
+    if (Bridge.Human.InvManager == None) return;
+    foreach Bridge.Human.InvManager.InventoryActors(class'KFWeapon', W)
+    {
+        if (W.Class.Name != PendingSandboxWeapon) continue;
+        W.Class.static.TriggerAsyncContentLoad(W.Class);
+        if (Bridge.HandInventory == None || !Bridge.HandInventory.CanDraw(W)) return;
+        PendingWeapon = W;
+        PendingUntil = PendingSandboxUntil;
+        PendingSandboxWeapon = ''; PendingSandboxPawn = None;
+        return;
+    }
+}
 
 function bool IsWristInspecting(int H)
 {
@@ -179,6 +231,7 @@ function Update()
 
     if (Bridge == None) return;
     I = Bridge.HandInventory != None ? Bridge.HandInventory.Input : None;
+    UpdateSandboxGrant();
 
     if (PendingWeapon != None)
     {
@@ -499,6 +552,22 @@ function ApplyProfileDefaultFit()
 
 function string Subtitle(VRHandSelector S, int H, int Row)
 {
+    if (S.MenuPage == 11)
+    {
+        if (Row <= 2) return H == 0 ? "NUDGE -1 CM" : "NUDGE +1 CM";
+        if (Row == 3) return "BOTH HANDS / SAVED FIT";
+        if (Row == 4) return "ORIGINAL POUCH POSITION";
+        return H == 0 ? "CLOSE (AUTO-SAVED)" : "NAVIGATION";
+    }
+    if (S.MenuPage == 10)
+    {
+        if (Row == 0) return "UNRANKED / NO XP";
+        if (Row == 1) return "ZED TYPE (EXACT CLASS)";
+        if (Row == 2) return "COUNT 1-6 / MAX 12 LIVE";
+        if (Row == 3) return "BOSSES: ONE PER PRESS";
+        if (Row == 4) return "SESSION MONEY REFILLS";
+        return H == 0 ? "AUTHORED VR WEAPONS" : "CLEAR ALL / RESET";
+    }
     if (S.MenuPage == 9)
     {
         if (Row == 0) return H == 0 ? "LOWER 1 CM" : "RAISE 1 CM";
@@ -542,7 +611,7 @@ function string Subtitle(VRHandSelector S, int H, int Row)
         if (Row == 1) return H == 0 ? "ORIENTATION" : "SEATED VIEW HEIGHT";
         if (Row == 2) return H == 0 ? "DROP " $ int((Bridge.NativeStandingHeight - Bridge.NativeHeadHeight)*100)
             $ " / BASE " $ int(Bridge.NativeStandingHeight * 100) : "DEBUG VIEW";
-        if (Row == 3) return H == 0 ? "PAWN STATE" : "HANDS AT HIPS";
+        if (Row == 3) return H == 0 ? "AMMO REACH" : "HANDS AT HIPS";
         if (Row == 4) return H == 0 ? "CHEST GRENADE" : "WRIST HUD";
         return H == 0 ? "CLOSE" : "NAVIGATION";
     }
@@ -601,6 +670,18 @@ function string Label(VRHandSelector S, int H, int Row)
     local KFWeapon W;
 
     Sign = H == 0 ? " - " : " + ";
+    if (S.MenuPage == 10)
+    {
+        switch (Row)
+        {
+        case 0: return H == 0 ? (SandboxActive() ? "END SANDBOX" : "START / ACCEPT NO XP") : "CLOSE PANEL";
+        case 1: return (H == 0 ? "< " : "> ") $ Mid(class'VRPracticeRange'.static.SandboxZedName(SandboxZedIndex), 7);
+        case 2: return (H == 0 ? "COUNT - " : "COUNT + ") $ Max(1, SandboxCount);
+        case 3: return H == 0 ? "SPAWN PASSIVE" : "SPAWN ATTACKERS";
+        case 4: return H == 0 ? "REFILL MONEY" : "OPEN TRADER";
+        default: return H == 0 ? "VR ARMORY" : "CLEAR TARGETS";
+        }
+    }
     if (S.MenuPage == 1)
     {
         switch (Row)
@@ -620,9 +701,21 @@ function string Label(VRHandSelector S, int H, int Row)
         case 0: return H == 0 ? "CAPTURE STANDING" : "CAPTURE SEATED";
         case 1: return H == 0 ? "RECENTER" : "SEATED HEIGHT";
         case 2: return H == 0 ? "HAND FIT" : (Bridge.bAlignmentMarkers ? "ALIGN MARKERS: ON" : "ALIGN MARKERS: OFF");
-        case 3: return H == 0 ? "PAWN CROUCH: " $ (Bridge.Human.bIsCrouched ? "YES" : "NO") : "HOLSTER FIT";
+        case 3: return H == 0 ? "POUCH FIT" : "HOLSTER FIT";
         case 4: return H == 0 ? "CHEST ZONE HERE" : WristTileLabel();
         default: return H == 0 ? "CLOSE" : "BACK TO FIT";
+        }
+    }
+    if (S.MenuPage == 11)
+    {
+        switch (Row)
+        {
+        case 0: return (H == 0 ? "BACK " : "FORWARD ") $ int(Bridge.AmmoPouchAdjustment.X) $ "cm";
+        case 1: return (H == 0 ? "NARROWER " : "WIDER ") $ int(Bridge.AmmoPouchAdjustment.Y) $ "cm";
+        case 2: return (H == 0 ? "LOWER " : "RAISE ") $ int(Bridge.AmmoPouchAdjustment.Z) $ "cm";
+        case 3: return "ADJUSTMENT FROM DEFAULT";
+        case 4: return "RESET POUCH FIT";
+        default: return H == 0 ? "CLOSE (AUTO-SAVED)" : "BACK (AUTO-SAVED)";
         }
     }
     if (S.MenuPage == 9)
@@ -713,7 +806,7 @@ function string Label(VRHandSelector S, int H, int Row)
             case 1: return "NO WEAPONS";
             case 3: return "REFILL AMMO";
             case 4: return "WEAPON SELECTOR";
-            default: return H == 0 ? "CLOSE" : "BACK TO PRACTICE";
+            default: return H == 0 ? "CLOSE" : (SandboxActive() ? "BACK TO SANDBOX" : "BACK TO PRACTICE");
             }
         }
         Index = ((S.ArmoryIndex % N) + N) % N;
@@ -732,11 +825,11 @@ function string Label(VRHandSelector S, int H, int Row)
             if (W != None) return W.GetHumanReadableName() @ (PendingWeapon == W ? "[LOADING]" : "[OWNED]");
             return string(WeaponName);
         case 2:
-            if (Bridge.NetworkPracticeAvailable()) return H == 0 ? "EQUIP OWNED LEFT" : "EQUIP OWNED RIGHT";
+            if (Bridge.NetworkPracticeAvailable() && !SandboxActive()) return H == 0 ? "EQUIP OWNED LEFT" : "EQUIP OWNED RIGHT";
             return H == 0 ? "ADD / EQUIP LEFT" : "ADD / EQUIP RIGHT";
         case 3: return "REFILL AMMO";
         case 4: return "WEAPON SELECTOR";
-        default: return H == 0 ? "CLOSE" : "BACK TO PRACTICE";
+        default: return H == 0 ? "CLOSE" : (SandboxActive() ? "BACK TO SANDBOX" : "BACK TO PRACTICE");
         }
     }
     return "BACK";
@@ -774,10 +867,61 @@ function bool Activate(VRHandSelector S, int H, int Row)
     local KFInventoryManager Inv;
     local Inventory Item;
     local name TargetName;
-    local int N, Index;
+    local int N, Index, DisplayHand;
     local VRChestGrenade Grenade;
+    local VRDualHandInput Input;
 
     Step = H == 0 ? -1 : 1;
+    if (S.MenuPage == 11)
+    {
+        if (Row == 0) Bridge.AmmoPouchAdjustment.X = FClamp(Bridge.AmmoPouchAdjustment.X + Step, -15, 20);
+        if (Row == 1) Bridge.AmmoPouchAdjustment.Y = FClamp(Bridge.AmmoPouchAdjustment.Y + Step, -3, 25);
+        if (Row == 2) Bridge.AmmoPouchAdjustment.Z = FClamp(Bridge.AmmoPouchAdjustment.Z + Step, -20, 20);
+        if (Row == 4) Bridge.AmmoPouchAdjustment = vect(0,0,0);
+        if (Row <= 2 || Row == 4)
+        {
+            Bridge.SaveConfig();
+            if (S.Display != None) S.Display.bNeedsUpdate = true;
+            Input = Bridge.HandInventory != None ? Bridge.HandInventory.Input : None;
+            if (Input != None)
+                for (DisplayHand = 0; DisplayHand < 2; ++DisplayHand)
+                    if (Input.Selectors[DisplayHand] != None && Input.Selectors[DisplayHand].MenuPage == 11
+                        && Input.Selectors[DisplayHand].Display != None)
+                        Input.Selectors[DisplayHand].Display.bNeedsUpdate = true;
+        }
+        if (Row == 5)
+        {
+            DisarmTriggers();
+            if (H == 0) { S.MenuPage = 0; S.bUtilities = false; return true; }
+            S.MenuPage = 2;
+        }
+        return false;
+    }
+    if (S.MenuPage == 10)
+    {
+        if (Row == 0)
+        {
+            if (H == 1) { S.MenuPage = 0; S.bUtilities = false; return true; }
+            SandboxCommand(SandboxActive() ? "off" : "sandbox"); return false;
+        }
+        if (Row == 1)
+        {
+            N = class'VRPracticeRange'.static.SandboxZedCount();
+            if (N > 0) SandboxZedIndex = (SandboxZedIndex + int(Step) + N) % N;
+            return false;
+        }
+        if (Row == 2) { SandboxCount = Clamp(Max(1, SandboxCount) + int(Step), 1, 6); return false; }
+        if (!SandboxActive()) { Bridge.PC.ClientMessage("Start the UNRANKED / NO XP sandbox first."); return false; }
+        if (Row == 3) SandboxCommand((H == 0 ? "passive " : "zed ") $ SandboxZedIndex $ " " $ Max(1, SandboxCount));
+        if (Row == 4)
+        {
+            SandboxCommand(H == 0 ? "money" : "trader");
+            if (H == 1) { S.MenuPage = 0; S.bUtilities = false; return true; }
+        }
+        if (Row == 5 && H == 0) { S.MenuPage = 5; return false; }
+        if (Row == 5 && H == 1) SandboxCommand("clear");
+        return false;
+    }
     if (S.MenuPage == 1)
     {
         if (Row == 0) { Bridge.FirearmAimPitchDegrees = FClamp(Bridge.FirearmAimPitchDegrees + Step, -80, 80); SyncAimDegrees(); return false; }
@@ -818,6 +962,7 @@ function bool Activate(VRHandSelector S, int H, int Row)
         }
         if (Row == 2 && H == 0) { S.MenuPage = 8; Bridge.bAlignmentMarkers = true; return false; }
         if (Row == 2 && H == 1) { Bridge.bAlignmentMarkers = !Bridge.bAlignmentMarkers; return false; }
+        if (Row == 3 && H == 0) { S.MenuPage = 11; return false; }
         if (Row == 3 && H == 1) { StartHolsterFit(S); return true; }
         if (Row == 4 && H == 0)
         {
@@ -825,8 +970,8 @@ function bool Activate(VRHandSelector S, int H, int Row)
                 && Bridge.HandInventory.Input.Grenade.HandTracked(S.Hand))
             {
                 Grenade = Bridge.HandInventory.Input.Grenade;
-                Bridge.ChestGrenadeOffset = (Grenade.GrabPoint(S.Hand) - Grenade.ChestOrigin()
-                    - (Grenade.DisplayCenter() >> Grenade.Torso)) << Grenade.Torso;
+                Bridge.ChestGrenadeOffset = (Grenade.GrabPoint(S.Hand) - Grenade.ChestOrigin()) << Grenade.Torso;
+                Bridge.bChestGrenadeCentered = true;
                 Bridge.SaveConfig();
                 Bridge.PC.ClientMessage("Chest grenade zone saved from the " $ (S.Hand == 0 ? "left" : "right") $ " hand.");
             }
@@ -991,7 +1136,7 @@ function bool Activate(VRHandSelector S, int H, int Row)
             {
                 DisarmTriggers();
                 if (H == 0) { S.MenuPage = 0; S.bUtilities = false; return true; }
-                S.MenuPage = 4;
+                S.MenuPage = SandboxActive() ? 10 : 4;
                 return false;
             }
             if (N > 0 && Row == 0)
@@ -1013,6 +1158,18 @@ function bool Activate(VRHandSelector S, int H, int Row)
                         W = KFWeapon(Item);
                         break;
                     }
+                }
+                if (W == None && SandboxActive())
+                {
+                    // Both local and network sandbox grants share the tracked
+                    // authority path; local grants must also be removed on exit.
+                    if (PendingSandboxWeapon != '') return false;
+                    PendingSandboxWeapon = TargetName;
+                    PendingSandboxPawn = Bridge.Human;
+                    PendingHand = H;
+                    PendingSandboxUntil = Bridge.WorldInfo.RealTimeSeconds + 8;
+                    SandboxCommand("weapon " $ string(TargetName));
+                    return false;
                 }
                 if (W == None && Bridge.NetworkPracticeAvailable())
                 {
@@ -1066,7 +1223,7 @@ function bool Activate(VRHandSelector S, int H, int Row)
             {
                 DisarmTriggers();
                 if (H == 0) { S.MenuPage = 0; S.bUtilities = false; return true; }
-                S.MenuPage = 4;
+                S.MenuPage = SandboxActive() ? 10 : 4;
                 return false;
             }
         }
@@ -1088,6 +1245,21 @@ function Preview(VRHandSelector S)
     }
     else if (S.MenuPage == 3)
         MenuPlacementPreview(S);
+    else if (S.MenuPage == 11)
+        PouchFitPreview();
+}
+
+function PouchFitPreview()
+{
+    local int H;
+    local vector Center;
+    // The same anchor feeds ammunition, its readout and acquisition. Show
+    // both mirrored centres while adjusting; this does not change grab radii.
+    for (H = 0; H < 2; ++H)
+    {
+        Center = Bridge.AmmoPouchPosition(H, class'VRInteractiveReload'.default.BeltOffset);
+        Bridge.DrawDebugBox(Center, vect(2,2,2), 60, 220, 255, false);
+    }
 }
 
 function FitPreview(VRHandSelector S)

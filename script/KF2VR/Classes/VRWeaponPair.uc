@@ -16,6 +16,12 @@ var bool bSourceGivenAtStart, bFailed;
 var int Reserve, Revision;
 var KFWeapon AmmoBorrower;
 var int AmmoDepth;
+// Per-member physical transactions; terminal fences reject late stock RPCs.
+var int PhysicalTokens[2], PhysicalStatuses[2];
+var byte PhysicalFences[2];
+var private int PhysicalAmmoAtBegin[2];
+var private float PhysicalDeadline[2];
+var KFWeapon PhysicalReloadPermit;
 var string Failure;
 var bool bSourceWasActive;
 var private KFPlayerController PresentationPC;
@@ -73,7 +79,7 @@ replication
 {
     if (Role == ROLE_Authority && bNetOwner)
         Human, StockItem, Members, PairState, SourceWeight, SourceMagazineCapacity,
-        SourceReserveCapacity, Reserve, Revision;
+        SourceReserveCapacity, Reserve, Revision, PhysicalTokens, PhysicalStatuses, PhysicalFences;
 }
 
 simulated function bool Owns(KFWeapon W)
@@ -122,6 +128,147 @@ simulated function bool IsMember(KFWeapon W)
 {
     return PairState == 2 && ContextValid() && W != None && !W.bDeleteMe
         && (W == Members[0] || W == Members[1]) && Owns(W);
+}
+
+simulated function int PhysicalMemberIndex(KFWeapon W)
+{
+    if (W != None && W == Members[0]) return 0;
+    if (W != None && W == Members[1]) return 1;
+    return -1;
+}
+
+simulated function bool PhysicalReloadManaged(KFWeapon W)
+{
+    local int I;
+    I = PhysicalMemberIndex(W);
+    return I >= 0 && PhysicalFences[I] != 0;
+}
+
+simulated function bool AllowsReloadStart(KFWeapon W)
+{
+    return Role < ROLE_Authority || !PhysicalReloadManaged(W) || PhysicalReloadPermit == W;
+}
+
+simulated function bool AllowsReloadPayment(KFWeapon W)
+{
+    local int I;
+    I = PhysicalMemberIndex(W);
+    return Role < ROLE_Authority || I < 0 || PhysicalFences[I] == 0
+        || PhysicalReloadPermit == W || PhysicalStatuses[I] == 4;
+}
+
+simulated function bool BlocksPhysicalFire(KFWeapon W, byte Mode)
+{
+    local int I;
+    if (Role < ROLE_Authority || PhysicalReloadPermit == W) return false;
+    I = PhysicalMemberIndex(W);
+    return I >= 0 && PhysicalFences[I] != 0
+        && (PhysicalStatuses[I] == 1 || Mode == class'KFWeapon'.const.RELOAD_FIREMODE);
+}
+
+function ClearPhysicalReloadTimers(KFWeapon W)
+{
+    local int Mode;
+    W.ClearTimer('ReloadAmmoTimer'); W.ClearTimer('ReloadStatusTimer');
+    for (Mode = 0; Mode < W.GetPendingFireLength(); ++Mode) W.ClearPendingFire(byte(Mode));
+}
+
+function bool BeginPhysicalReload(KFWeapon W, int Token, optional bool bStock)
+{
+    local int I;
+    local bool bAlreadyReloading;
+    I = PhysicalMemberIndex(W);
+    if (Role != ROLE_Authority || I < 0 || !IsMember(W) || Human.Health <= 0
+        || !class'VRPhysicalInteraction'.static.Allowed(Human)
+        || Manager == None || Manager.bServerTraderMenuOpen || !Human.CanReloadWeapon()
+        || Token <= PhysicalTokens[I] || Token <= 0 || Token == MaxInt
+        || PhysicalStatuses[I] == 1 || PhysicalStatuses[I] == 4
+        || (!W.IsInState('Active') && !W.IsInState('Reloading')) || !W.CanReload(0) || W.MySkelMesh == None) return false;
+    bAlreadyReloading = W.IsInState('Reloading');
+    PhysicalTokens[I] = Token;
+    PhysicalStatuses[I] = bStock ? 4 : 1;
+    PhysicalFences[I] = 1;
+    PhysicalAmmoAtBegin[I] = W.AmmoCount[0];
+    PhysicalDeadline[I] = WorldInfo.RealTimeSeconds + 45.0;
+    // Adopt an early stock automatic reload without replaying its start.
+    // Stock admission keeps its timers; physical admission pauses them below.
+    if (!bAlreadyReloading)
+    {
+        ClearPhysicalReloadTimers(W);
+        PhysicalReloadPermit = W;
+        W.InitializeReload();
+        W.SendToFiringState(class'KFWeapon'.const.RELOAD_FIREMODE);
+        PhysicalReloadPermit = None;
+    }
+    if (!bStock) { W.ClearTimer('ReloadAmmoTimer'); W.ClearTimer('ReloadStatusTimer'); }
+    if (!W.IsInState('Reloading')) { CancelPhysicalReload(W, Token); return false; }
+    bForceNetUpdate = true;
+    return true;
+}
+
+function bool CommitPhysicalReload(KFWeapon W, int Token)
+{
+    local int I, Before, Available;
+    I = PhysicalMemberIndex(W);
+    if (Role != ROLE_Authority || I < 0 || Token != PhysicalTokens[I] || PhysicalStatuses[I] != 1) return false;
+    if (!IsMember(W) || Human.Health <= 0 || !class'VRPhysicalInteraction'.static.Allowed(Human)
+        || !W.IsInState('Reloading') || WorldInfo.RealTimeSeconds >= PhysicalDeadline[I]
+        || W.AmmoCount[0] != PhysicalAmmoAtBegin[I]) { CancelPhysicalReload(W, Token); return false; }
+    ClearPhysicalReloadTimers(W);
+    Before = W.AmmoCount[0]; Available = SharedReserve();
+    PhysicalStatuses[I] = 2;
+    PhysicalReloadPermit = W;
+    W.PerformReload(0);
+    W.ReloadComplete();
+    if (W.AmmoCount[0] <= Before && (Available > 0 || W.bInfiniteSpareAmmo)) PhysicalStatuses[I] = 3;
+    PhysicalReloadPermit = None;
+    W.bForceNetUpdate = true; bForceNetUpdate = true;
+    return PhysicalStatuses[I] == 2;
+}
+
+function CancelPhysicalReload(KFWeapon W, int Token)
+{
+    local int I;
+    I = PhysicalMemberIndex(W);
+    if (Role != ROLE_Authority || I < 0 || Token != PhysicalTokens[I]
+        || (PhysicalStatuses[I] != 1 && PhysicalStatuses[I] != 4)) return;
+    PhysicalStatuses[I] = 3;
+    if (IsMember(W))
+    {
+        ClearPhysicalReloadTimers(W);
+        if (W.IsInState('Reloading')) W.AbortReload();
+        W.bForceNetUpdate = true;
+    }
+    bForceNetUpdate = true;
+}
+
+simulated function int PhysicalReloadStatus(KFWeapon W, int Token)
+{
+    local int I;
+    I = PhysicalMemberIndex(W);
+    if (I < 0 || Token != PhysicalTokens[I]) return 0;
+    return PhysicalStatuses[I];
+}
+
+function TickPhysicalReloads()
+{
+    local int I;
+    for (I = 0; I < 2; ++I)
+    {
+        if (PhysicalStatuses[I] != 1 && PhysicalStatuses[I] != 4) continue;
+        if (!IsMember(Members[I]) || Human.Health <= 0 || Manager.bServerTraderMenuOpen
+            || !class'VRPhysicalInteraction'.static.Allowed(Human)
+            || WorldInfo.RealTimeSeconds >= PhysicalDeadline[I])
+            CancelPhysicalReload(Members[I], PhysicalTokens[I]);
+        else if (PhysicalStatuses[I] == 4 && !Members[I].IsInState('Reloading'))
+        {
+            PhysicalStatuses[I] = Members[I].AmmoCount[0] > PhysicalAmmoAtBegin[I] ? 2 : 3;
+            bForceNetUpdate = true;
+        }
+        else if (PhysicalStatuses[I] == 1 && (!Members[I].IsInState('Reloading')
+            || Members[I].AmmoCount[0] != PhysicalAmmoAtBegin[I]))
+            CancelPhysicalReload(Members[I], PhysicalTokens[I]);
+    }
 }
 
 simulated function int MemberWeight(KFWeapon W)
@@ -566,6 +713,7 @@ function AbortPreparation()
 simulated event Tick(float DeltaTime)
 {
     UpdateAggregatePresentation();
+    if (Role == ROLE_Authority) TickPhysicalReloads();
     if (Human != None && Manager == None) Manager = KFInventoryManager(Human.InvManager);
     // The same stock restoration handles solo traders and a dying owner.
     // Network controllers also call it synchronously before opening the trader.

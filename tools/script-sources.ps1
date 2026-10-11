@@ -50,10 +50,11 @@ function Get-HandAssetState([string]$ProjectRoot, [string]$GameRoot = '') {
         throw 'Floating-hand geometry is stale. Regenerate it with tools/generate_floating_hands.py before building.'
     }
     $textureHashes = [ordered]@{}
-    # Same set build-hand-assets.ps1 records: hand/watch and Tomahawk textures.
+    # Same set build-hand-assets.ps1 records: hand/watch, Tomahawk and Deadbolt textures.
     $textureRoot = Join-Path $ProjectRoot 'build/hand-meshes'
     foreach ($texture in @(@(Get-ChildItem -LiteralPath $textureRoot -Filter 'VRHorzine*.tga') +
-        @(Get-ChildItem -LiteralPath $textureRoot -Filter 'VRTomahawk*.tga')) | Sort-Object Name) {
+        @(Get-ChildItem -LiteralPath $textureRoot -Filter 'VRTomahawk*.tga') +
+        @(Get-ChildItem -LiteralPath $textureRoot -Filter 'VRDeadbolt*.tga' -ErrorAction SilentlyContinue)) | Sort-Object Name) {
         $textureHashes[$texture.Name] = (Get-FileHash -LiteralPath $texture.FullName).Hash
     }
     $state = [ordered]@{

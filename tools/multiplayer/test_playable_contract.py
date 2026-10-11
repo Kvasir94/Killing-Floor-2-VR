@@ -118,23 +118,38 @@ class PlayableContractTests(unittest.TestCase):
             root = Path(tmp)
             config = root / "Config"; config.mkdir()
             (config / "KFGame.ini").write_text("[KF2VR.VRSessionUI]\nSnapTurnDegrees=0\nSmoothTurnScale=0\nEyeRenderPercent=75.5\n")
-            self.assertEqual(75, vr_config.import_preferences(config, root=root / "profile"))
+            self.assertEqual(100, vr_config.import_preferences(config, root=root / "profile"))
             text = read_ini(config / "KFGame.ini")
             for section in ("KF2VR.VRSessionUI", "KF2VRNetClient.KF2VRNetSessionUI"):
                 values = vr_config.values(text, section)
                 self.assertEqual("30", values["SnapTurnDegrees"])
                 self.assertEqual("0.5", values["SmoothTurnScale"])
-            text = text.replace("EyeRenderPercent=75", "EyeRenderPercent=80")
+            text = text.replace("EyeRenderPercent=100", "EyeRenderPercent=75")
             (config / "KFGame.ini").write_text(text, encoding="utf-16")
             vr_config.export_preferences(config, root / "profile")
-            self.assertEqual(80, vr_config.import_preferences(config, root=root / "profile"))
+            self.assertEqual(75, vr_config.import_preferences(config, root=root / "profile"))
             self.assertEqual(85, vr_config.import_preferences(config, root=root / "profile", eye_percent=85))
+
+    def test_grenade_pose_shared_section_survives_solo_and_network_profiles(self):
+        section = "KF2VR.VRFreeHandPose"
+        self.assertEqual("True", vr_config.values(vr_config.apply_preferences(""), section)["bAuthoredGrenadeGrip"])
+        for network in (False, True):
+            with self.subTest(network=network), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                config = root / "Config"
+                config.mkdir()
+                (config / "KFGame.ini").write_text(f"[{section}]\nbAuthoredGrenadeGrip=False\n", encoding="utf-16")
+                vr_config.export_preferences(config, root / "profile", network=network)
+                saved = read_ini(root / "profile/KFGame.ini")
+                self.assertEqual("False", vr_config.values(vr_config.apply_preferences("", saved), section)["bAuthoredGrenadeGrip"])
+                self.assertNotIn("KF2VRNetClient.VRFreeHandPose", saved)
 
     def test_profile_whitelist_does_not_import_diagnostics(self):
         saved = "[KF2VR.VRHandsBridge]\nbDualHandReplay=True\nChestGrenadeOffset=(X=12,Y=0,Z=0)\n"
         text = vr_config.apply_preferences("", saved)
         self.assertNotIn("bDualHandReplay", text)
-        self.assertIn("ChestGrenadeOffset=" + vr_config.DEFAULTS["KF2VR.VRHandsBridge"]["ChestGrenadeOffset"], text)
+        self.assertEqual("(X=12,Y=0,Z=0)", vr_config.values(text, "KF2VR.VRHandsBridge")["ChestGrenadeOffset"])
+        self.assertEqual("False", vr_config.values(text, "KF2VR.VRHandsBridge")["bChestGrenadeCentered"])
 
     def test_profile_carries_preferences_that_have_no_shipped_default(self):
         saved = ("[KF2VR.VRHandsBridge]\nFirearmAimYawDegrees=2.5\n"
@@ -183,12 +198,56 @@ class PlayableContractTests(unittest.TestCase):
                 self.assertEqual("2.4", vr_config.values(saved, section)["SpatialMenuDistance"])
                 self.assertEqual("1.4", vr_config.values(saved, section)["SpatialMenuScale"])
 
-    def test_chest_default_migration_preserves_calibration(self):
-        default = vr_config.DEFAULTS["KF2VR.VRHandsBridge"]["ChestGrenadeOffset"]
-        for old in ("(X=12,Y=0,Z=0)", "(X=10,Y=-18,Z=-6)"):
-            self.assertEqual(default, vr_config.normalized("ChestGrenadeOffset", old, default))
-        custom = "(X=15,Y=2,Z=-10)"
-        self.assertEqual(custom, vr_config.normalized("ChestGrenadeOffset", custom, default))
+    def test_chest_legacy_offsets_keep_their_values_and_pivot_interpretation(self):
+        bridge = "KF2VR.VRHandsBridge"
+        defaults = vr_config.DEFAULTS[bridge]
+        for offset in ("(X=12,Y=0,Z=0)", "(X=10,Y=-18,Z=-6)", "(X=10,Y=-18,Z=-29)",
+                       "(X=20,Y=-16,Z=-8)", "(X=10,Y=-20,Z=-18)",
+                       defaults["ChestGrenadeOffset"], "(X=15,Y=2,Z=-10)"):
+            with self.subTest(offset=offset):
+                saved = f"[{bridge}]\nChestGrenadeOffset={offset}\n"
+                result = vr_config.apply_preferences("", saved)
+                for section in (bridge, vr_config.ALIASES[bridge]):
+                    values = vr_config.values(result, section)
+                    self.assertEqual(offset, values["ChestGrenadeOffset"])
+                    self.assertEqual("False", values["bChestGrenadeCentered"])
+
+    def test_chest_offset_override_carries_its_own_interpretation(self):
+        defaults = vr_config.DEFAULTS["KF2VR.VRHandsBridge"]
+        self.assertEqual("True", vr_config.merged(defaults)["bChestGrenadeCentered"])
+        centered = {"ChestGrenadeOffset": "(X=6,Y=-4,Z=9)", "bChestGrenadeCentered": "True"}
+        legacy = {"ChestGrenadeOffset": "(X=15,Y=2,Z=-10)"}
+        result = vr_config.merged(defaults, centered, legacy)
+        self.assertEqual(legacy["ChestGrenadeOffset"], result["ChestGrenadeOffset"])
+        self.assertEqual("False", result["bChestGrenadeCentered"])
+        result = vr_config.merged(defaults, legacy, centered)
+        self.assertEqual(centered["ChestGrenadeOffset"], result["ChestGrenadeOffset"])
+        self.assertEqual("True", result["bChestGrenadeCentered"])
+        for mode in ("invalid", "", "False"):
+            result = vr_config.merged(defaults, {**legacy, "bChestGrenadeCentered": mode})
+            self.assertEqual("False", result["bChestGrenadeCentered"])
+
+    def test_chest_offset_and_mode_round_trip_in_solo_and_network_profiles(self):
+        from session import set_ini
+        bridge = "KF2VR.VRHandsBridge"
+        for network in (False, True):
+            for mode in ("False", "True"):
+                with self.subTest(network=network, mode=mode), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    config = root / "Config"; config.mkdir()
+                    offset = "(X=6,Y=-4,Z=9)"
+                    text = vr_config.apply_preferences("", "")
+                    section = vr_config.ALIASES[bridge] if network else bridge
+                    text = set_ini(text, section, {"ChestGrenadeOffset": offset, "bChestGrenadeCentered": mode})
+                    (config / "KFGame.ini").write_text(text, encoding="utf-16")
+                    vr_config.export_preferences(config, root / "profile", network=network)
+                    saved = read_ini(root / "profile/KFGame.ini")
+                    restored = vr_config.apply_preferences("", saved)
+                    for section in (bridge, vr_config.ALIASES[bridge]):
+                        for output in (saved, restored):
+                            values = vr_config.values(output, section)
+                            self.assertEqual(offset, values["ChestGrenadeOffset"])
+                            self.assertEqual(mode, values["bChestGrenadeCentered"])
 
     def test_smoke_stays_small_and_missing_evidence_fails(self):
         self.assertEqual(["pistol_smoke"], [name for name, _ in acceptance.scenarios("smoke")])

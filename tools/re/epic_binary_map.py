@@ -25,7 +25,7 @@ FUNCTIONS = {
     "GfxInputKey": 0xc2ad00, "GfxInputAxis": 0xc2a3d0,
     "GfxGetFocusMovie": 0xc22f40, "RenderAllocate": 0xe3f0,
     "RenderCommit": 0x102d0, "WeaponViewRotation": 0xe000c0,
-    "ResizeRhi": 0xd1ef30, "CanvasDraw": 0xd350a0,
+    "ResizeRhi": 0xd1ef30, "WeaponTraceStart": 0xd350a0,
     "PhysicalFireStartLoc": 0x47e3c0, "ProcessInternal": 0x7aed0,
     "ConstructName": 0xc4990, "FindFunction": 0xc9de0,
     "PortalRender": 0x693430, "PortalClip": 0x68c850,

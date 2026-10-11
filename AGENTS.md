@@ -11,8 +11,10 @@ These instructions apply to automated contributors as well as human changes.
 - Changes to launcher switches/defaults also update `PLAY-MULTIPLAYER.md` and the
   affected launcher/package tests.
 - Build affected artifacts and run native CTest plus launcher/package checks.
-  Use the source setup in [BUILDING](docs/BUILDING.md). Run builds sequentially;
-  the build tools share a mutex. Close game/editor/server processes first.
+  Use the source setup in [BUILDING](docs/BUILDING.md). Builds sharing a checkout
+  or outputs serialize under its mutex; independent outputs may compile in
+  parallel with bounded jobs. Keep shared SDK/deployment/runtime locks and
+  close conflicting game/editor/server processes first.
 - Headset play and real online sessions establish gameplay acceptance. Run game
   automation only when explicitly requested; do not infer acceptance from compilation.
 - Add tests for native math/state, file/log parsers, or launch/package/config/profile

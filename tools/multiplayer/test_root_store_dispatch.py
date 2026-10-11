@@ -15,7 +15,7 @@ RUNTIME = ROOT/'build/multiplayer/releases/KF2VR-Multiplayer-20261006-001928/run
 
 @unittest.skipUnless(os.name == 'nt' and RUNTIME.is_dir(), 'Windows rollback runtime required')
 class RootStoreDispatchTests(unittest.TestCase):
-    def dispatch(self, store, protocol):
+    def dispatch(self, store, protocol, gui=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             release = root/'build/multiplayer/releases/KF2VR-Multiplayer-20260101-000000'
@@ -31,6 +31,7 @@ class RootStoreDispatchTests(unittest.TestCase):
             (release/'tools/multiplayer/friends.py').write_text(
                 'import json,os,sys\nfrom pathlib import Path\n'
                 'Path(os.environ["KF2VR_DISPATCH_ARGS"]).write_text(json.dumps(sys.argv[1:]))\n')
+            shutil.copy2(release/'tools/multiplayer/friends.py', release/'tools/multiplayer/launcher_gui.py')
             output = root/'arguments.json'
             environment = dict(os.environ, LOCALAPPDATA=str(root/'profile'),
                                PSModulePath=str(Path(os.environ.get('SystemRoot', 'C:/Windows'))/'System32/WindowsPowerShell/v1.0/Modules'),
@@ -41,8 +42,10 @@ class RootStoreDispatchTests(unittest.TestCase):
                 env=environment, capture_output=True, text=True, creationflags=0x08000000)
             self.assertEqual(0, linked.returncode, linked.stderr)
             try:
+                options = (['-Gui', '-Vr', '-BreacherLevel', '25', '-Dlss', 'quality',
+                            '-GameRoot', str(root/'Steam Library'/'killingfloor2')] if gui else ['-Desktop'])
                 result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-                    str(tools/'play-main.ps1'), '-Solo', '-Desktop', '-PrepareOnly', '-Store', store],
+                    str(tools/'play-main.ps1'), '-Solo', '-PrepareOnly', '-Store', store, *options],
                     env=environment, capture_output=True, text=True, timeout=30, creationflags=0x08000000)
                 arguments = json.loads(output.read_text()) if output.exists() else None
                 return result, arguments
@@ -67,6 +70,15 @@ class RootStoreDispatchTests(unittest.TestCase):
         result, args = self.dispatch('Epic', 1)
         self.assertEqual(0, result.returncode, result.stdout+result.stderr)
         self.assertEqual('epic', args[args.index('--store')+1])
+
+    def test_windows_powershell_gui_preserves_json_quotes_and_spaced_game_path(self):
+        result, args = self.dispatch('Steam', 1, gui=True)
+        self.assertEqual(0, result.returncode, result.stdout+result.stderr)
+        initial = json.loads(args[args.index('--initial-arguments')+1])
+        self.assertEqual('25', initial[initial.index('--breacher-level')+1])
+        self.assertEqual('quality', initial[initial.index('--dlss')+1])
+        self.assertIn('Steam Library', initial[initial.index('--game-root')+1])
+        self.assertIn('--vr', initial)
 
 
 if __name__ == '__main__':

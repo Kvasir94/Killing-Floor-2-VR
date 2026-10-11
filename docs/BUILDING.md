@@ -122,6 +122,12 @@ packages with `--no-select`. Logs and outputs stay under ignored `build/` and
 uses factory preferences and pinned addon source, not a global addon installation
 or a saved authoring scene. An idle Blender UI can remain open.
 
+The hand-asset route also generates required Deadbolt/Ripcord mesh inputs.
+The source builder creates Deadbolt's `decal_atlas.png` and `decal_metal.png`
+with `tools/deadbolt/make_decals.py` before export when they are absent;
+no excluded concept sheet is required for these generated decal inputs.
+Generating compile-time art does not enable optional Breacher gameplay.
+
 The builder prints the candidate folder and ZIP paths. Extract that ZIP into a
 fresh folder and open **Start KF2-VR**. The development CMD launcher needs a
 selected package; this source builder deliberately does not select one.
@@ -148,12 +154,18 @@ For subsequent development builds with prepared inputs and the default installat
 close KF2/editor/server and run:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/build-kf2vr.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/build-kf2vr.ps1 -NoBreacher
 ```
 
 This builds affected assets/native/scripts, runs the fast CPU/launcher gate,
 packages the results and selects `build/multiplayer/current-release.json`.
-Builds run sequentially under a shared mutex. Preserve previous release folders,
+The example omits frozen Breacher content, as does the current combined candidate.
+Without `-NoBreacher`, the aggregate builder also requires and packages the
+optional Breacher inputs; its gameplay still starts OFF. Use `-NoSelect` when
+preparing a candidate without changing the selected package.
+Builds sharing a checkout or outputs run sequentially under its mutex;
+independent outputs may compile in parallel with bounded jobs. Shared SDK,
+deployment and runtime resources retain their locks. Preserve previous release folders,
 server/Workshop caches and user data. Launch with `Play-KF2VR.cmd` and keep the
 launcher open for cleanup. See [launch options](../PLAY-MULTIPLAYER.md).
 
@@ -195,8 +207,10 @@ public procedural recipe for the first alpha's exact later hand-art revision.
 Headset and real online sessions remain the acceptance checks for source-built
 candidates.
 
-Experimental DLSS builds: review `third_party/NVIDIA-DLSS-LICENSE.txt`, run `tools/fetch-ngx.ps1`, then `tools/build-kf2vr.ps1 -NoSelect -Dlss`. Without `-Dlss`, no NGX SDK/runtime is required. CPU DLSS math checks run in either build. See `docs/DLSS.md` for limitations and publication obligations.
+Experimental DLSS builds: review `third_party/NVIDIA-DLSS-LICENSE.txt`, run `tools/fetch-ngx.ps1`, then `tools/build-kf2vr.ps1 -NoSelect -NoBreacher -Dlss`. Without `-Dlss`, no NGX SDK/runtime is required. CPU DLSS math checks run in either build. See [DLSS](DLSS.md) for limitations and publication obligations.
 
-## Optional experimental DLSS build
-
-The default SDK-free adapter uses the Off stub. For the optional DLSS-enabled build, fetch the official pinned SDK with `tools/fetch-ngx.ps1`, then use `tools/build-kf2vr.ps1 -NoSelect -Dlss`. `tools/ngx-pins.json` pins the SDK commit, consumed files and runtime. NVIDIA SDK/runtime binaries are not included in this source export. Retain the NVIDIA and AMD licence files. Public distribution requires resolving the publication obligations described in [DLSS](DLSS.md); a successful build or bundled notice does not resolve them.
+Optional Deadbolt/Ripcord concept-comparison helpers are outside the supported
+base source-build route. `tools/deadbolt/make_judge_sheet.py` and
+`tools/ripcord/make_compare_sheet.py` require separate concept art and rendered
+preview inputs that are excluded from this export. Their presence does not make
+those optional previews or the private authored art reproducible from this tree.

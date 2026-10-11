@@ -440,6 +440,8 @@ simulated function ApplyContact(VRHandsBridge Bridge, int Hand, ImpactInfo Impac
             ++Parries;
             LastBonus = LastBonus != "" ? LastBonus $ "+parry" : "parry";
         }
+        class'VRBreacherPhysics'.static.EmpowerPunch(Bridge.Human.Controller,Victim,Impact.HitLocation,
+            Impact.HitInfo.BoneName,Damage,Momentum,HitType);
         Victim.TakeDamage(Damage, Bridge.Human.Controller, Impact.HitLocation,
             Momentum, HitType, Impact.HitInfo, Bridge.Human);
         if (Bridge.Human.Role < ROLE_Authority)
@@ -726,7 +728,7 @@ simulated function Update(VRHandsBridge Bridge, int Hand)
     local float Now, Delta, Speed;
     local bool bJustStarted;
 
-    if (Bridge == None || Bridge.Human == None || Bridge.Human.Health <= 0
+    if (Bridge == None || !class'VRPhysicalInteraction'.static.Allowed(Bridge.Human)
         || Bridge.PC == None || Bridge.PC.Pawn != Bridge.Human
         || Bridge.NativeConnection <= 0 || Bridge.NativeControlsEnabled == 0
         || (Bridge.NativeValidMask & (1 << Hand)) == 0

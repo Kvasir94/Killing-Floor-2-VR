@@ -1,4 +1,6 @@
+#undef NDEBUG
 #include "../localtest/CommandPolicy.h"
+#include "../localtest/DiagnosticInput.h"
 #include <cassert>
 #include <stdexcept>
 #include <iostream>
@@ -17,6 +19,23 @@ int main() {
     assert(!Parse(wire('b',"spawn-zeds","scrake",7),request));
     assert(!Parse(wire('b',"spawn-zeds","boss",1),request));
     assert(Parse(wire('b',"spawn-zeds","scrake",6),request));
+    assert(Parse(wire('b',"diagnostic","case-deadbolt-left-manual"),request));
+    assert(Parse(wire('b',"diagnostic","case-ripcord-right-automatic"),request));
+    assert(!Parse(wire('b',"diagnostic","case-other-right-manual"),request));
+    assert(!Parse(wire('b',"diagnostic","case-deadbolt-left-manual",1),request));
+    DiagnosticInput input;
+    assert(!input.Fresh(0) && input.Triggers(0)==0 && input.Buttons(0)==0);
+    input.Update(true,2,8,1000);
+    assert(input.Fresh(1250) && input.Triggers(1250)==2 && input.Buttons(1250)==8);
+    assert(!input.Fresh(999) && !input.Fresh(1251) && input.Triggers(1251)==0 && input.Buttons(1251)==0);
+    input.Update(false,3,9,1300);
+    assert(input.Triggers(1300)==0 && input.Buttons(1300)==0);
+    input.Update(true,4,8,1400);
+    assert(!input.Fresh(1400));
+    input.Update(true,2,2,1500);
+    assert(!input.Fresh(1500));
+    input.Update(true,1,1,1600); input.Clear();
+    assert(input.Triggers(1600)==0 && input.Buttons(1600)==0);
     Policy policy; unsigned effects=0;
     auto execute=[&](const Request&) { ++effects; return "ok\tgranted=132\tcheats=unchanged"; };
     assert(policy.Apply(wire('b'),0,execute)=="error\twrong_session");

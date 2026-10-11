@@ -47,6 +47,9 @@ class AcceptanceParserTests(unittest.TestCase):
     def test_prepare_isolated_on_off_bridge_configs_without_launch(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            stock = root / 'game/KFGame/Localization/INT/KFGame.int'
+            stock.parent.mkdir(parents=True)
+            stock.write_text('[KFPerk_Support]\nPerkName=Support\n', encoding='utf-16')
             source = root / 'script/KF2BreacherAcceptance/Classes/Fixture.uc'
             source.parent.mkdir(parents=True)
             source.write_text('fixture hash input')
@@ -67,7 +70,7 @@ class AcceptanceParserTests(unittest.TestCase):
             (optional / 'Localization/INT').mkdir(parents=True)
             (optional / 'KF2Breacher.u').write_bytes(b'\xc1\x83\x2a\x9eoptional')
             (optional / 'manifest.json').write_text(json.dumps({'protocol': 1, 'sha256': digest(optional / 'KF2Breacher.u')}))
-            (optional / 'Localization/INT/KF2Breacher.int').write_text('labels')
+            (optional / 'Localization/INT/KF2Breacher.int').write_text('[BreacherPerk]\nPerkName=Breacher\n')
             user = root / 'user'
             user.mkdir()
             (user / 'KFEngine.ini').write_text('[Core.System]\nPaths=stock\nScriptPaths=stock\nSeekFreePCPaths=stock\nBrewedPCPaths=stock\n', encoding='utf-16')

@@ -223,12 +223,12 @@ defaultproperties
     LastRoundStrength=1.0
     LastRoundDuration=0.3
     WatchRange=5000
-    KillStrength=0.55
-    KillDuration=0.045
-    HeadshotKillStrength=0.85
-    HeadshotKillDuration=0.07
+    KillStrength=0.65
+    KillDuration=0.055
+    HeadshotKillStrength=0.90
+    HeadshotKillDuration=0.08
     DecapStrength=1.0
-    DecapDuration=0.09
+    DecapDuration=0.10
     HurtMinStrength=0.35
     HurtMaxStrength=0.9
     HurtFullDamage=40

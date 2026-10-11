@@ -78,9 +78,50 @@ def add_mutator(url, args):
     return "?".join(parts)
 
 
-def configure_content(configs, args):
+def configure_dev_level(configs, args):
+    """Hold the Breacher perk at a development level; the mutator reads this section (0 = normal)."""
+    from session import read_ini, set_ini
+    path = Path(configs) / "KFGame.ini"
+    if not path.is_file() or not getattr(args, "breacher", False):
+        return
+    level = getattr(args, "breacher_level", None) or 0
+    skills = getattr(args, "breacher_skills", None) or ""
+    text = read_ini(path)
+    updated = set_ini(text, "KF2Breacher.BreacherMutator", {"DevPerkLevel": str(level), "DevSkills": skills})
+    if updated != text:
+        path.write_text(updated, encoding="utf-16")
+
+
+def native_localization(configs, content, engine, game_root):
+    """Augment a private copy of native text; never shadow stock keys with a sparse file."""
+    from session import read_ini, set_ini
+    authored = read_ini(Path(content["root"]) / "Localization/INT/KF2Breacher.int")
+    section = re.search(r"(?ims)^\[BreacherPerk\][^\n]*\n(.*?)(?=^\[|\Z)", authored)
+    fields = dict(re.findall(r"(?m)^([^=\r\n]+)=([^\r\n]*)", section[1])) if section else {}
+    if not fields or "PerkName" not in fields:
+        raise RuntimeError("Breacher localization is missing its native perk fields.")
+    if game_root is None:
+        raise RuntimeError("Breacher localization requires the selected game installation.")
+    stock = Path(game_root) / "KFGame/Localization"
+    if not (stock / "INT/KFGame.int").is_file():
+        raise RuntimeError("Breacher localization requires the installed KFGame/Localization/INT/KFGame.int.")
+    language = re.search(r"(?im)^Language=([A-Za-z]{2,4})[ \t]*$", engine)
+    languages = {"INT", language[1].upper() if language else "INT"}
+    destination = Path(configs).resolve() / "KF2VRBreacherLocalization"
+    for code in sorted(languages):
+        original = stock / code / ("KFGame." + code.lower())
+        if not original.is_file():
+            continue  # The engine uses INT for missing language resources.
+        target = destination / code / original.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(set_ini(read_ini(original), "BreacherPerk", fields), encoding="utf-16")
+    return destination
+
+
+def configure_content(configs, args, *, game_root=None):
     content = getattr(args, "breacher_content", None)
     from session import read_ini, set_ini
+    configure_dev_level(configs, args)
     path = Path(configs) / "KFEngine.ini"
     enabled = bool(getattr(args, "breacher", False) and content)
     if not path.is_file() and not enabled:
@@ -91,12 +132,16 @@ def configure_content(configs, args):
         if not enabled:
             return
         raise RuntimeError("Missing Core.System for Breacher content")
+    localized = native_localization(configs, content, text,
+        game_root if game_root is not None else getattr(args, "game_root", None)) if enabled else None
     values = {}
     for key in ("Paths", "ScriptPaths", "SeekFreePCPaths", "BrewedPCPaths", "LocalizationPaths"):
         existing = re.findall(r"(?im)^" + key + r"=([^\r\n]*)", section[1])
         # A prior optional release must not leak its package through copied role settings.
-        retained = [value for value in existing if not re.search(r"(?:^|[/\\])optional[/\\]breacher(?:[/\\]Localization)?[/\\]?$", value, re.I)]
+        retained = [value for value in existing if not re.search(r"(?:^|[/\\])(?:optional[/\\]breacher(?:[/\\]Localization)?|KF2VRBreacherLocalization)[/\\]?$", value, re.I)]
         prefix = ([str(Path(content["root"]) / "Localization") if key == "LocalizationPaths" else content["root"]] if enabled else [])
+        if enabled and key == "LocalizationPaths":
+            prefix.insert(0, str(localized))
         values[key] = list(dict.fromkeys(prefix + retained))
     if not enabled and all(values[key] == re.findall(r"(?im)^" + key + r"=([^\r\n]*)", section[1]) for key in values):
         return

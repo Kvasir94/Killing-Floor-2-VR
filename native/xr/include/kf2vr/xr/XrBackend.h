@@ -21,6 +21,8 @@ template<typename GripFrame, typename AimFrame> struct HandState {
     // Inactive input is not a physical release; consumers must keep hold suppression.
     bool triggerActive=false, gripActive=false, stickActive=false;
     bool primaryActive=false, secondaryActive=false, stickClickActive=false, menuActive=false;
+    // Held to open the mod's VR menu: Index right trackpad press (force).
+    bool menuHoldPressed=false, menuHoldActive=false;
 };
 struct FrameState {
     SessionState state=SessionState::Idle;

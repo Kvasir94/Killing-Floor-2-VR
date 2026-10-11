@@ -33,8 +33,21 @@ try {
     $defaults += "`r`n[ModPackages]`r`nModPackagesInPath=$sources`r`nModOutputDir=$output`r`nModPackages=KF2Breacher`r`n"
     $defaultEditor = Join-Path $configs 'DefaultEditor.ini'
     [IO.File]::WriteAllText($defaultEditor, $defaults, [Text.Encoding]::ASCII)
+    # Compile owned attachment defaults against the exact art shipped with play,
+    # never an older installed package or an unresolved asset reference.
+    $handRoot = Join-Path $projectRoot 'build/hand-assets'
+    $handPackage = Join-Path $handRoot 'KF2VRHands.upk'
+    $handReceipt = Get-Content (Join-Path $handRoot 'build.json') -Raw | ConvertFrom-Json
+    $handHash = (Get-FileHash -LiteralPath $handPackage).Hash
+    if (-not $handReceipt.success -or $handReceipt.sdk_sha256 -ne $install.binaries.editor.sha256 -or
+        $handHash -ne $handReceipt.package_sha256) { throw 'Hand art does not match its SDK build receipt.' }
+    Copy-Item -LiteralPath $handPackage -Destination $output
+    $engineDefaults = [IO.File]::ReadAllText((Join-Path $GameRoot 'KFGame/Config/DefaultEngine.ini'))
+    $engineDefaults += "`r`n[Core.System]`r`n+Paths=$output`r`n+ScriptPaths=$output`r`n+SeekFreePCPaths=$output`r`n+BrewedPCPaths=$output`r`n"
+    $defaultEngine = Join-Path $configs 'DefaultEngine.ini'
+    [IO.File]::WriteAllText($defaultEngine, $engineDefaults, [Text.Encoding]::ASCII)
     $log = Join-Path $runRoot 'compiler.log'
-    $arguments = @('make','-useunpublished','-unattended','-nopause',('-ABSLOG="' + $log + '"'),('-DEFEDITORINI="' + $defaultEditor + '"'))
+    $arguments = @('make','-useunpublished','-unattended','-nopause',('-ABSLOG="' + $log + '"'),('-DEFEDITORINI="' + $defaultEditor + '"'),('-DEFENGINEINI="' + $defaultEngine + '"'))
     foreach ($config in @('ENGINE','GAME','INPUT','UI','WEB','EDITOR','EDITORUSERSETTINGS','SYSTEMSETTINGS','LIGHTMASS','BENCHMARKING','MAP')) {
         $arguments += ('-' + $config + 'INI="' + (Join-Path $configs ($config + '.ini')) + '"')
     }
@@ -44,6 +57,8 @@ try {
     $package = Join-Path $output 'KF2Breacher.u'
     if ($ownedProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $package) -or
         (Get-Content -LiteralPath $log -Raw) -notmatch 'Success - 0 error') { throw "Breacher compilation failed. See $log" }
+    if ((Get-Content -LiteralPath $log -Raw) -match 'unresolved reference to') { throw "Breacher asset reference did not resolve. See $log" }
+    if ((Get-FileHash -LiteralPath $handPackage).Hash -ne $handHash) { throw 'Hand art changed while compiling Breacher.' }
     if (($hashes | ConvertTo-Json -Compress) -cne ((Get-PackageSourceHashes $sourceRoot) | ConvertTo-Json -Compress)) { throw 'Breacher source changed while compiling.' }
     if (($hashes | ConvertTo-Json -Compress) -cne ((Get-PackageSourceHashes (Join-Path $sources 'KF2Breacher')) | ConvertTo-Json -Compress)) { throw 'Breacher snapshot differs from source.' }
     if ((Get-FileHash -LiteralPath $localeSource).Hash -ne $localeHash) { throw 'Breacher localization changed while compiling.' }

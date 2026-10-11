@@ -10,6 +10,18 @@ import zipfile
 ITEM_ID = "1337395223"
 MAP_NAME = "KF-Remilly_Test_Map"
 WORKSHOP_URL = f"https://steamcommunity.com/sharedfiles/filedetails/?id={ITEM_ID}"
+# Exact existing map accepted by the bounded, read-only Solo route. Updating
+# this pin requires reviewing the replacement; Solo never downloads or imports.
+SOLO_MAP_SHA256 = "CC427E7689C9E60EAD3486F5320B210C021CCA82C2D778DD1B1B2408E390FE14"
+
+
+def cached_solo_map(cache_root):
+    """Return verified existing Remilly content without creating any files."""
+    path = Path(cache_root) / ITEM_ID / "0/Unpublished/BrewedPC" / (MAP_NAME + ".kfm")
+    validate_map(path)
+    if hashlib.sha256(path.read_bytes()).hexdigest().upper() != SOLO_MAP_SHA256:
+        raise RuntimeError("Cached Solo Remilly map differs from the verified version; no files were changed.")
+    return path
 
 
 def validate_map(path):

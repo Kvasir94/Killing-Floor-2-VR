@@ -16,7 +16,7 @@ def validate(details):
     if not isinstance(details, dict) or set(details) not in (required, required | {"breacher"}):
         raise ValueError("Invalid join code fields")
     for key, pattern in (("address", r"[A-Za-z0-9.-]{1,253}"),
-                         ("password", r"[A-Za-z0-9_-]{1,64}"),
+                         ("password", r"[A-Za-z0-9_-]{0,64}"),
                          ("build", r"[A-Za-z0-9._-]{1,160}"),
                          ("map", r"KF-[A-Za-z0-9_-]{1,128}")):
         if not isinstance(details[key], str) or not re.fullmatch(pattern, details[key]):

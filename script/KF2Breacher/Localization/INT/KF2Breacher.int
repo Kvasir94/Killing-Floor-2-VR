@@ -1,10 +1,44 @@
 [BreacherPerk]
 PerkName=Breacher
+SkillCatagories[0]=Weapons
+SkillCatagories[1]=Control
+SkillCatagories[2]=Close combat
+SkillCatagories[3]=Demolition
+SkillCatagories[4]=Zed Time
 EXPAction1=Experimental perk: progression is not implemented.
 EXPAction2=Line up distinct living Zeds for Cascade shots.
 LevelString=Level
 WeaponDroppedMessage=Breacher weapon dropped.
+Tempering=Tempering
+TemperingDescription=Cascade gains 50% more damage per enemy. Maximum damage is 4 times the starting damage; maximum radius is 5 UU.
+Overdrive=Overdrive
+OverdriveDescription=Breacher weapon shot intervals are 20% shorter and forge/reload durations are 25% shorter.
+PileDriver=Pile Driver
+PileDriverDescription=A hard Zed-on-Zed slam releases a nearby stagger burst.
+LiveWire=Live Wire
+LiveWireDescription=ArcFence applies 50% more EMP power and deals 25% less electrical health damage.
+Rend=Rend
+RendDescription=Hold two distinct parts of an eligible living Zed and pull apart to tear it. Keep both pieces in your hands.
+GrabThrough=Grab-through
+GrabThroughDescription=Shoot through a Zed you are holding: it takes 50% more damage and the shot gains two extra Cascade growth increments for subsequent contacts. Once per shot; normal caps still apply.
+DeadMansSwitch=Dead Man's Switch
+DeadMansSwitchDescription=Use a held Zed or ragdoll as a shield to store direct incoming damage. A deliberate thrown impact or hard smash detonates the charged piece once.
+ChainReaction=Chain Reaction
+ChainReactionDescription=Killing a member of an eligible pinned group triggers an explosion that scales with the number of Zeds in the group.
+Shimmer=Shimmer
+ShimmerDescription=During Zed Time, fire and forge Breacher weapons at normal speed. Ammo costs and finite Cascade caps remain.
+Overpressure=Overpressure
+OverpressureDescription=Build pressure from physical impacts during Zed Time. Keep it afterward for stronger non-boss grabs, head stun and a boosted strike or throw.
+Passives[0]=(Title="Breacher damage",Description="+1% damage per level with Breacher weapons and attacks.")
+Passives[1]=(Title="Cascade growth",Description="+1% Cascade damage growth per level.")
+Passives[2]=(Title="Forge speed",Description="+0.5% forge/reload speed per level.")
+Passives[3]=(Title="Grab duration",Description="Living-Zed holds have no time limit; no level bonus is applied.")
+Passives[4]=(Title="Armor capacity",Description="+1 maximum armor per two levels.")
 
 [BreacherDeadbolt]
 ItemName=Deadbolt
 ItemDescription=Industrial nail driver. Cascade gains damage and width through distinct living enemies. Prototype balance.
+
+[BreacherRipcord]
+ItemName=Ripcord
+ItemDescription=Winch harpoon. Hits one Zed, then reels it to grab range. Prototype balance.

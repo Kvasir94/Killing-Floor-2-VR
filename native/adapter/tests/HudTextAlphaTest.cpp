@@ -41,7 +41,7 @@ float4 PS():SV_TARGET { return float4(1,0,0,0.5); }
     ComPtr<ID3D11BlendState> stock;HR(device->CreateBlendState(&bd,&stock));
     const FLOAT factors[]{.2f,.3f,.4f,.5f};context->OMSetBlendState(stock.Get(),factors,0xffffffff);
     kf2vr::adapter::HudTextAlpha alpha;
-    const FLOAT transparent[]{0,0,0,0},backing[]{0,0,0,70.f/255};
+    const FLOAT backing[]{0,0,0,70.f/255};
     const auto draw=[&](const Target& target) {
         D3D11_TEXTURE2D_DESC d{};target.texture->GetDesc(&d);
         D3D11_VIEWPORT viewport{0,0,static_cast<float>(d.Width),static_cast<float>(d.Height),0,1};
@@ -67,80 +67,68 @@ float4 PS():SV_TARGET { return float4(1,0,0,0.5); }
         draw(target);Test(pixel(target,expectedAlpha),label);
     };
     int panelOwner=0,inputOwner=0,foreignOwner=0,newInputOwner=0;
-    alpha.Clear(context.Get(),panel.view.Get(),transparent);
-    Test(!alpha.RegisterPanel(0,&panelOwner,&panelOwner,800,320),"wrong owned Canvas dimensions cannot register the last clear");
+    Test(!alpha.RegisterPanel(0,&panelOwner,&panelOwner,800,320,context.Get(),panel.texture.Get()),"wrong owned Canvas dimensions cannot register the resource");
     checkDraw(panel,70,"rejected dimensions leave the target's stock alpha intact");
-    alpha.Clear(context.Get(),panel.view.Get(),transparent);
-    Test(!alpha.RegisterPanel(0,nullptr,nullptr,1024,512),"two missing owner pointers do not establish HUD ownership");
-    alpha.Clear(context.Get(),panel.view.Get(),transparent);
-    Test(!alpha.RegisterPanel(0,&panelOwner,&panelOwner,756,512),"obsolete narrow watch dimensions are rejected");
-    alpha.Clear(context.Get(),panel.view.Get(),transparent);
-    Test(alpha.RegisterPanel(0,&panelOwner,&panelOwner,1024,512),"owned Canvas callback registers its transparent HUD target");
+    Test(!alpha.RegisterPanel(0,nullptr,nullptr,1024,512,context.Get(),panel.texture.Get()),"two missing owner pointers do not establish HUD ownership");
+    Test(!alpha.RegisterPanel(0,&panelOwner,&panelOwner,756,512,context.Get(),panel.texture.Get()),"obsolete narrow watch dimensions are rejected");
+    Test(alpha.RegisterPanel(0,&panelOwner,&panelOwner,1024,512,context.Get(),panel.texture.Get()),"owned Canvas callback registers its exact HUD target without a clear");
     checkDraw(panel,163,"glyph coverage updates alpha over translucent backing without changing RGB");
     ComPtr<ID3D11BlendState> restored;FLOAT restoredFactors[4]{};UINT mask=0;
     context->OMGetBlendState(&restored,restoredFactors,&mask);
     Test(restored.Get()==stock.Get() && mask==0xffffffff && std::memcmp(factors,restoredFactors,sizeof(factors))==0,"draw restores exact stock blend state, factors and sample mask");
     checkDraw(other,70,"same-size unregistered HUD texture retains stock alpha behavior");
-    alpha.Clear(context.Get(),other.view.Get(),backing);
-    Test(!alpha.RegisterPanel(0,&panelOwner,&panelOwner,1024,512),"nontransparent clear cannot register a panel");
+    Test(!alpha.RegisterPanel(0,&panelOwner,&panelOwner,1024,512,context.Get(),nullptr),"missing resource invalidates the previous panel registration");
+
+    checkDraw(panel,70,"failed capture removes stale registration");
+    Test(alpha.RegisterPanel(0,&panelOwner,&panelOwner,1024,512,context.Get(),panel.texture.Get()),"next callback recovers the exact panel");
+    checkDraw(other,70,"same-size foreign resource remains unregistered after recovery");
 
     auto ammoLeft=makeTarget(800,320),ammoRight=makeTarget(800,320),session=makeTarget(1024,512),alert=makeTarget(1024,256);
     const Target* extraPanels[]{&ammoLeft,&ammoRight,&session,&alert};
     for(int i=0;i<4;++i) {
         const auto& target=*extraPanels[i];
-        alpha.Clear(context.Get(),target.view.Get(),transparent);
         Test(alpha.RegisterPanel(i+1,&panelOwner,&panelOwner,
-            float(kf2vr::adapter::HudTextAlpha::PanelWidth[i+1]),float(kf2vr::adapter::HudTextAlpha::PanelHeight[i+1])),
+            float(kf2vr::adapter::HudTextAlpha::PanelWidth[i+1]),float(kf2vr::adapter::HudTextAlpha::PanelHeight[i+1]),context.Get(),target.texture.Get()),
             "each remaining HUD slot, including session and alert, registers independently");
     }
-    alpha.Clear(context.Get(),session.view.Get(),transparent);
-    Test(!alpha.RegisterPanel(4,&panelOwner,&panelOwner,1024,512),"alert slot rejects the session module's dimensions");
+    Test(!alpha.RegisterPanel(4,&panelOwner,&panelOwner,1024,512,context.Get(),session.texture.Get()),"alert slot rejects the session module's dimensions");
     auto left=makeTarget(768,768),right=makeTarget(768,768),foreign=makeTarget(768,768);
-    alpha.Clear(context.Get(),foreign.view.Get(),transparent);
-    Test(!alpha.RegisterSelector(0,nullptr,nullptr,768,768),"missing hand-input owner cannot register a selector");
+    Test(!alpha.RegisterSelector(0,nullptr,nullptr,768,768,context.Get(),foreign.texture.Get()),"missing hand-input owner cannot register a selector");
     checkDraw(foreign,70,"an unowned selector-sized texture retains stock alpha");
-    alpha.Clear(context.Get(),left.view.Get(),transparent);
-    Test(alpha.RegisterSelector(0,&inputOwner,&inputOwner,768,768),"left hand registers its selector");
-    alpha.Clear(context.Get(),right.view.Get(),transparent);
-    Test(alpha.RegisterSelector(1,&inputOwner,&inputOwner,768,768),"right hand registers its selector");
+    Test(alpha.RegisterSelector(0,&inputOwner,&inputOwner,768,768,context.Get(),left.texture.Get()),"left hand registers its selector");
+    Test(alpha.RegisterSelector(1,&inputOwner,&inputOwner,768,768,context.Get(),right.texture.Get()),"right hand registers its selector");
     checkDraw(left,163,"left selector receives glyph coverage alpha");
     checkDraw(right,163,"right selector receives glyph coverage alpha independently");
     checkDraw(panel,163,"selector registration preserves the status HUD slot");
     for(const auto* target:extraPanels) checkDraw(*target,163,"selector slots do not replace other HUD targets");
 
-    alpha.Clear(context.Get(),foreign.view.Get(),transparent);
-    Test(!alpha.RegisterSelector(0,&foreignOwner,&inputOwner,768,768),"foreign input owner cannot claim a selector");
+    Test(!alpha.RegisterSelector(0,&foreignOwner,&inputOwner,768,768,context.Get(),foreign.texture.Get()),"foreign input owner cannot claim a selector");
     checkDraw(foreign,70,"foreign owner's texture is not modified");
-    alpha.Clear(context.Get(),foreign.view.Get(),transparent);
-    Test(!alpha.RegisterSelector(-1,&inputOwner,&inputOwner,768,768),"negative hand is rejected");
-    alpha.Clear(context.Get(),foreign.view.Get(),transparent);
-    Test(!alpha.RegisterSelector(2,&inputOwner,&inputOwner,768,768),"out-of-range hand is rejected");
-    alpha.Clear(context.Get(),foreign.view.Get(),transparent);
-    Test(!alpha.RegisterPanel(12,&panelOwner,&panelOwner,768,768),"HUD indices cannot access selector slots");
-    alpha.Clear(context.Get(),foreign.view.Get(),transparent);
-    Test(!alpha.RegisterSelector(0,&inputOwner,&inputOwner,640,383),"selector Canvas dimensions must match exactly");
+    Test(!alpha.RegisterSelector(-1,&inputOwner,&inputOwner,768,768,context.Get(),foreign.texture.Get()),"negative hand is rejected");
+    Test(!alpha.RegisterSelector(2,&inputOwner,&inputOwner,768,768,context.Get(),foreign.texture.Get()),"out-of-range hand is rejected");
+    Test(!alpha.RegisterPanel(12,&panelOwner,&panelOwner,768,768,context.Get(),foreign.texture.Get()),"HUD indices cannot access selector slots");
+    Test(!alpha.RegisterSelector(0,&inputOwner,&inputOwner,640,383,context.Get(),foreign.texture.Get()),"selector Canvas dimensions must match exactly");
     checkDraw(foreign,70,"invalid slot and Canvas registrations leave unrelated textures alone");
-    alpha.Clear(context.Get(),other.view.Get(),transparent);
-    Test(!alpha.RegisterSelector(0,&inputOwner,&inputOwner,768,768),"selector cannot register a differently sized cleared resource");
+    Test(!alpha.RegisterSelector(0,&inputOwner,&inputOwner,768,768,context.Get(),other.texture.Get()),"selector cannot register a differently sized resource");
     checkDraw(other,70,"resource-size mismatch preserves the unregistered HUD texture");
 
+    checkDraw(left,70,"resource mismatch invalidates the old selector registration");
+    Test(alpha.RegisterSelector(0,&inputOwner,&inputOwner,768,768,context.Get(),left.texture.Get()),"next callback recovers a selector after failed capture");
+
     auto newRight=makeTarget(768,768);
-    alpha.Clear(context.Get(),newRight.view.Get(),transparent);
-    Test(alpha.RegisterSelector(1,&inputOwner,&inputOwner,768,768),"right selector replacement registers");
+    Test(alpha.RegisterSelector(1,&inputOwner,&inputOwner,768,768,context.Get(),newRight.texture.Get()),"right selector replacement registers");
     checkDraw(right,70,"replaced selector resource no longer receives alpha correction");
     checkDraw(newRight,163,"replacement right selector receives alpha correction");
     checkDraw(left,163,"right selector replacement leaves the left selector registered");
     checkDraw(panel,163,"selector replacement preserves HUD ownership");
 
     auto newLeft=makeTarget(768,768);
-    alpha.Clear(context.Get(),newLeft.view.Get(),transparent);
-    Test(alpha.RegisterSelector(0,&newInputOwner,&newInputOwner,768,768),"new input owner can register its selector");
+    Test(alpha.RegisterSelector(0,&newInputOwner,&newInputOwner,768,768,context.Get(),newLeft.texture.Get()),"new input owner can register its selector");
     checkDraw(left,70,"input-owner change releases the old left selector");
     checkDraw(newRight,70,"input-owner change releases the old right selector");
     checkDraw(newLeft,163,"new owner's selector receives alpha correction");
     checkDraw(panel,163,"input-owner change leaves HUD targets registered");
-    alpha.Clear(context.Get(),foreign.view.Get(),transparent);
-    Test(!alpha.RegisterSelector(0,&newInputOwner,nullptr,768,768),"missing current input owner rejects stale callbacks");
+    Test(!alpha.RegisterSelector(0,&newInputOwner,nullptr,768,768,context.Get(),foreign.texture.Get()),"missing current input owner rejects stale callbacks");
     checkDraw(newLeft,70,"loss of input ownership removes the previous selector correction");
     {
         kf2vr::adapter::HudTextAlpha unorm;
@@ -149,8 +137,7 @@ float4 PS():SV_TARGET { return float4(1,0,0,0.5); }
         Target banner;HR(device->CreateTexture2D(&td,nullptr,&banner.texture));
         HR(device->CreateRenderTargetView(banner.texture.Get(),nullptr,&banner.view));
         int owner=0;
-        unorm.Clear(context.Get(),banner.view.Get(),transparent);
-        Test(unorm.RegisterPanel(4,&owner,&owner,1024,256),"UNORM clear registers owned panel");
+        Test(unorm.RegisterPanel(4,&owner,&owner,1024,256,context.Get(),banner.texture.Get()),"UNORM resource registers owned panel");
         ID3D11RenderTargetView* slots[8]{banner.view.Get()};
         context->OMSetRenderTargets(8,slots,nullptr);unorm.Targets(context.Get(),8,slots);
         {

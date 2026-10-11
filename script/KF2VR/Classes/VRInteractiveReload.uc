@@ -46,7 +46,10 @@ var VRHandsBridge Bridge;
 var VRManualPump Pump;
 // Bolt and lever actions worked by hand after every shot.
 var VRManualAction ManualAction;
+var VRMechanismReload Mechanism;
+var VRVampireReload Vampire;
 var VRBreakAction BreakAction;
+var VRCylinderSession DualCylinders[2];
 var VRBeltShellPresentation BeltShells;
 var name CylinderInsertFrame;
 var int CylinderInsertHand;
@@ -71,6 +74,14 @@ var int Credits, AmmoAtStart;
 var bool bPartialShellClose, bDetachedMagazineSession;
 var name LoadedBone;
 var float SessionStart;
+var KFWeapon CylinderAuthorityGun;
+var VRWeaponRuntime CylinderAuthorityRuntime;
+var SkeletalMeshComponent CylinderAuthorityMesh;
+var int CylinderAuthorityHand, CylinderAuthorityRevision, CylinderAuthorityRequest, CylinderAuthoritySession;
+var bool bCylinderAuthorityHeld, bCylinderAuthorityCommitRequested;
+var bool bCylinderAuthorityPaused, bCylinderAuthoritySavedPause;
+var VRReloadMotionGuard CylinderAuthorityMotion;
+var float CylinderAuthorityRequestedAt;
 
 // Where the ammunition goes, in the gun root bone's frame, sampled from the
 // stock reload animation on a private copy of the gun's skeleton: Seat at the
@@ -102,7 +113,7 @@ var vector HandLastWorld[2], HandVelocity[2];
 var float HandLastTime;
 var bool bGuidedInsert;
 var float GuideProgress;
-var float SeatTolerance, MagazineLateralSlack;
+var float SeatTolerance, MagazineLateralSlack, CylinderSnapRadius;
 var KFSkeletalMeshComponent RefMesh;
 // The ammunition in the off hand's controller frame: the stock animation's
 // hand-to-ammunition transform at Entry, mirrored for a right off hand.
@@ -275,8 +286,11 @@ var color AmmoColour, RackColour;
 
 function Initialize(VRDualHandInput I)
 {
+    local int H;
     InputOwner = I;
     Bridge = I.Bridge;
+    CylinderAuthorityMotion = new(self) class'VRReloadMotionGuard';
+    CylinderAuthorityMotion.SpeedLimit = 1500;
     BeltShells = new(self) class'VRBeltShellPresentation';
     BeltShells.Initialize(self);
     InsertGuide = new(self) class'VRReloadInsertGuide';
@@ -298,8 +312,17 @@ function Initialize(VRDualHandInput I)
     Pump.Initialize(self);
     ManualAction = new(self) class'VRManualAction';
     ManualAction.Initialize(self);
+    Mechanism = new(self) class'VRMechanismReload';
+    Mechanism.Initialize(self);
+    Vampire = new(self) class'VRVampireReload';
+    Vampire.Initialize(self);
     BreakAction = new(self) class'VRBreakAction';
     BreakAction.Initialize(self);
+    for (H = 0; H < 2; ++H)
+    {
+        DualCylinders[H] = new(self) class'VRCylinderSession';
+        DualCylinders[H].Initialize(self);
+    }
     Audio = new(self) class'VRReloadAudio';
     Audio.Initialize(self);
     Dropped = new(self) class'VRDroppedMagazines';
@@ -312,10 +335,207 @@ function Initialize(VRDualHandInput I)
 function bool BlocksFire(KFWeapon W, optional bool bSecondary)
 {
     if (!Enabled()) return false;
+    if (Mechanism != None && Mechanism.BlocksFire(W)) return true;
+    if (Vampire != None && Vampire.BlocksFire(W)) return true;
+    if (W != None && W == CylinderAuthorityGun) return true;
     if ((!bSecondary || (W != None && W.GetAmmoType(1) == 0)) && MagazineFeedBlocks(W)) return true;
     return (Pump != None && Pump.BlocksFire(W)) || (ManualAction != None && ManualAction.BlocksFire(W))
         || (BreakAction != None && BreakAction.BlocksFire(W))
+        || DualCylinderOwns(W)
         || (!bSecondary && SlideLockBlocks(W));
+}
+
+// Reload work that cannot use the other hand takes a per-hand hip session.
+function bool HandBusy(int Hand)
+{
+    return InputOwner.Inventory.Registry.GetPrimary(Hand) != None
+        || InputOwner.Inventory.HasWorldGrab(Hand) || InputOwner.HandCarrying(Hand)
+        || InputOwner.Inventory.HasGauntletHand(Hand) || InputOwner.Inventory.IsTransferPending(Hand)
+        || InputOwner.IsSelectorOpen(Hand)
+        || (InputOwner.Deployables != None && InputOwner.Deployables.IsHeld(Hand));
+}
+
+function bool HipCylinderHand(int Hand, out VRWeaponRuntime R)
+{
+    if (Hand < 0 || Hand > 1 || InputOwner == None || InputOwner.Inventory == None
+        || !Enabled() || !InputOwner.ContextValid()) return false;
+    R = InputOwner.Inventory.Registry.GetPrimary(Hand);
+    return R != None && R.IsCurrent() && R.PrimaryHand == Hand
+        && class'VRCylinderSession'.static.CoversRuntime(R)
+        && InputOwner.InputState[Hand].StockReloadWeapon != R.Item
+        && InputOwner.Inventory.Registry.GetPrimary(1 - Hand) != R && HandBusy(1 - Hand)
+        && (Bridge.NativeValidMask & Bridge.NativeGripActiveMask & (1 << Hand)) != 0;
+}
+
+function bool TryDualCylinder(VRWeaponRuntime R, int Hand)
+{
+    local VRWeaponRuntime Held;
+    local int H;
+    local bool bStarted;
+    if (Enabled() && R != None && DualCylinderOwns(R.Item)) return true;
+    if (CylinderAuthorityGun != None) return R != None && CylinderAuthorityGun == R.Item;
+    if (!Enabled() || bActive || R == None || !HipCylinderHand(Hand, Held) || Held != R
+        || (Mechanism != None && Mechanism.bActive) || (Vampire != None && Vampire.Busy())) return false;
+    if (DualCylinderOwns(R.Item)) return true;
+    for (H = 0; H < 2; ++H)
+        if (HipCylinderHand(H, Held) && !DualCylinders[H].Active() && Held.Item.IsInState('Active')
+            && Held.Item.AmmoCount[0] < Held.Item.MagazineCapacity[0]
+            && DualCylinders[H].Begin(Held, H)) bStarted = true;
+    return bStarted;
+}
+
+function AdoptDualReloads()
+{
+    local VRWeaponRuntime Held;
+    local int H;
+    if (!Enabled() || bActive || !InputOwner.ContextValid()
+        || (Mechanism != None && Mechanism.bActive) || (Vampire != None && Vampire.Busy())) return;
+    for (H = 0; H < 2; ++H)
+    {
+        if (DualCylinders[H].FailedGun != None && !MagazineReloading(DualCylinders[H].FailedGun))
+            DualCylinders[H].FailedGun = None;
+        if (HipCylinderHand(H, Held) && !DualCylinders[H].Active() && MagazineReloading(Held.Item))
+            DualCylinders[H].Begin(Held, H);
+    }
+}
+
+function bool DualCylinderOwns(KFWeapon W)
+{
+    return W != None && ((DualCylinders[0] != None && DualCylinders[0].Gun == W)
+        || (DualCylinders[1] != None && DualCylinders[1].Gun == W));
+}
+
+// Split pairs keep server-owned shared reserves. The paired channel holds
+// stock timers and pays once on physical completion; clients never copy ammo.
+static function bool PairedAuthorityNeeded(KFWeapon W)
+{
+    return W != None && !W.bAllowClientAmmoTracking
+        && Left(string(W.Class.Name), 13) ~= "VRWeap_Paired";
+}
+
+function bool BeginCylinderAuthority(VRWeaponRuntime R, int Hand)
+{
+    if (R == None || R.Item == None || R.Item.MySkelMesh == None || Hand < 0 || Hand > 1) return false;
+    if (CylinderAuthorityGun != None) return CylinderAuthorityGun == R.Item;
+    if (!Bridge.PairedReloadAvailable() || !InputOwner.ContextValid() || !R.IsCurrent()
+        || R.PrimaryHand != Hand || InputOwner.Inventory.Registry.GetPrimary(Hand) != R
+        || (Bridge.NativeValidMask & Bridge.NativeGripActiveMask & (1 << Hand)) == 0) return false;
+    CylinderAuthorityRequest = Bridge.PairedReloadBegin(R.Item, Hand);
+    if (CylinderAuthorityRequest <= 0) return false;
+    CylinderAuthorityGun = R.Item; CylinderAuthorityRuntime = R;
+    CylinderAuthorityHand = Hand; CylinderAuthorityRevision = R.OwnershipRevision;
+    CylinderAuthorityMesh = R.Item.MySkelMesh;
+    CylinderAuthoritySession = 0;
+    CylinderAuthorityRequestedAt = Now();
+    bCylinderAuthorityHeld = false; bCylinderAuthorityCommitRequested = false;
+    if (!CylinderAuthorityMotion.Begin(CylinderAuthorityPosition(), Now()))
+    { ClearCylinderAuthority(); return false; }
+    bCylinderAuthorityPaused = MagazineReloading(R.Item);
+    if (bCylinderAuthorityPaused)
+    {
+        bCylinderAuthoritySavedPause = CylinderAuthorityMesh.bPauseAnims;
+        R.Item.PauseTimer(true, 'ReloadAmmoTimer'); R.Item.PauseTimer(true, 'ReloadStatusTimer');
+        CylinderAuthorityMesh.bPauseAnims = true;
+    }
+    return true;
+}
+
+function vector CylinderAuthorityPosition()
+{
+    return QuatRotateVector(QuatInvert(QuatFromRotator(Bridge.BodyYaw())),
+        Bridge.Hands[CylinderAuthorityHand].Position - Bridge.BodyPivot());
+}
+
+function bool CylinderAuthorityValid()
+{
+    return CylinderAuthorityGun != None && !CylinderAuthorityGun.bDeleteMe
+        && CylinderAuthorityGun.MySkelMesh == CylinderAuthorityMesh
+        && CylinderAuthorityRuntime != None && CylinderAuthorityRuntime.IsCurrent()
+        && CylinderAuthorityRuntime.Item == CylinderAuthorityGun
+        && CylinderAuthorityRuntime.OwnershipRevision == CylinderAuthorityRevision
+        && CylinderAuthorityRuntime.PrimaryHand == CylinderAuthorityHand
+        && InputOwner.Inventory.Registry.GetPrimary(CylinderAuthorityHand) == CylinderAuthorityRuntime
+        && Enabled() && InputOwner.ContextValid()
+        && (Bridge.NativeValidMask & Bridge.NativeGripActiveMask & 3) == 3
+        && !HandBusy(1 - CylinderAuthorityHand)
+        && (InputOwner.Inventory.Registry.GetSupport(1 - CylinderAuthorityHand) == None
+            || InputOwner.Inventory.Registry.GetSupport(1 - CylinderAuthorityHand) == CylinderAuthorityRuntime);
+}
+
+function ReleaseCylinderAuthorityWait()
+{
+    if (!bCylinderAuthorityPaused) return;
+    bCylinderAuthorityPaused = false;
+    if (CylinderAuthorityGun != None && !CylinderAuthorityGun.bDeleteMe)
+    {
+        CylinderAuthorityGun.PauseTimer(false, 'ReloadAmmoTimer');
+        CylinderAuthorityGun.PauseTimer(false, 'ReloadStatusTimer');
+    }
+    if (CylinderAuthorityMesh != None) CylinderAuthorityMesh.bPauseAnims = bCylinderAuthoritySavedPause;
+}
+
+function ClearCylinderAuthority(optional bool bCompleted)
+{
+    local KFWeapon W;
+    W = CylinderAuthorityGun;
+    if (W != None && !bCompleted)
+    {
+        Bridge.PairedReloadCancel(W, CylinderAuthorityRequest, CylinderAuthoritySession);
+        if (!W.bDeleteMe && MagazineReloading(W))
+        { W.ClearTimer('ReloadAmmoTimer'); W.ClearTimer('ReloadStatusTimer'); W.AbortReload(); }
+    }
+    ReleaseCylinderAuthorityWait();
+    CylinderAuthorityMotion.Reset();
+    CylinderAuthorityGun = None; CylinderAuthorityRuntime = None; CylinderAuthorityMesh = None;
+    CylinderAuthorityRequest = 0; CylinderAuthoritySession = 0;
+    bCylinderAuthorityHeld = false; bCylinderAuthorityCommitRequested = false;
+}
+
+function UpdateCylinderAuthority()
+{
+    local int Session, Ammo, Reserve;
+    local byte Status;
+    local KFWeapon W;
+    if (CylinderAuthorityGun == None) return;
+    if (!CylinderAuthorityValid() || Now() - CylinderAuthorityRequestedAt > 50
+        || !CylinderAuthorityMotion.Check(CylinderAuthorityPosition(), Now()))
+    { ClearCylinderAuthority(); if (bActive) Finish("paired-context"); return; }
+    if (!Bridge.PairedReloadRead(CylinderAuthorityGun, CylinderAuthorityRequest, Session, Status, Ammo, Reserve)) return;
+    if (Status == 3)
+    { ClearCylinderAuthority(); if (bActive) Finish("paired-rejected"); return; }
+    if (Status == 2)
+    {
+        if (!bCylinderAuthorityCommitRequested)
+        { ClearCylinderAuthority(); if (bActive) Finish("paired-order"); return; }
+        // The receipt may precede this actor's replicated stock ammo. The
+        // other hand can legitimately spend shared reserve after the receipt.
+        if (CylinderAuthorityGun.AmmoCount[0] != Ammo) return;
+        W = CylinderAuthorityGun;
+        ClearCylinderAuthority(true);
+        W.ClearTimer('ReloadAmmoTimer'); W.ClearTimer('ReloadStatusTimer');
+        if (bActive) ResumeStock();
+        if (MagazineReloading(W)) W.ReloadComplete();
+        if (W.IsInState('Active'))
+        {
+            if (W.IdleAnims.Length > 0) W.PlayAnimation(W.IdleAnims[0], 0.0, true, 0.0);
+            W.ToggleAdditiveBobAnim(!W.bUsingSights);
+        }
+        if (bActive) Finish("paired-cylinder-closed");
+        return;
+    }
+    if (Status != 1) return;
+    CylinderAuthoritySession = Session;
+    if (!bCylinderAuthorityHeld)
+    {
+        bCylinderAuthorityHeld = true;
+        ReleaseCylinderAuthorityWait();
+        if (CylinderAuthorityGun.IsInState('Active'))
+        {
+            CylinderAuthorityRuntime.StartAction(class'KFWeapon'.const.RELOAD_FIREMODE);
+            CylinderAuthorityGun.StopFire(class'KFWeapon'.const.RELOAD_FIREMODE);
+        }
+        if (!MagazineReloading(CylinderAuthorityGun)) ClearCylinderAuthority();
+    }
 }
 
 // Check the exact actor, including after stow, hand transfer and mesh rebuild.
@@ -382,6 +602,10 @@ function bool ResumeMagazineReload()
     if (!MagazineReloading(Gun)) return false;
     bDetachedMagazineSession = false;
     bAwaitAmmo = false; bAwaitRack = false; bAmmoStepPaid = false;
+    // The retained chamber shot released the previous live notify owner.
+    // This is a new stock clip, taken before the physical seat emits its cue.
+    Audio.ResetSession();
+    Audio.TryStart();
     return true;
 }
 
@@ -438,6 +662,7 @@ function PlaceMagazineFeeds()
 // the stock path (dry fire, then the auto switch).
 function bool DryFireInstead(KFWeapon W, int Mode)
 {
+    if (Vampire != None && Vampire.TryEmptyFire(W, Mode)) return true;
     if (!Enabled() || W == None || W.bDeleteMe || Mode != 0
         || (class'VRReloadCatalog'.static.FindClass(W.Class) < 0
             && !class'VRBreakAction'.static.Supported(W))) return false;
@@ -469,9 +694,16 @@ function bool Enabled()
 // stock reload timers or ammo credits, and cannot fire until latched again.
 function bool TryBreakAction(VRWeaponRuntime R, int Hand, optional bool bManual)
 {
+    if (R != None && Hand >= 0 && Hand < 2 && InputOwner.InputState[Hand].StockReloadWeapon == R.Item) return true;
+    if (R != None && DualCylinderOwns(R.Item)) return true;
     if (!Enabled() || R == None || !R.IsCurrent() || !class'VRBreakAction'.static.Supported(R.Item)
         || InputOwner.Inventory.Registry.GetPrimary(1-Hand) != None) return false;
-    if (bActive) return Gun == R.Item;
+    if (bActive)
+    {
+        if (Gun != R.Item) return false;
+        if (!bManual && BreakAction.Gun == Gun) BreakAction.CloseButton();
+        return true;
+    }
     // A button pulse can end before stock shot recovery does. Preserve that
     // explicit request separately from the launcher's automatic pending fire.
     if (!bManual && class'VRBreakAction'.static.Recovering(R.Item))
@@ -485,6 +717,7 @@ function bool TryBreakAction(VRWeaponRuntime R, int Hand, optional bool bManual)
     BreakAction.bRequestOpening = bManual;
     if (R.Item.CanReload())
     {
+        if (PairedAuthorityNeeded(R.Item)) return BeginCylinderAuthority(R, Hand);
         R.StartAction(class'KFWeapon'.const.RELOAD_FIREMODE);
         R.Item.StopFire(class'KFWeapon'.const.RELOAD_FIREMODE);
         if (!R.Item.IsInState('Reloading')) BreakAction.bRequestOpening = false;
@@ -527,7 +760,7 @@ function bool TrySlideRelease(VRWeaponRuntime R, int Hand)
     return true;
 }
 
-// Exact classes: paired, dual and unaudited variants keep the button reload.
+// Exact classes plus paired members of an audited break-action rig.
 static function bool Supported(KFWeapon W)
 {
     return W != None && (class'VRPumpCatalog'.static.Covers(W)
@@ -547,6 +780,10 @@ static function bool MagazineReloading(KFWeapon W)
 function bool HoldsPose(KFWeapon W)
 {
     local VRWeaponRuntime R;
+    if (Enabled() && W != None && W == CylinderAuthorityGun) return true;
+    if (Enabled() && DualCylinderOwns(W)) return true;
+    if (Mechanism != None && Mechanism.HoldsPose(W)) return true;
+    if (Vampire != None && Vampire.HoldsPose(W)) return true;
     if (W == None || !Enabled() || !Supported(W)) return false;
     if (W.IsInState('AltReloading')
         && (W.Class == class'KFWeap_Shotgun_S12' || W.Class == class'KFWeap_AssaultRifle_FAMAS'))
@@ -570,6 +807,8 @@ function bool AllowsSprint(KFWeapon W)
 {
     local VRWeaponRuntime R;
     if (W == None || !Enabled()) return false;
+    if (Mechanism != None && Mechanism.HoldsPose(W)) return Mechanism.SessionValid();
+    if (Vampire != None && Vampire.HoldsPose(W)) return Vampire.SessionValid();
     if (bActive && W == Gun) return StillValid();
     if (W != HandoffGun || !MagazineReloading(W)
         || InputOwner == None || InputOwner.Inventory == None) return false;
@@ -585,6 +824,8 @@ function int OffHand() { return 1 - GunHand; }
 // support grip keeps holding the fore-end while it works, and releases it.
 function bool OwnsHand(int Hand)
 {
+    if (Mechanism != None && Mechanism.OwnsHand(Hand)) return true;
+    if (Vampire != None && Vampire.OwnsHand(Hand)) return true;
     if (bActive && bLeverEngaged && LeverActionHand == GunHand && Hand == GunHand
         && PrimaryLeverReady()) return true;
     if (Pump != None && Pump.OwnsHand(Hand)) return true;
@@ -612,6 +853,8 @@ function bool LatchesSupport(VRWeaponRuntime R, int Hand)
 // posed from the stock animation, while it holds ammunition.
 function bool CoversHand(int Hand)
 {
+    if (Mechanism != None && Mechanism.CoversHand(Hand)) return true;
+    if (Vampire != None && Vampire.CoversHand(Hand)) return true;
     if (ReloadHand == None || !Enabled()) return false;
     if (bActive && Hand == OffHand() && bHandPoseReady && (HandMode == 1
         || (HandMode == 3 && bHandPoseForAction) || (BreakAction != None && BreakAction.OwnsHand(Hand)))) return true;
@@ -634,7 +877,10 @@ function bool HandFree(int Hand, bool bAllowSupport)
 {
     local VRWeaponRuntime S;
     if (InputOwner.Inventory.Registry.GetPrimary(Hand) != None
-        || InputOwner.Inventory.HasWorldGrab(Hand) || InputOwner.IsSelectorOpen(Hand)) return false;
+        || InputOwner.Inventory.HasWorldGrab(Hand) || InputOwner.IsSelectorOpen(Hand)
+        || InputOwner.Inventory.HasGauntletHand(Hand) || InputOwner.Inventory.IsTransferPending(Hand)
+        || InputOwner.HandCarrying(Hand)
+        || (InputOwner.Deployables != None && InputOwner.Deployables.IsHeld(Hand))) return false;
     S = InputOwner.Inventory.Registry.GetSupport(Hand);
     return S == None || (bAllowSupport && S == Runtime);
 }
@@ -777,6 +1023,30 @@ function vector RackTarget()
     return RootLocation(vect(4,0,3));
 }
 
+// The MP7's authored wrist contact lies behind its charging handle. A palm
+// touching the actual part is also a deliberate contact, without widening
+// the contact model of slides and pumps on other weapons.
+function bool UsesRackPalmContact()
+{
+    return Gun != None && Gun.Class == class'KFWeap_SMG_MP7';
+}
+
+function vector RackHandle()
+{
+    local vector Position;
+    local quat Rotation;
+    if (MagazineProfileIndex < 0 && RackBone == '') return RootLocation(vect(4,0,3));
+    RackFrame(Position, Rotation);
+    return Position;
+}
+
+function float RackDistance(vector Wrist, vector Palm, vector Lead)
+{
+    if (UsesRackPalmContact())
+        return FMin(VSize(Wrist - RackTarget() - Lead), VSize(Palm - RackHandle() - Lead));
+    return VSize(Wrist - RackTarget() - Lead);
+}
+
 function float RackTravel()
 {
     local float AuthoredStroke;
@@ -833,7 +1103,9 @@ function bool RackAvailable()
 // the slide's grab volume in that state).
 function float RackReach()
 {
-    return (bSlideLock && !bRacked) ? RackRadius * 2 : RackRadius;
+    local float Reach;
+    Reach = UsesRackPalmContact() ? FMax(RackRadius, 16) : RackRadius;
+    return (bSlideLock && !bRacked) ? Reach * 2 : Reach;
 }
 
 // A short pull past the lock frees it: to the full stroke, and at least a
@@ -1048,6 +1320,8 @@ function bool SampleInsert(name Anim)
     bGuidedInsert = false;
     GuideProgress = 0;
     InsertGuide.Reset();
+    InsertGuide.bAxialOnly = false;
+    InsertGuide.AmmoAxis = vect(0,0,0);
     if (Anim == '' || SpareBone == '' || !EnsureRefMesh()) return false;
     Bridge.AttachComponent(RefMesh);
     Seq = AnimNodeSequence(RefMesh.FindAnimNode('VRReloadReference'));
@@ -1063,7 +1337,11 @@ function bool SampleInsert(name Anim)
         RigSample.ActionKind = ActionKind;
         RigSample.bSeatAtNotify = MagazineProfileIndex >= 0
             && class'VRReloadCatalog'.default.Profiles[MagazineProfileIndex].bSeatAtNotify;
-        if (MagazineProfileIndex >= 0)
+        if (MagazineProfileIndex >= 0 && class'VRReloadCatalog'.default.Profiles[MagazineProfileIndex].bPlateauInsert)
+            bSampled = RigSample.SampleBoxInsert(RefMesh, Seq, Anim, RootBone, LoadedBone, Bridge.HandBone(StockInsertHand()),
+                false,
+                class'VRReloadCatalog'.default.Profiles[MagazineProfileIndex].bProjectilePlateau);
+        else if (MagazineProfileIndex >= 0)
             bSampled = RigSample.Sample(RefMesh, Seq, Anim, RootBone, SpareBone, Bridge.HandBone(StockInsertHand()), RackBone, EntryLead,
                 LoadedBone, FollowBone);
         else if (Gun.Class == class'KFWeap_LMG_MG3')
@@ -1110,11 +1388,10 @@ function bool SampleInsert(name Anim)
         {
             PlateauSteps = 120;
             PlateauSeat = SeatLocal;
-            bBarrelSeat = CylinderInsertFrame != ''
-                && (Gun.Class == class'KFWeap_Pistol_Flare' || Gun.Class == class'KFWeap_Pistol_HRGWinterbite');
+            bBarrelSeat = CylinderInsertFrame == 'RW_Barrel';
             if (bBarrelSeat)
             {
-                // These cylinders stay seated while the barrel closes. Find
+                // These loads stay seated while the barrel closes. Find
                 // seating in their moving frame across the complete clip,
                 // rather than mistaking the closing motion for insertion.
                 RefRelative(CylinderInsertFrame, FrameP, FrameQ);
@@ -1213,7 +1490,9 @@ function bool SampleInsert(name Anim)
         SeatLocalQ = InsertPath[InsertPath.Length - 1].Rotation;
         Bridge.DetachComponent(RefMesh);
     }
-    if (class'VRBreakCatalog'.static.CylinderReload(Gun))
+    if (class'VRBreakCatalog'.static.CylinderReload(Gun)
+        || class'VRBreakAction'.static.SingleShotLauncher(Gun)
+        || Gun.Class == class'KFWeap_RocketLauncher_RPG7')
     {
         InsertGuide.bAxialOnly = true;
         InsertGuide.AmmoAxis = Normal(QuatRotateVector(QuatInvert(EntryLocalQ), SeatLocal - EntryLocal));
@@ -1236,6 +1515,9 @@ function bool BuildHandPose()
     local bool bAction;
     StartTime = InsertTime; EndTime = InsertEndTime;
     if (HandMode == 0) StartTime = AmmoCarryTime;
+    // HX25 acquires its authored shell grip after the start of the incoming
+    // track. The pre-contact fingers must never be posed around a held shell.
+    if (Gun.Class == class'KFWeap_GrenadeLauncher_HX25') StartTime = FMax(StartTime, AmmoCarryTime);
     PoseAnim = InsertAnim; Anchor = InsertTrack;
     // Keep the acquired grip in free carry. Once the guide captures, use the
     // current insertion clip: the MB500 can advance from chamber to tube
@@ -1288,7 +1570,7 @@ function RackFrame(out vector Position, out quat Rotation)
     }
 }
 
-function PlaceHandPose()
+function bool PlaceHandPose()
 {
     local vector WristPosition, AnchorPosition, Contact;
     local quat WristQ, AnchorQ, ContactQ;
@@ -1323,8 +1605,30 @@ function PlaceHandPose()
             Blend = 1;
         }
     }
-    ReloadHand.Place(Now(), true, Fraction, Blend, WristPosition, WristQ,
+    return ReloadHand.Place(Now(), true, Fraction, Blend, WristPosition, WristQ,
         AnchorPosition, AnchorQ, HandPoseScale);
+}
+
+// The M32's carried grenade uses the same stock contact as its visible hand.
+// Pickup/regrab can still be easing that wrist from its last displayed pose;
+// anchoring the prop at tracking during that blend leaves it floating away.
+// This is presentation only: HeldLocation and the guide keep tracked input.
+function M32CarryVisualPose(out vector Position, out quat Rotation)
+{
+    local vector Contact;
+    local quat ContactQ;
+    if (Gun == None || Gun.Class != class'KFWeap_GrenadeLauncher_M32'
+        || HandMode != 1 || bGuidedInsert || !bHandPoseReady || bHandPoseForAction
+        || ReloadHand == None || !ReloadHand.bReady || !ReloadHand.bVisible
+        || ReloadHand.Hand != OffHand() || ReloadHand.SourceHand != StockInsertHand()
+        || ReloadHand.Frames.Length == 0) return;
+    // BuildHandPose just placed frame zero of CarriedAnim/CarriedTrack at
+    // CarriedTime, so cache changes and either-hand regrabs use that contact.
+    ReloadHand.GetFrame(0, Contact, ContactQ);
+    if (!class'VRReloadHandPose'.static.ValidQ(ContactQ)
+        || !class'VRReloadHandPose'.static.ValidQ(ReloadHand.LastWristQ)) return;
+    Rotation = QuatProduct(ReloadHand.LastWristQ, QuatInvert(ContactQ));
+    Position = ReloadHand.LastWrist - QuatRotateVector(Rotation, Contact * HandPoseScale);
 }
 
 // Cosmetic return never keeps an input grab alive. It follows the released
@@ -1394,6 +1698,11 @@ function UpdateInsertion(optional bool bReleased)
     Radius = SnapRadius * MagnetScale();
     Scale = GunScale();
     Distance = VSize(HeldLocation() - AmmoTarget());
+    // Donor cylinder clips seat from any angle at either authored end of the
+    // loader path. Retain the same tracked carry/ownership gates as magazines.
+    if (CylinderClipReload() && FMin(Distance, VSize(HeldLocation() - SeatLocation()))
+        <= CylinderSnapRadius * MagnetScale())
+    { Seat(); return; }
     if (!bInsertSampled || InsertPath.Length < 2 || VSize(SeatLocal - EntryLocal) < 0.1)
     {
         // A missing/degenerate authored track keeps the proximity fallback,
@@ -1416,7 +1725,8 @@ function UpdateInsertion(optional bool bReleased)
     // The ordinary Hunting shell's authored final path is only about 2.38
     // UU. The 1.5 UU magazine tolerance plus the guide's 1 UU travel guard
     // otherwise disables its swept entry. Keep a real push to its latch.
-    if (Gun.Class == class'KFWeap_Shotgun_DoubleBarrel')
+    if (Gun.Class == class'KFWeap_Shotgun_DoubleBarrel'
+        || class'VRBreakAction'.static.SingleShotLauncher(Gun))
         Tolerance = FMin(Tolerance, VSize(SeatLocal - EntryLocal) * 0.25);
     // Standard detachable-magazine rigs (S12 included) get a little more
     // sideways capture room. Shell ports, cylinders, tanks, rockets and
@@ -1427,6 +1737,8 @@ function UpdateInsertion(optional bool bReleased)
         && !class'VRReloadCatalog'.default.Profiles[MagazineProfileIndex].bSeatAtNotify
         && !class'VRReloadCatalog'.default.Profiles[MagazineProfileIndex].bNoEject)
         LateralSlack = MagazineLateralSlack * MagnetScale() / Scale;
+    if (class'VRBreakAction'.static.SingleShotLauncher(Gun))
+        LateralSlack = MagnetScale() / Scale;
     InsertGuide.Update(LocalPosition, LocalRotation, EntryLocal, SeatLocal, EntryLocalQ,
         QuatProduct(InvRoot, PathRotation), Radius / Scale, Tolerance, Now(), LateralSlack);
     bGuidedInsert = InsertGuide.bCaptured;
@@ -1622,6 +1934,11 @@ function Update(float Delta)
     local int Hand;
     local name Anim;
     if (Bridge == None) return;
+    UpdateCylinderAuthority();
+    // Donor acquisition reach; insertion snap and rack exit inflation keep
+    // their separate policies, and the bridge applies saved pouch fit.
+    BeltRadius = class'VRInteractiveReload'.default.BeltRadius;
+    RackRadius = class'VRInteractiveReload'.default.RackRadius;
     UpdatePendingPulse();
     UpdateMagazineFeeds();
     UpdateAmmoDisplay();
@@ -1636,6 +1953,13 @@ function Update(float Delta)
     if (Pump != None) Pump.Update();
     if (ManualAction != None) ManualAction.Update();
     if (BreakAction != None) BreakAction.Update();
+    if (DualCylinders[0] != None) DualCylinders[0].Tick();
+    if (DualCylinders[1] != None) DualCylinders[1].Tick();
+    AdoptDualReloads();
+    if (Mechanism != None) Mechanism.Update();
+    if (Mechanism != None && Mechanism.bActive) return;
+    if (Vampire != None) Vampire.Update();
+    if (Vampire != None && Vampire.Busy()) return;
     UpdateSlideLocks();
     CountBlockedTriggers();
     if (!bActive)
@@ -1808,8 +2132,14 @@ function Begin(VRWeaponRuntime R, int Hand, optional bool bEmptyEject, optional 
     local SkeletalMeshComponent M;
     local VRReloadMeshPresentation P;
     local bool bMagazineWasOut;
-    // The other hand must be free to reload: two guns keep the button reload.
-    if (InputOwner.Inventory.Registry.GetPrimary(1 - Hand) != None) return;
+    local int PumpProfile;
+    // A free hand owns this path; occupied hands use their hip sessions.
+    if (HandBusy(1 - Hand) || DualCylinderOwns(R.Item)
+        || InputOwner.InputState[Hand].StockReloadWeapon == R.Item) return;
+    if (PairedAuthorityNeeded(R.Item) && (MagazineReloading(R.Item) || R.Item.CanReload())
+        && class'VRBreakCatalog'.static.CylinderReload(R.Item)
+        && (CylinderAuthorityGun != R.Item || !bCylinderAuthorityHeld))
+    { BeginCylinderAuthority(R, Hand); return; }
     // A pending lock is released before anything else; its stock reload runs.
     if (R.bSlideLockPending) { RejectedGun = R.Item; return; }
     Audio.ResetSession();
@@ -1860,6 +2190,13 @@ function Begin(VRWeaponRuntime R, int Hand, optional bool bEmptyEject, optional 
         if (M.MatchRefBone('RW_Cylinder_Pivot') >= 0) CylinderInsertFrame = 'RW_Cylinder_Pivot';
         else if (M.MatchRefBone('RW_Barrel') >= 0) CylinderInsertFrame = 'RW_Barrel';
     }
+    // Launcher insertion is authored in its open barrel, which the physical
+    // hinge may move independently of the paused stock animation.
+    if (class'VRBreakAction'.static.SingleShotLauncher(Gun))
+    {
+        if (M.MatchRefBone('RW_Barrel') < 0) { RejectSession("launcher-barrel"); return; }
+        CylinderInsertFrame = 'RW_Barrel';
+    }
     LoadedBone = (bShells || class'VRBreakAction'.static.Supported(Gun)) ? '' : FirstBone(M, LoadedBoneNames);
     AmmoBone = bShells ? FirstBone(M, ShellBoneNames) : LoadedBone;
     // Candidate spare track. Expanded rigs choose the actual incoming track
@@ -1872,6 +2209,15 @@ function Begin(VRWeaponRuntime R, int Hand, optional bool bEmptyEject, optional 
         SpareBone = AmmoBone;
     }
     if (SpareBone == '') SpareBone = AmmoBone;
+    if (Gun.Class == class'KFWeap_GrenadeLauncher_M32')
+    {
+        // The M32's RW_Shell2 is a live cylinder round. Preflight must check
+        // the actual incoming hand-carried round, not that generic bone.
+        PumpProfile = class'VRPumpCatalog'.static.FindClass(Gun.Class);
+        if (PumpProfile < 0) { RejectSession("shell-profile"); return; }
+        SpareBone = class'VRPumpCatalog'.default.Profiles[PumpProfile].InsertTrack;
+        if (SpareBone == '') SpareBone = AmmoBone;
+    }
     RackBone = FirstBone(M, SlideBoneNames);
     if (bShells && M.MatchRefBone('RW_Pump') >= 0) RackBone = 'RW_Pump';
     FollowBone = '';
@@ -1970,6 +2316,7 @@ function Begin(VRWeaponRuntime R, int Hand, optional bool bEmptyEject, optional 
         // The Frost Fang's feed shell is RW_Shell_01 (its insert track).
         FeedBone = M.MatchRefBone('RW_Shell1') >= 0 ? 'RW_Shell1'
             : class'VRPumpCatalog'.default.Profiles[class'VRPumpCatalog'.static.FindClass(Gun.Class)].InsertTrack;
+        if (Gun.Class == class'KFWeap_GrenadeLauncher_M32') FeedBone = SpareBone;
         M.HideBoneByName(FeedBone, PBO_None);
         bFeedHidden = true;
     }
@@ -2011,6 +2358,12 @@ function GateTimers(float Delta)
     local bool Ready;
     local name AmmoGate;
     if (bPartialShellClose || TryCloseBreakReload() || TryCloseShellReload()) return;
+    if (CylinderClipReload())
+    {
+        if (TryCloseCylinderReload()) return;
+        if (!bTimersPaused) { bAwaitAmmo = true; PauseStock(); }
+        return;
+    }
     Lead = FMax(PauseLead, 2 * Delta);
     if (LeverHold != 0) { if (!bTimersPaused) PauseStock(); return; }
     Cost = 1;
@@ -2075,6 +2428,42 @@ function GateTimers(float Delta)
             SetRackPull(LockPull);
         }
     }
+}
+
+// One speedloader or whole cylinder pays through the stock writer on closure.
+function bool CylinderClipReload()
+{
+    return BreakAction.Gun == Gun && BreakAction.bClip && BreakAction.bCylinder
+        && !bBreakInspection && BreakAction.BeltPath == None;
+}
+
+function bool TryCloseCylinderReload()
+{
+    if (!bActive || !StillValid() || bAmmoStepPaid || !BreakAction.bClosed
+        || BreakAction.SeatedShells < BreakAction.RequiredShells
+        || Credits < BreakAction.RequiredShells) return false;
+    if (CylinderAuthorityGun == Gun)
+    {
+        if (!bCylinderAuthorityHeld || bCylinderAuthorityCommitRequested) return false;
+        if (!Bridge.PairedReloadCommit(Gun, CylinderAuthorityRequest, CylinderAuthoritySession))
+        { ClearCylinderAuthority(); Finish("paired-commit-rejected"); return true; }
+        bCylinderAuthorityCommitRequested = true;
+        return false;
+    }
+    Credits -= BreakAction.RequiredShells;
+    bAmmoStepPaid = true;
+    Gun.ClearTimer('ReloadAmmoTimer'); Gun.ClearTimer('ReloadStatusTimer');
+    ResumeStock();
+    Gun.PerformReload();
+    bAwaitAmmo = false;
+    Gun.ReloadComplete();
+    if (Gun.IsInState('Active'))
+    {
+        if (Gun.IdleAnims.Length > 0) Gun.PlayAnimation(Gun.IdleAnims[0], 0.0, true, 0.0);
+        Gun.ToggleAdditiveBobAnim(!Gun.bUsingSights);
+    }
+    Finish("cylinder-closed");
+    return true;
 }
 
 // A manually closed single-round break action pays only the shells seated.
@@ -2180,8 +2569,8 @@ function UpdateHand()
     if ((Bridge.NativeValidMask & Bridge.NativeGripActiveMask & 3) != 3
         || !HandFree(Hand, true)) { CancelHand(Hand); return; }
     P = Bridge.Hands[Hand].Position;
-    // Reach zones measure from the palm, as they were tuned; the slide's
-    // authored contact is a wrist, so the rack keeps the wrist.
+    // Reach zones measure from the palm; ordinary rack contacts use the
+    // authored wrist, while the MP7 also accepts its physical handle.
     Palm = Bridge.PalmPosition(Hand);
     // The grip grabs and holds, as in AS2: the magazine from the pouch, the
     // slide at the gun. This runs ahead of VRDualHandInput, so a squeeze that
@@ -2197,7 +2586,8 @@ function UpdateHand()
     else if (NeedsAmmo() && HandMode == 0)
     { NextZone = 1; ZoneTarget = BeltPosition(); ZoneRadius = BeltRadius; }
     if (NextZone != ZoneStep) { ZoneStep = NextZone; bInZone = false; }
-    if (NextZone != 0) bNearTarget = VSize((NextZone == 1 ? Palm : P) - ZoneTarget) <= ZoneRadius * (bInZone ? 1.25 : 1.0);
+    if (NextZone == 3) bNearTarget = RackDistance(P, Palm, vect(0,0,0)) <= ZoneRadius * (bInZone ? 1.25 : 1.0);
+    else if (NextZone != 0) bNearTarget = VSize((NextZone == 1 ? Palm : P) - ZoneTarget) <= ZoneRadius * (bInZone ? 1.25 : 1.0);
     if (bNearTarget && !bInZone) Pulse(1 << Hand, 0.1, 0.012);
     bInZone = bNearTarget;
 
@@ -2206,14 +2596,15 @@ function UpdateHand()
     {
         case 0:
             if (bGripEdge && NeedsAmmo() && HandFree(Hand, false) && VSize(Palm - BeltPosition()) <= BeltRadius
-                && !InputOwner.BodySlotNearer(Hand, BeltPosition(), BeltRadius))
+                && !InputOwner.BodyContactPreferred(Hand, BeltPosition(), BeltRadius))
             {
                 TakeAmmo(Hand);
                 break;
             }
             // Grab the slide. A pump is worked only by the support hand, which
             // is drawn gripping the fore-end.
-            if (!RackAvailable() || VSize(P - RackTarget()) > RackReach()) break;
+            if (!RackAvailable() || RackDistance(P, Palm, vect(0,0,0)) > RackReach()) break;
+            if (InputOwner.BodyContactPreferred(Hand, UsesRackPalmContact() ? RackHandle() : RackTarget(), RackReach())) break;
             bSupport = InputOwner.Inventory.Registry.GetSupport(Hand) == Runtime;
             if (!HandFree(Hand, true)) break;
             if (RackUsesSupport() ? bSupport : bGripEdge)
@@ -2276,9 +2667,9 @@ function UpdateHand()
             // Predict the current sample's moving contact before the exit check.
             // RackTarget still contains the previous frame's part position.
             ActionPull = bSlideLock ? FMin(LockPull + Pull, RackTravel()) : Pull;
-            if (bHeld && !bRackBySupport && VSize(P - RackTarget()
-                - RackPullDirection() * (ActionPull - RackPull)
-                - RackPullDirection() * FMax(RackStartX - AlongBore(P) - Pull, 0)) > RackReach() * ExitInflation)
+            if (bHeld && !bRackBySupport && RackDistance(P, Palm,
+                RackPullDirection() * (ActionPull - RackPull)
+                + RackPullDirection() * FMax(RackStartX - AlongBore(P) - Pull, 0)) > RackReach() * ExitInflation)
             {
                 bHeld = false;
                 Pulse(1 << Hand, 0.1, 0.012);
@@ -2409,12 +2800,13 @@ function TryPouchReload()
             && (Bridge.NativeValidMask & 3) == 3
             && InputOwner.Inventory.Registry.GetPrimary(Other) == None && HandFree(Other, false)
             && VSize(Bridge.PalmPosition(Other) - BeltPositionFor(Other)) <= BeltRadius * ((IdleZoneMask & Bit) != 0 ? 1.25 : 1.0)
-            // The hip holster shares this zone; the nearer of the two takes the squeeze.
-            && !InputOwner.BodySlotNearer(Other, BeltPositionFor(Other), BeltRadius);
+            // A competing body contact keeps the same AS2 grab choice.
+            && !InputOwner.BodyContactPreferred(Other, BeltPositionFor(Other), BeltRadius);
         if (bNear && (IdleZoneMask & Bit) == 0) Pulse(Bit, 0.1, 0.012);
         if (bNear) IdleZoneMask = IdleZoneMask | Bit;
         else IdleZoneMask = IdleZoneMask & ~Bit;
-        if (!bNear || !bEdge) continue;
+        // The 1.25x boundary above is feedback hysteresis, never acquisition.
+        if (!bNear || !bEdge || VSize(Bridge.PalmPosition(Other) - BeltPositionFor(Other)) > BeltRadius) continue;
         if (!R.Item.CanReload()) { Begin(R, Hand, true); return; }
         R.StartAction(class'KFWeapon'.const.RELOAD_FIREMODE);
         R.Item.StopFire(class'KFWeapon'.const.RELOAD_FIREMODE);
@@ -2806,6 +3198,11 @@ function DropHand(optional bool bPhysicalRelease, optional vector Position, opti
 
 function CancelHand(int Hand)
 {
+    if (CylinderAuthorityGun != None && (Hand == CylinderAuthorityHand || Hand == 1 - CylinderAuthorityHand))
+    { ClearCylinderAuthority(); if (bActive) Finish("paired-hand-cancelled"); }
+    if (Hand >= 0 && Hand < 2 && DualCylinders[Hand] != None) DualCylinders[Hand].CancelHand(Hand);
+    if (Mechanism != None) Mechanism.CancelHand(Hand);
+    if (Vampire != None) Vampire.CancelHand(Hand);
     if (ReloadHand != None && (Hand == ReloadHand.Hand || (bActive && Hand == GunHand))) ReloadHand.Cancel();
     if (Pump != None) Pump.CancelHand(Hand);
     if (ManualAction != None) ManualAction.CancelHand(Hand);
@@ -2836,6 +3233,7 @@ function CancelHand(int Hand)
 function Finish(string Reason)
 {
     local VRReloadMeshPresentation P;
+    if (CylinderAuthorityGun != None && CylinderAuthorityGun == Gun) ClearCylinderAuthority();
     RackMotion.Reset();
     CarryMotion.Reset();
     if (ReloadHand != None && Reason != "ended") ReloadHand.Cancel();
@@ -2921,6 +3319,7 @@ function Finish(string Reason)
 function Shutdown()
 {
     local int I;
+    if (CylinderAuthorityGun != None) ClearCylinderAuthority();
     if (bActive) Finish("shutdown");
     ResetLockGesture();
     LockRuntime = None;
@@ -2928,7 +3327,11 @@ function Shutdown()
     if (BeltShells != None) { BeltShells.Shutdown(); BeltShells = None; }
     if (Pump != None) { Pump.Shutdown(); Pump = None; }
     if (ManualAction != None) { ManualAction.Shutdown(); ManualAction = None; }
+    if (Mechanism != None) { Mechanism.Shutdown(); Mechanism = None; }
+    if (Vampire != None) { Vampire.Shutdown(); Vampire = None; }
     if (BreakAction != None) { BreakAction.Shutdown(); BreakAction = None; }
+    for (I = 0; I < 2; ++I)
+        if (DualCylinders[I] != None) { DualCylinders[I].Shutdown(); DualCylinders[I] = None; }
     if (Dropped != None) { Dropped.Shutdown(); Dropped = None; }
     if (Bridge != None)
     {
@@ -3274,6 +3677,7 @@ function UpdateHints()
 {
     local int Next;
     if (bAwaitRack && HandMode != 3) Next = 3;
+    else if (BreakAction.Gun == Gun && !BreakAction.bOpened && HandMode == 0) Next = 2;
     else if (HandMode == 1 && !bGuidedInsert) Next = 2;
     else if (HandMode == 0 && NeedsAmmo()) Next = 1;
     HintGun = Gun;
@@ -3292,7 +3696,7 @@ function UpdateHints()
             bAwaitRack || (class'VRPumpCatalog'.static.PumpAction(Gun)
                 && (bEmptyStart || Pump.RequiresPump(Gun)) && Gun.AmmoCount[0] > 0));
     else if (BreakAction.Gun == Gun)
-        UpdateParts(Gun, false, BreakAction.bOpened && !BreakAction.bClosed
+        UpdateParts(Gun, false, !BreakAction.bClosed
             && !BreakAction.bBoxSeated && BreakAction.SeatedShells < BreakAction.RequiredShells, false);
     else UpdateParts(Gun, false, NeedsAmmo() && !bGuidedInsert && HandMode != 4, bAwaitRack);
 }
@@ -3319,6 +3723,14 @@ function UpdateIdleHints()
             if (R != None && R.IsCurrent() && R.MagazineOut())
             {
                 Next = 2; // Insert, not another ejection of an already absent magazine.
+                HintGun = R.Item;
+                HintGunHand = Hand;
+            }
+            else if (R != None && R.IsCurrent() && class'VRBreakAction'.static.SingleShotLauncher(R.Item)
+                && R.Item.AmmoCount[0] == 0 && R.Item.IsInState('Active')
+                && InputOwner.Inventory.Registry.GetPrimary(1 - Hand) == None && HandFree(1 - Hand, true))
+            {
+                Next = 2;
                 HintGun = R.Item;
                 HintGunHand = Hand;
             }
@@ -3610,6 +4022,9 @@ function UpdateLockGesture()
     S = InputOwner.Inventory.Registry.GetSupport(Other);
     if ((Bridge.NativeValidMask & Bridge.NativeGripActiveMask & 3) != 3 || !InputOwner.ContextValid()
         || InputOwner.Inventory.Registry.GetPrimary(Other) != None || InputOwner.Inventory.HasWorldGrab(Other)
+        || InputOwner.Inventory.HasGauntletHand(Other) || InputOwner.Inventory.IsTransferPending(Other)
+        || InputOwner.HandCarrying(Other)
+        || (InputOwner.Deployables != None && InputOwner.Deployables.IsHeld(Other))
         || InputOwner.IsSelectorOpen(Other) || (S != None && S != LockRuntime))
     {
         ResetLockGesture();
@@ -3622,6 +4037,8 @@ function UpdateLockGesture()
     {
         if (bGripEdge && VSize(P - W.MySkelMesh.GetBoneLocation(LockBone(W))) <= RackRadius * 2)
         {
+            if (InputOwner.BodyContactPreferred(Other,
+                W.MySkelMesh.GetBoneLocation(LockBone(W)), RackRadius * 2)) return;
             if (S == LockRuntime) InputOwner.Inventory.ReleaseHand(Other);
             bLockEngaged = true;
             bLockPulled = false;
@@ -3786,6 +4203,14 @@ function PlaceIdleHint()
         PlaceRing(PouchRing, PouchRingMaterial, At, PouchRingRadius,
             Nearness(Bridge.PalmPosition(Other), At, BeltRadius * 0.5));
     }
+    else if (HintStep == 2 && class'VRBreakAction'.static.SingleShotLauncher(HintGun))
+    {
+        At = HintGun.MySkelMesh.GetBoneLocation('RW_Barrel')
+            + QuatRotateVector(HintGun.MySkelMesh.GetBoneQuaternion('RW_Barrel'), vect(4,0,0) * ScaleOf(HintGun));
+        SetSeatRingTint(false);
+        PlaceRing(SeatRing, SeatRingMaterial, At, SeatRingRadius,
+            Nearness(Bridge.PalmPosition(Other), At, BreakAction.Radius * 0.5));
+    }
 }
 
 function float Nearness(vector From, vector At, float Radius)
@@ -3793,14 +4218,27 @@ function float Nearness(vector From, vector At, float Radius)
     return 1.0 - FClamp((VSize(From - At) - Radius) / (Radius * 3.0), 0, 1);
 }
 
-// Standing in the pouch: a magazine upright, a shell nose up.
-function quat PouchRotation()
+// Display-only basis. KF2 pistol magazines and the compound arrow are +Z
+// upright in the generated prop frame; shell/bolt/rail loads run along +X.
+// AS2's resource art adds five degrees of yaw and ten degrees of rearward
+// lean. Mirror only yaw for the other side; carried and seated poses stay
+// authored by their weapon clips.
+function quat PouchRotationFor(KFWeapon W, int Hand)
 {
     local quat Q;
+    local rotator Lean;
     Q = QuatFromRotator(Torso());
-    if (bShells || BreakAction.Gun == Gun) Q = QuatProduct(Q, QuatFromRotator(rot(16384,0,0)));
+    Lean.Pitch = 1820;
+    Lean.Yaw = Hand == 0 ? -910 : 910;
+    Q = QuatProduct(Q, QuatFromRotator(Lean));
+    if (W != None && (class'VRCylinderSession'.static.MagazineIndex(W.Class) < 0
+        || W.Class == class'KFWeap_Bow_Crossbow' || W.Class == class'KFWeap_HRG_Crossboom'
+        || W.Class == class'KFWeap_Rifle_RailGun' || W.Class == class'KFWeap_Rifle_HRGIncision'))
+        Q = QuatProduct(Q, QuatFromRotator(rot(16384,0,0)));
     return Q;
 }
+
+function quat PouchRotation() { return PouchRotationFor(Gun, OffHand()); }
 
 // Runs after the gun and hands are placed for the frame (VRHandInventory.
 // PlaceAll), so the seated magazine never trails the gun by a frame.
@@ -3811,10 +4249,16 @@ function PlaceVisuals()
     local vector Target, At, Held;
     local quat Q;
     local float Scale, T;
-    local bool bRack, bGlow, bShellGuide;
+    local bool bRack, bGlow, bShellGuide, bCarryHandPlaced;
     if (Pump != None) Pump.PlaceVisuals();
     if (ManualAction != None) ManualAction.PlaceVisuals();
     if (BreakAction != None) BreakAction.PlaceVisuals();
+    if (DualCylinders[0] != None) DualCylinders[0].PlaceVisuals();
+    if (DualCylinders[1] != None) DualCylinders[1].PlaceVisuals();
+    if (Mechanism != None) Mechanism.PlaceVisuals();
+    if (Mechanism != None && Mechanism.bActive) return;
+    if (Vampire != None) Vampire.PlaceVisuals();
+    if (Vampire != None && Vampire.Busy()) return;
     PlaceMagazineFeeds();
     if (Bridge == None || InputOwner == None || !Enabled()
         || !InputOwner.ContextValid() || (Bridge.NativeValidMask & 3) != 3)
@@ -3840,13 +4284,14 @@ function PlaceVisuals()
     if (HandMode == 1 || (HandMode == 3 && !bRackBySupport && MagazineProfileIndex >= 0
         && RigSample.bRackHandSampled) || BreakAction.OwnsHand(OffHand()))
     {
-        if (BuildHandPose()) PlaceHandPose();
+        if (BuildHandPose()) bCarryHandPlaced = PlaceHandPose();
         else ReloadHand.Cancel();
     }
     else PlaceReleasedHand();
     if (HandMode == 1 || HandMode == 4)
     {
         GuidedAmmoPose(At, Q);
+        if (bCarryHandPlaced) M32CarryVisualPose(At, Q);
         PlaceProp(HandAmmo, At, Q, Scale);
     }
     else HandAmmo.SetHidden(true);
@@ -3935,6 +4380,7 @@ function PlaceVisuals()
         // The Hunting breech and RPG muzzle glows cannot convey the entry
         // angle. Show their ghosts immediately when ammunition is picked up.
         bShellGuide = (Gun.Class == class'KFWeap_Shotgun_DoubleBarrel'
+            || class'VRBreakAction'.static.SingleShotLauncher(Gun)
             || Gun.Class == class'KFWeap_RocketLauncher_RPG7') && Bridge.bReloadHints && bInsertSampled;
         if (HandMode == 1 && (!PartGlows(Gun, 1) || BreakAction.Gun == Gun
             || Gun.Class == class'KFWeap_AssaultRifle_Thompson' || bShellGuide) && (bShellGuide || HintVisible(2)))
@@ -3952,12 +4398,11 @@ defaultproperties
     MagazineProfileIndex=-1
     LastReleasedProp=-1
     IdleGripMask=3
-    // Forward of the neck even at a straight-down look. The previous centre
-    // remains within BeltRadius; the entry boundary moves with the pouch.
+    // Donor reach, with saved player pouch adjustments applied by the bridge.
     BeltOffset=(X=24,Y=-14,Z=-24)
-    BeltRadius=14
+    BeltRadius=18
     SnapRadius=8
-    RackRadius=12
+    RackRadius=16
     SlideTravel=3.2
     PumpTravel=7
     PauseLead=0.05
@@ -3965,6 +4410,7 @@ defaultproperties
     EntryLead=0.12
     SeatSlideTime=0.1
     SeatTolerance=1.5
+    CylinderSnapRadius=12
     MagazineLateralSlack=2
     HintDelay=0.75
     DryFireWindow=3.0

@@ -23,6 +23,13 @@ class JoinCodeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "same ZIP"):
             join_code.decode(join_code.encode(self.details), "different-build")
 
+    def test_passwordless_code_retains_empty_password_and_build_matching(self):
+        self.details['password'] = ''
+        code = join_code.encode(self.details)
+        self.assertEqual(self.details, join_code.decode(code, self.details['build']))
+        with self.assertRaisesRegex(ValueError, 'same ZIP'):
+            join_code.decode(code, 'different-build')
+
     def test_rejects_malformed_and_unsafe_payloads(self):
         for key, value in (("address", "host?command=bad"), ("password", "bad?option"),
                            ("port", True), ("port", 80), ("query_port", 7787),

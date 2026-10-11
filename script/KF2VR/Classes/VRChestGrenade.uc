@@ -1,7 +1,7 @@
 // The perk grenade slot. No body inventory, live held projectile, cooking
 // timer or ammo grant: the stock perk projectile is created on release.
 //
-// The grenade rides the chest where AS2 hangs its chest slot (Chest_Hierarchy
+// The grenade centre rides the chest where AS2 hangs its chest slot (Chest_Hierarchy
 // ChestSlot, the flashlight's): 11.6 cm forward, 4.4 cm right and 15.7 cm
 // below the neck pivot. CHEST ZONE HERE in calibration moves it to the palm.
 class VRChestGrenade extends Object;
@@ -12,8 +12,11 @@ var int HoldingHand, CaptureEpoch, Samples;
 var class<KFProj_Grenade> HeldClass;
 var KFInventoryManager HeldInventory;
 var KFWeapon HeldOwner;
-var ParticleSystemComponent Preview, ZoneMarker;
+var ParticleSystemComponent Preview;
+var array<StaticMeshComponent> ZoneBodies;
 var class<KFProj_Grenade> MarkerClass;
+var class<KFProj_Grenade> UnsupportedMarkerClass;
+var string UnsupportedBodyReason;
 var vector LastPosition, LastPawnPosition, ThrowVelocity;
 var int NearChestMask;
 var float NearSince[2];
@@ -104,13 +107,29 @@ function int AvailableCount()
 // Only the saved torso-local offset rotates. The origin hangs from the neck
 // pivot, 38 below a level head, so looking down never slides it forward.
 function vector ChestOrigin() { return Bridge.BodyPivot() - vect(0,0,1) * (38 - Bridge.BodyNeckLength); }
-function vector ChestPosition() { return ChestOrigin() + (Bridge.ChestGrenadeOffset >> Torso); }
+// Component pivot, with the scaled mesh centre removed only for explicitly
+// centre-based offsets. Old saved pivot calibration keeps its exact placement.
+function vector ChestPosition()
+{
+    local vector Offset;
+    Offset = Bridge.ChestGrenadeOffset;
+    if (Bridge.bChestGrenadeCentered) Offset -= DisplayCenter();
+    return ChestOrigin() + (Offset >> Torso);
+}
 // The stock EMP flight effect uses its oversized first-person mesh (27.34 cm
 // long). Fit its display to the standard frag's measured 11.40 cm length;
 // projectile gameplay and the other authored grenade sizes stay stock.
+function bool UsesEMPDisplay(class<KFProj_Grenade> GrenadeClass)
+{
+    // Derived grenade gameplay can reuse the exact stock mesh effect. Fit the
+    // displayed asset, not the class name; unrelated custom effects stay intact.
+    return GrenadeClass != None && GrenadeClass.default.ProjFlightTemplate != None
+        && GrenadeClass.default.ProjFlightTemplate == class'KFProj_EMPGrenade'.default.ProjFlightTemplate;
+}
+
 function float GrenadeDisplayScale(class<KFProj_Grenade> GrenadeClass)
 {
-    if (GrenadeClass != None && GrenadeClass.Name == 'KFProj_EMPGrenade')
+    if (UsesEMPDisplay(GrenadeClass))
         return 5.699153 / 13.671265;
     return 1.0;
 }
@@ -124,11 +143,11 @@ function vector MeshCenter(class<KFProj_Grenade> GrenadeClass)
 {
     local vector Center;
     if (GrenadeClass == None) return Center;
+    if (UsesEMPDisplay(GrenadeClass)) return vect(0.54,0.64,1.90);
     switch (GrenadeClass.Name)
     {
         case 'KFProj_NailBombGrenade': Center.Z = 17.34; break;
         case 'KFProj_DynamiteGrenade': Center.Z = 2.39; break;
-        case 'KFProj_EMPGrenade': Center.X = 0.54; Center.Y = 0.64; Center.Z = 1.90; break;
         case 'KFProj_MolotovGrenade': Center.Z = 1.78; break;
     }
     return Center;
@@ -159,7 +178,7 @@ function vector SlotGrabPosition()
     return ChestPosition() + (DisplayCenter() >> Torso);
 }
 
-// Calibration must subtract the same scaled centre used for grab admission.
+// Display and grab admission share this scaled centre, including the EMP fit.
 function vector DisplayCenter()
 {
     return MeshCenter(ChestGrenadeClass()) * GrenadeDisplayScale(ChestGrenadeClass());
@@ -210,8 +229,8 @@ function HandFrame(int Hand, out vector Position, out vector Forward, out vector
     }
 }
 
-// The authored grip seats each visible body in the rendered hand frame.
-// Neither this visual offset nor the finger table changes the throw anchor.
+// Seat each visible body in the rendered hand frame. These offsets are
+// independent of the grip-driven finger curl and do not move the throw anchor.
 function PlaceHeldPreview(int Hand)
 {
     local vector Wrist, Forward, Thumb, Palm, Center, Offset;
@@ -341,16 +360,201 @@ function bool Throw()
 
 function ReleaseZoneMarker()
 {
-    if (ZoneMarker == None) return;
-    ZoneMarker.DeactivateSystem();
-    Bridge.DetachComponent(ZoneMarker);
-    ZoneMarker = None;
+    local int I;
+    for (I = 0; I < ZoneBodies.Length; ++I)
+        if (ZoneBodies[I] != None) Bridge.DetachComponent(ZoneBodies[I]);
+    ZoneBodies.Length = 0;
     MarkerClass = None;
 }
 
-// Show the perk's own grenade in the slot, from the same mesh-emitter template
-// the held preview uses, so the thing you reach for looks like the thing you
-// get. A perk change re-templates it rather than leaving stale geometry.
+// All nine stock grenade bodies use unit-size mesh particles at the local
+// origin, with only lifetime and constant size modules. MeshAlignment only
+// applies to PSA_TypeSpecific; their default PSA_Square does not orient meshes
+// towards the camera. Refuse other body frames rather than losing geometry or
+// approximating an animated/modded effect with a static mesh.
+function bool RejectStowedBody(string Reason, optional ParticleModuleSize Size)
+{
+    local int I;
+    UnsupportedBodyReason = Reason;
+    if (Size != None)
+    {
+        UnsupportedBodyReason $= " distribution=" $ PathName(Size.StartSize.Distribution)
+            $ " raw_type=" $ Size.StartSize.Type $ " raw_op=" $ Size.StartSize.Op
+            $ " raw_elements=" $ Size.StartSize.LookupTableNumElements
+            $ " raw_chunk=" $ Size.StartSize.LookupTableChunkSize
+            $ " raw_count=" $ Size.StartSize.LookupTable.Length
+            $ " raw_time_scale=" $ Size.StartSize.LookupTableTimeScale
+            $ " raw_start_time=" $ Size.StartSize.LookupTableStartTime;
+        for (I = 0; I < Min(8, Size.StartSize.LookupTable.Length); ++I)
+            UnsupportedBodyReason $= " raw_" $ I $ "=" $ Size.StartSize.LookupTable[I];
+    }
+    return false;
+}
+
+// The stock EMP body authors DistributionVectorConstant_4 at unit size. SDK
+// distributions can be omitted after baking; the observed stock client has no
+// UObject and eight unit lookup values. Match only this audited graph and raw
+// fingerprint, without interpreting operation/type numbers as a general format.
+// Called after the normal frame guards, only for an absent distribution object.
+function bool AuditedEMPUnitSize(ParticleSystem FlightTemplate, ParticleEmitter Emitter,
+    ParticleLODLevel LOD, ParticleModuleSize Size)
+{
+    local ParticleModuleTypeDataMesh Body;
+    local string StockPath;
+    local int I;
+    StockPath = "WEP_3P_EMP_EMIT.FX_EMP_Grenade_Mesh";
+    if (FlightTemplate != class'KFProj_EMPGrenade'.default.ProjFlightTemplate)
+        return RejectStowedBody("emp_template_reference stock_template="
+            $ PathName(class'KFProj_EMPGrenade'.default.ProjFlightTemplate), Size);
+    if (PathName(FlightTemplate) != StockPath)
+        return RejectStowedBody("emp_template_identity actual_template=" $ PathName(FlightTemplate), Size);
+    if (Emitter == None) return RejectStowedBody("emp_emitter_missing", Size);
+    if (PathName(Emitter) != (StockPath $ ".ParticleSpriteEmitter_1"))
+        return RejectStowedBody("emp_emitter_identity actual_emitter=" $ PathName(Emitter), Size);
+    if (Emitter.LODLevels.Length != 2)
+        return RejectStowedBody("emp_lod_count actual_lod_count=" $ Emitter.LODLevels.Length, Size);
+    if (PathName(Emitter.LODLevels[0]) != (StockPath $ ".ParticleSpriteEmitter_1.ParticleLODLevel_1"))
+        return RejectStowedBody("emp_lod_0_identity actual_lod_0=" $ PathName(Emitter.LODLevels[0]), Size);
+    if (PathName(Emitter.LODLevels[1]) != (StockPath $ ".ParticleSpriteEmitter_1.ParticleLODLevel_24"))
+        return RejectStowedBody("emp_lod_1_identity actual_lod_1=" $ PathName(Emitter.LODLevels[1]), Size);
+    if (Emitter.LODLevels[0] == Emitter.LODLevels[1])
+        return RejectStowedBody("emp_duplicate_lod", Size);
+    if (LOD != Emitter.LODLevels[0] && LOD != Emitter.LODLevels[1])
+        return RejectStowedBody("emp_lod_membership actual_lod=" $ PathName(LOD), Size);
+    Body = ParticleModuleTypeDataMesh(LOD.TypeDataModule);
+    if (PathName(Body) != (StockPath $ ".ParticleModuleTypeDataMesh_0"))
+        return RejectStowedBody("emp_body_identity actual_body=" $ PathName(Body), Size);
+    if (PathName(Body.Mesh) != "WEP_3P_EMP_MESH.Wep_1stP_EMP")
+        return RejectStowedBody("emp_mesh_identity actual_mesh=" $ PathName(Body.Mesh), Size);
+    if (Body.bOverrideMaterial) return RejectStowedBody("emp_material_override", Size);
+    if (PathName(LOD.RequiredModule) != (StockPath $ ".ParticleModuleRequired_1"))
+        return RejectStowedBody("emp_required_identity actual_required=" $ PathName(LOD.RequiredModule), Size);
+    if (PathName(LOD.RequiredModule.Material) != "WEP_3P_EMP_MAT.Wep_1P_EMP_MIC")
+        return RejectStowedBody("emp_material_identity actual_material=" $ PathName(LOD.RequiredModule.Material), Size);
+    if (LOD.Modules.Length != 2)
+        return RejectStowedBody("emp_module_count actual_module_count=" $ LOD.Modules.Length, Size);
+    if (PathName(LOD.Modules[0]) != (StockPath $ ".ParticleModuleLifetime_1"))
+        return RejectStowedBody("emp_lifetime_identity actual_lifetime=" $ PathName(LOD.Modules[0]), Size);
+    if (LOD.Modules[1] != Size)
+        return RejectStowedBody("emp_size_membership actual_module_1=" $ PathName(LOD.Modules[1])
+            $ " actual_size=" $ PathName(Size), Size);
+    if (PathName(Size) != (StockPath $ ".ParticleModuleSize_1"))
+        return RejectStowedBody("emp_size_identity actual_size=" $ PathName(Size), Size);
+    if (Size.StartSize.Distribution != None) return RejectStowedBody("emp_distribution_present", Size);
+    if (Size.StartSize.Type != 0) return RejectStowedBody("emp_raw_type", Size);
+    if (Size.StartSize.Op != 1) return RejectStowedBody("emp_raw_op", Size);
+    if (Size.StartSize.LookupTableNumElements != 1) return RejectStowedBody("emp_raw_elements", Size);
+    if (Size.StartSize.LookupTableChunkSize != 3) return RejectStowedBody("emp_raw_chunk", Size);
+    if (Size.StartSize.LookupTable.Length != 8) return RejectStowedBody("emp_raw_count", Size);
+    if (Size.StartSize.LookupTableTimeScale != 0) return RejectStowedBody("emp_raw_time_scale", Size);
+    if (Size.StartSize.LookupTableStartTime != 0) return RejectStowedBody("emp_raw_start_time", Size);
+    for (I = 0; I < Size.StartSize.LookupTable.Length; ++I)
+        if (Size.StartSize.LookupTable[I] != 1)
+            return RejectStowedBody("emp_raw_entry index=" $ I, Size);
+    return true;
+}
+
+function bool FixedStowedBody(ParticleLODLevel LOD, ParticleSystem FlightTemplate, ParticleEmitter Emitter)
+{
+    local ParticleModuleTypeDataMesh Body;
+    local ParticleModuleSize Size;
+    local DistributionVectorConstant ConstantSize;
+    local int I;
+    local bool bSize;
+    if (LOD == None) return RejectStowedBody("lod_missing");
+    if (!LOD.bEnabled) return RejectStowedBody("lod_disabled");
+    if (LOD.RequiredModule == None) return RejectStowedBody("required_module_missing");
+    Body = ParticleModuleTypeDataMesh(LOD.TypeDataModule);
+    if (Body == None) return RejectStowedBody("mesh_type_data_missing");
+    if (Body.Mesh == None) return RejectStowedBody("mesh_asset_missing");
+    if (!LOD.RequiredModule.bUseLocalSpace) return RejectStowedBody("not_local_space");
+    if (LOD.RequiredModule.ScreenAlignment != PSA_Square)
+        return RejectStowedBody("screen_alignment=" $ LOD.RequiredModule.ScreenAlignment);
+    if (Body.bCameraFacing) return RejectStowedBody("camera_facing");
+    if (Body.AxisLockOption != EPAL_NONE) return RejectStowedBody("axis_lock=" $ Body.AxisLockOption);
+    if (Body.Pitch != 0 || Body.Yaw != 0 || Body.Roll != 0)
+        return RejectStowedBody("pre_rotation=" $ Body.Pitch $ "," $ Body.Yaw $ "," $ Body.Roll);
+    for (I = 0; I < LOD.Modules.Length; ++I)
+    {
+        Size = ParticleModuleSize(LOD.Modules[I]);
+        if (Size != None)
+        {
+            ConstantSize = DistributionVectorConstant(Size.StartSize.Distribution);
+            if (bSize) return RejectStowedBody("duplicate_size_module", Size);
+            if (ConstantSize == None)
+            {
+                if (Size.StartSize.Distribution != None)
+                    return RejectStowedBody("constant_size_object_missing", Size);
+                if (!AuditedEMPUnitSize(FlightTemplate, Emitter, LOD, Size))
+                {
+                    UnsupportedBodyReason = "constant_size_object_missing fallback=" $ UnsupportedBodyReason;
+                    return false;
+                }
+            }
+            else if (ConstantSize.Constant != vect(1,1,1))
+                return RejectStowedBody("nonunit_size=" $ ConstantSize.Constant, Size);
+            bSize = true;
+        }
+        else if (ParticleModuleLifetime(LOD.Modules[I]) == None)
+            return RejectStowedBody("unsupported_module=" $ PathName(LOD.Modules[I]));
+    }
+    if (!bSize) return RejectStowedBody("size_module_missing");
+    return true;
+}
+
+// Reference stock mesh/material assets directly. Never duplicate or modify a
+// ParticleSystem's inline emitter/LOD graph or its native module caches. Fuse
+// effects remain on the unchanged stock flight template used when drawn/thrown.
+function bool CreateZoneBodies(ParticleSystem FlightTemplate)
+{
+    local ParticleEmitter Emitter;
+    local ParticleLODLevel LOD;
+    local ParticleModuleTypeDataMesh Body, OtherBody;
+    local StaticMeshComponent Component;
+    local int I, L, M;
+    local bool bHasMesh;
+    UnsupportedBodyReason = "none";
+    for (I = 0; I < FlightTemplate.Emitters.Length; ++I)
+    {
+        Emitter = FlightTemplate.Emitters[I];
+        if (Emitter == None) continue;
+        bHasMesh = false;
+        for (L = 0; L < Emitter.LODLevels.Length; ++L)
+            if (Emitter.LODLevels[L] != None
+                && ParticleModuleTypeDataMesh(Emitter.LODLevels[L].TypeDataModule) != None) bHasMesh = true;
+        if (!bHasMesh) continue;
+        LOD = Emitter.LODLevels[0];
+        if (!FixedStowedBody(LOD, FlightTemplate, Emitter)) return false;
+        Body = ParticleModuleTypeDataMesh(LOD.TypeDataModule);
+        for (L = 1; L < Emitter.LODLevels.Length; ++L)
+        {
+            if (!FixedStowedBody(Emitter.LODLevels[L], FlightTemplate, Emitter)) return false;
+            OtherBody = ParticleModuleTypeDataMesh(Emitter.LODLevels[L].TypeDataModule);
+            if (OtherBody.Mesh != Body.Mesh || OtherBody.bOverrideMaterial != Body.bOverrideMaterial
+                || (Body.bOverrideMaterial && Emitter.LODLevels[L].RequiredModule.Material != LOD.RequiredModule.Material))
+                return RejectStowedBody("body_lod_mesh_or_material_changed");
+        }
+        Component = new(Bridge) class'StaticMeshComponent';
+        if (Component == None || !Component.SetStaticMesh(Body.Mesh))
+            return RejectStowedBody("mesh_component_creation_failed");
+        Component.SetAbsolute(true, true, true);
+        Component.SetActorCollision(false, false);
+        Component.SetTraceBlocking(false, false);
+        Component.SetBlockRigidBody(false);
+        Component.CastShadow = false;
+        // Preserve every default mesh surface. Only an explicitly authored
+        // emitter material override replaces the mesh's material slots.
+        if (Body.bOverrideMaterial && LOD.RequiredModule.Material != None)
+            for (M = 0; M < Component.GetNumElements(); ++M)
+                Component.SetMaterial(M, LOD.RequiredModule.Material);
+        ZoneBodies.AddItem(Component);
+        Bridge.AttachComponent(Component);
+    }
+    if (ZoneBodies.Length == 0) return RejectStowedBody("mesh_body_missing");
+    return true;
+}
+
+// Show every fixed mesh body in the perk slot; detach all on a perk change.
 function UpdateZoneMarker(class<KFProj_Grenade> GrenadeClass)
 {
     if (GrenadeClass == None || GrenadeClass.default.ProjFlightTemplate == None)
@@ -358,16 +562,21 @@ function UpdateZoneMarker(class<KFProj_Grenade> GrenadeClass)
         ReleaseZoneMarker();
         return;
     }
-    if (ZoneMarker != None && MarkerClass != GrenadeClass) ReleaseZoneMarker();
-    if (ZoneMarker == None)
+    if (MarkerClass != GrenadeClass) ReleaseZoneMarker();
+    if (UnsupportedMarkerClass == GrenadeClass) return;
+    if (ZoneBodies.Length == 0)
     {
-        ZoneMarker = new(Bridge) class'ParticleSystemComponent';
-        ZoneMarker.SetTemplate(GrenadeClass.default.ProjFlightTemplate);
-        ZoneMarker.SetAbsolute(true, true, true);
-        ZoneMarker.bUpdateComponentInTick = true;
+        if (!CreateZoneBodies(GrenadeClass.default.ProjFlightTemplate))
+        {
+            ReleaseZoneMarker();
+            UnsupportedMarkerClass = GrenadeClass;
+            `log("VR chest grenade: unsupported fixed body frame " $ GrenadeClass
+                $ " template=" $ PathName(GrenadeClass.default.ProjFlightTemplate)
+                $ " reason=" $ UnsupportedBodyReason,,'KF2VR');
+            return;
+        }
+        UnsupportedMarkerClass = None;
         MarkerClass = GrenadeClass;
-        Bridge.AttachComponent(ZoneMarker);
-        ZoneMarker.ActivateSystem();
     }
     PlaceMarker();
 }
@@ -375,11 +584,14 @@ function UpdateZoneMarker(class<KFProj_Grenade> GrenadeClass)
 // After the hands are placed for the frame (VRHandInventory.PlaceAll).
 function PlaceMarker()
 {
-    if (ZoneMarker == None) return;
-    ZoneMarker.SetScale(GrenadeDisplayScale(MarkerClass));
-    ZoneMarker.SetTranslation(ChestPosition());
-    ZoneMarker.SetRotation(Torso);
-    ZoneMarker.ForceUpdate(true);
+    local int I;
+    for (I = 0; I < ZoneBodies.Length; ++I)
+    {
+        ZoneBodies[I].SetScale(GrenadeDisplayScale(MarkerClass));
+        ZoneBodies[I].SetTranslation(ChestPosition());
+        ZoneBodies[I].SetRotation(Torso);
+        ZoneBodies[I].ForceUpdate(true);
+    }
 }
 
 // Grab eligibility and proximity cues are separate from availability display.

@@ -11,6 +11,8 @@ param(
     [ValidateSet('On','Off')][string]$MultiplayerGrabs,
     [ValidateSet('On','Off')][string]$PortalGun,
     [ValidateSet('On','Off')][string]$Breacher,
+    [ValidateRange(1,25)][int]$BreacherLevel,
+    [ValidatePattern('^[12]{5}$')][string]$BreacherSkills,
     [switch]$Gui,
     [switch]$DevGui,
     [switch]$Menu,
@@ -21,7 +23,7 @@ param(
     [ValidateSet('On','Off')][string]$DamagePopups,
     [ValidateSet('On','Off')][string]$InventoryFocus = 'Off',
     [ValidateSet(0,6)][int]$TestMapPlayers = 6,
-    [ValidateRange(50,100)][int]$EyeRenderPercent = 75,
+    [ValidateRange(50,100)][int]$EyeRenderPercent = 100,
     [ValidateSet('quality','balanced','performance')][string]$VrQuality = 'performance',
     [ValidateSet('quest2','quest3','quest3s','index','high-resolution')][string]$HeadsetPreset,
     [switch]$FrameTimings,
@@ -29,6 +31,12 @@ param(
     [ValidateSet('On','Off')][string]$HighlightEvents,
     [switch]$PromoEvents,
     [ValidateSet('On','Off')][string]$ThreadedRender,
+    [ValidateSet('On','Off')][string]$SinglePass,
+    [ValidateSet('off','dlaa','quality','balanced','performance','ultraperformance')][string]$Dlss,
+    [ValidateRange(0,100)][int]$DlssSharpness,
+    [ValidateSet('On','Off')][string]$Hbao,
+    [ValidateSet('On','Off')][string]$Reflections,
+    [ValidateSet('On','Off')][string]$HideBloodLens,
     [switch]$PrepareOnly,
     [switch]$AllowStale,
     [switch]$Help,
@@ -54,9 +62,11 @@ Play-KF2VR.cmd [-Vr|-Desktop] [-Solo] [-TestMap] [-EyeRenderPercent 50..100]
               [-VrQuality quality|balanced|performance] [-FrameTimings] [-ThreadedRender On|Off] [-PrepareOnly]
               [-Gui|-DevGui] [-Menu] [-Map KF-BurningParis] [-Difficulty Normal|Hard|Suicidal|HellOnEarth]
               [-GameLength Short|Medium|Long] [-GameRoot <KF2 installation>] [-AllowStale] [-Help]
-              [-Store Auto|Steam|Epic]
+              [-Store Auto|Steam|Epic] [-SinglePass On|Off] [-Hbao On|Off]
+              [-Dlss off|dlaa|quality|balanced|performance|ultraperformance] [-DlssSharpness 0..100]
+              [-Reflections On|Off] [-HideBloodLens On|Off]
               [-Mods ukfp,friendlyhud,yas,aal,cvc,lti|none] [-DamagePopups On|Off] [-TestMapPlayers 0|6]
-              [-InventoryFocus On|Off] [-Breacher On|Off] [-LocalTestControl]
+              [-InventoryFocus On|Off] [-Breacher On|Off] [-BreacherLevel 1-25] [-BreacherSkills 12121] [-LocalTestControl]
               [-RecordMotion On|Off] [-HighlightEvents On|Off]
 Double-click with no arguments: a window to choose mode, map, difficulty, length,
 VR graphics and mods. Every selection is remembered: the next launch starts from
@@ -67,8 +77,9 @@ text menu in this console, to review/change them first.
 Gui uses the selected package's portable player window, including Join and Breacher.
 DevGui opens the separate advanced development window (test control/preparation).
 Solo: a true single-player match on this PC - no dedicated server, no network,
-      no replication - from the same selected package. Stock installed maps only;
-      mods, TestMap and InventoryFocus belong to hosted sessions.
+      no replication - from the same selected package. Installed stock maps, or
+      explicit -Store Steam -TestMap using verified cached Remilly content only.
+      Mods and InventoryFocus belong to hosted sessions.
       Without -Solo the launcher hosts a dedicated server on this PC and joins it.
 TestMap: Remilly with the same VR game/controller; UKFP defaults to 6-player scaling.
 Mods: saved VR selection, initially none. Use -Mods legacy for the optional UKFP preset.
@@ -78,11 +89,19 @@ MultiplayerGrabs: experimental host setting, initially Off; every VR player foll
 PortalGun: Solo only, saved, initially Off; offers the experimental Portal Gun at the trader.
 Breacher: saved, initially Off; On requires the matching optional package for every player.
           Off removes the optional host requirement; core build compatibility still applies.
+BreacherLevel: development only, not saved; holds every player's Breacher perk at this level
+          (1-25) so skills can be tested without progression. Implies Breacher On.
+BreacherSkills: the skill build for BreacherLevel, five digits of 1 (left) or 2 (right).
 RecordMotion: this live VR session only, initially Off; local player motion/input clips.
 HighlightEvents: this live VR session only, initially Off; authority hit/kill and F9 video sync logs.
                  PromoEvents is an alias for HighlightEvents On. No video or audio is recorded.
 InventoryFocus: experimental host-controlled shared slowdown while a VR selector is held; default Off.
-Eye scale: saved preference (75% on first run); explicit value overrides it.
+SinglePass: experimental Steam VR stereo, saved, initially On. Epic stays Off. Combined render width capped at 8192.
+Dlss: saved VR NVIDIA reconstruction, initially off; requires a DLSS-enabled package and compatible runtime.
+      An explicit mode overrides the saved choice. DlssSharpness: saved, initially 0, range 0-100.
+Hbao / Reflections: saved VR screen effects, initially On; use Off to disable.
+HideBloodLens: saved, initially On; hides hit splatter while keeping the red damage tint.
+Eye scale: saved preference (100% on first run); explicit value overrides it.
 HeadsetPreset: provisional graphics/scale bundle; explicit quality/scale wins.
                Settings are remembered like other graphics selections; refresh/stream settings are external.
 Play mode: saved preference unless -Vr or -Desktop names one for this session.
@@ -114,7 +133,7 @@ $sessionTypePath = Join-Path $env:LOCALAPPDATA 'KF2VR/Profile/session-type.txt'
 $requestedOptions = @{} + $PSBoundParameters
 # Both session types use the selected package and the same saved preferences.
 function Assert-SoloOptions {
-    if ($TestMap -or $Map -eq 'KF-Remilly_Test_Map') { throw 'Solo plays installed stock maps; the Remilly test map needs a hosted session.' }
+    if (($TestMap -or $Map -eq 'KF-Remilly_Test_Map') -and $Store -ne 'Steam') { throw 'Cached Solo Remilly requires explicit -Store Steam.' }
     if ($InventoryFocus -eq 'On' -or $MultiplayerGrabs -eq 'On') { throw 'InventoryFocus and MultiplayerGrabs require a hosted session.' }
     if ($script:PSBoundParameters.ContainsKey('TestMapPlayers')) { throw 'TestMapPlayers requires a hosted session.' }
 }
@@ -166,7 +185,7 @@ if ($Gui -and $DevGui) {
     }
     # Desktop and Use saved preference are deliberate GUI choices too. Clear
     # any original CLI graphics override that the window no longer returns.
-    foreach ($name in @('EyeRenderPercent', 'VrQuality', 'ThreadedRender')) {
+    foreach ($name in @('EyeRenderPercent', 'VrQuality', 'ThreadedRender', 'Dlss', 'DlssSharpness', 'SinglePass', 'Hbao', 'Reflections', 'HideBloodLens')) {
         if ($Desktop -or -not $choice.ContainsKey($name)) { [void]$PSBoundParameters.Remove($name) }
     }
     # Disabled hosted fields are not meaningful selections in Solo. This also
@@ -187,8 +206,8 @@ if ($Solo) { Assert-SoloOptions }
 elseif ((-not $Gui -or $DevGui) -and -not (Test-Path -LiteralPath (Join-Path $server 'Binaries/Win64/KFServer.exe') -PathType Leaf)) {
     throw 'Dedicated server missing. Run tools/install-multiplayer-server.ps1 to install it into this repository, or choose -Solo.'
 }
-if ($Desktop -and ($PSBoundParameters.ContainsKey('EyeRenderPercent') -or $PSBoundParameters.ContainsKey('VrQuality') -or $FrameTimings -or $RecordMotion -eq 'On' -or $HighlightEvents -eq 'On' -or $PSBoundParameters.ContainsKey('ThreadedRender'))) {
-    throw '-EyeRenderPercent, -VrQuality, -FrameTimings, -ThreadedRender and enabled recording/highlight switches require VR play; omit -Desktop.'
+if ($Desktop -and ($PSBoundParameters.ContainsKey('EyeRenderPercent') -or $PSBoundParameters.ContainsKey('VrQuality') -or $FrameTimings -or $RecordMotion -eq 'On' -or $HighlightEvents -eq 'On' -or $PSBoundParameters.ContainsKey('ThreadedRender') -or $PSBoundParameters.ContainsKey('SinglePass') -or $PSBoundParameters.ContainsKey('Dlss') -or $PSBoundParameters.ContainsKey('DlssSharpness') -or $PSBoundParameters.ContainsKey('Hbao') -or $PSBoundParameters.ContainsKey('Reflections') -or $PSBoundParameters.ContainsKey('HideBloodLens'))) {
+    throw '-EyeRenderPercent, -VrQuality, -FrameTimings, -ThreadedRender, -SinglePass, -Dlss, -DlssSharpness, -Hbao, -Reflections, -HideBloodLens and enabled recording/highlight switches require VR play; omit -Desktop.'
 }
 $launchArgs = @((Join-Path $package 'tools/multiplayer/friends.py'),
     $(if ($Solo) { '--solo' } else { '--host' }),
@@ -215,8 +234,15 @@ else {
     if ($Vr) { $launchArgs += '--vr' }
     if ($PSBoundParameters.ContainsKey('VrQuality')) { $launchArgs += @('--vr-quality', $VrQuality) }
     if ($PSBoundParameters.ContainsKey('EyeRenderPercent')) { $launchArgs += @('--eye-render-percent', [string]$EyeRenderPercent) }
+    if ($PSBoundParameters.ContainsKey('Dlss')) { $launchArgs += @('--dlss', $Dlss.ToLowerInvariant()) }
+    if ($PSBoundParameters.ContainsKey('DlssSharpness')) { $launchArgs += @('--dlss-sharpness', [string]$DlssSharpness) }
     if ($FrameTimings) { $launchArgs += '--frame-timings' }
     if ($PSBoundParameters.ContainsKey('ThreadedRender')) { $launchArgs += $(if ($ThreadedRender -eq 'On') { '--threaded-render' } else { '--no-threaded-render' }) }
+    foreach ($option in @(@('SinglePass','single-pass'), @('Hbao','hbao'), @('Reflections','reflections'), @('HideBloodLens','hide-blood-lens'))) {
+        if ($PSBoundParameters.ContainsKey($option[0])) {
+            $launchArgs += $(if ($PSBoundParameters[$option[0]] -eq 'On') { '--' + $option[1] } else { '--no-' + $option[1] })
+        }
+    }
 }
 if ($PSBoundParameters.ContainsKey('PortalGun')) {
     if (-not $Solo) { throw '-PortalGun requires -Solo; portals are local-only and hosted or joined games never offer the gun.' }
@@ -225,6 +251,12 @@ if ($PSBoundParameters.ContainsKey('PortalGun')) {
 if ($PSBoundParameters.ContainsKey('Breacher')) {
     $launchArgs += $(if ($Breacher -eq 'On') { '--breacher' } else { '--no-breacher' })
 }
+if ($PSBoundParameters.ContainsKey('BreacherLevel')) {
+    if ($Breacher -eq 'Off') { throw '-BreacherLevel needs Breacher; omit -Breacher Off.' }
+    $launchArgs += @('--breacher-level', [string]$BreacherLevel)
+    if ($PSBoundParameters.ContainsKey('BreacherSkills')) { $launchArgs += @('--breacher-skills', $BreacherSkills) }
+}
+elseif ($PSBoundParameters.ContainsKey('BreacherSkills')) { throw '-BreacherSkills requires -BreacherLevel.' }
 if ($PSBoundParameters.ContainsKey('RecordMotion')) {
     $launchArgs += $(if ($RecordMotion -eq 'On') { '--record-motion' } else { '--no-record-motion' })
 }
@@ -261,8 +293,16 @@ if ($Gui -and -not $DevGui) {
     if ($releaseInfo.player_launcher_protocol -ne 1) {
         throw 'Selected package predates the shared player window. Build current source, or use -DevGui for the existing advanced window.'
     }
+    # Windows PowerShell's native argument binder otherwise consumes the JSON
+    # quotes before Python sees them. Preserve them through its command line.
+    $initialArgumentsJson = ConvertTo-Json -InputObject @($launchArgs | Select-Object -Skip 1) -Compress
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        # Encoding spaces inside JSON keeps the legacy binder from splitting
+        # a quoted path; json.loads restores the original characters.
+        $initialArgumentsJson = $initialArgumentsJson.Replace(' ', '\u0020').Replace('"', '\"')
+    }
     $playerArgs = @((Join-Path $package 'tools/multiplayer/launcher_gui.py'), '--workspace', $repo,
-        '--initial-arguments', (ConvertTo-Json -InputObject @($launchArgs | Select-Object -Skip 1) -Compress))
+        '--initial-arguments', $initialArgumentsJson)
     if ($AllowStale) { $playerArgs += '--allow-stale' }
     if ($stale) { $playerArgs += '--stale' }
     & $python @playerArgs
