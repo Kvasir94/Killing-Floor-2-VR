@@ -152,9 +152,35 @@ simulated function HideAll()
     }
 }
 
+// The stock Canvas callback runs after the world scene has been gathered.
+// Seed remaining-Zed records during Tick instead, so the stereo scene pair
+// sees the same placed replacement from its first visible frame. Keep the
+// stock callback for bounty-specific eligibility and tint.
+simulated function RefreshRemainingZeds()
+{
+    local KFGameReplicationInfo GRI;
+    local KFHUDBase H;
+    local Pawn P;
+    local KFPawn_Monster Monster;
+    if (!bInitialized || HUDOwner == None || !HUDOwner.ContextValid()) return;
+    GRI = KFGameReplicationInfo(WorldInfo.GRI);
+    H = KFHUDBase(HUDOwner.PC.MyHUD);
+    if (GRI == None || H == None || GRI.IsBossWave() || GRI.IsEndlessWave()
+        || GRI.AIRemaining > class'KFGameInfo'.static.GetNumAlwaysRelevantZeds()) return;
+    foreach WorldInfo.AllPawns(class'Pawn', P)
+    {
+        if (P.Mesh == None || P.Mesh.SkeletalMesh == None || !P.Mesh.bAnimTreeInitialised
+            || P.GetTeamNum() == HUDOwner.PC.GetTeamNum() || !P.IsAliveAndWell()) continue;
+        Monster = KFPawn_Monster(P);
+        if (Monster != None && Monster.bIsBountyHuntObjective) continue;
+        CaptureMarker(P, P.Mesh.GetPosition(), H.ZedIconColor, 1);
+    }
+}
+
 simulated event Tick(float DeltaTime)
 {
     if (HUDOwner == None || HUDOwner.bDeleteMe) { Destroy(); return; }
+    RefreshRemainingZeds();
     UpdateMarkers(true);
 }
 

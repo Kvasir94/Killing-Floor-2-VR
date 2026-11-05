@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.24)
+project(KF2VRRangeMapTools LANGUAGES C CXX)
+if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+  message(FATAL_ERROR "The range map builder requires the pinned Windows x64 SDK.")
+endif()
+set(CMAKE_CXX_STANDARD 20)
+set(MINHOOK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/minhook")
+add_library(range_minhook STATIC
+  "${MINHOOK_ROOT}/src/buffer.c" "${MINHOOK_ROOT}/src/hook.c"
+  "${MINHOOK_ROOT}/src/trampoline.c" "${MINHOOK_ROOT}/src/hde/hde64.c")
+target_include_directories(range_minhook PUBLIC "${MINHOOK_ROOT}/include")
+add_library(kf2vr_range_map_bridge SHARED RangeMapBridge.cpp)
+target_compile_definitions(kf2vr_range_map_bridge PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(kf2vr_range_map_bridge PRIVATE range_minhook bcrypt)
+set_target_properties(kf2vr_range_map_bridge PROPERTIES OUTPUT_NAME KF2VRRangeMapBridge PREFIX "")

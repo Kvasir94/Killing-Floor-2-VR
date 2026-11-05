@@ -23,8 +23,12 @@ var float AlignmentFraction, ReleaseFraction, CaptureDot;
 var float BreakawayRadii;
 // A round is a cylinder: only where its nose points matters, not how it is
 // rolled in the fingers. AmmoAxis is its long axis in its own frame.
-var bool bAxialOnly;
+var bool bAxialOnly, bSweptCapture;
 var vector AmmoAxis;
+// A nock, not a socket (the compound bow): a part whose seat comes within
+// NockRadius of the held point, from any side, with its axis within
+// NockDot of the seated axis, snaps on and eases home. Zero is off.
+var float NockRadius, NockDot;
 
 function Reset()
 {
@@ -58,14 +62,25 @@ function float RotationMatch(quat A, quat B)
 // at the current insertion fraction, so a curved shell feed can turn naturally.
 function Update(vector Position, quat Rotation, vector Entry, vector Seat,
     quat EntryQ, quat AuthoredQ, float Radius, float Tolerance, float Time,
-    optional float LateralSlack)
+    optional float LateralSlack, optional float EntryDepth)
 {
     local vector Axis, Offset, Crossing;
-    local float Remaining, Lateral, Match, DT, EntryDistance, PreviousRemaining, Fraction, CaptureRadius;
+    local float Remaining, Lateral, Match, DT, EntryDistance, PreviousRemaining, Fraction, CaptureRadius, MinimumTravel;
     local bool bAtEntry, bSweptEntry;
     if (bSettling || bFinished) return;
     Axis = Seat - Entry;
     if (VSize(Axis) < 0.1 || Radius <= 0 || Tolerance <= 0) { Reset(); return; }
+    EntryDistance = VSize(Axis);
+    // How far past the mouth a part may already be when it is picked up: the
+    // magazine seat tolerance for every socket, so a short socket whose latch
+    // tolerance shrinks below still admits the same depth. The minimum-travel
+    // condition at capture keeps a real push to the latch.
+    EntryDepth = FMax(EntryDepth, Tolerance);
+    // Short authored sockets still need a real push, but a fixed one-unit
+    // guard plus magazine tolerance can exceed the entire insertion path.
+    if (EntryDistance <= Tolerance + 1)
+        Tolerance = FMin(Tolerance, EntryDistance * 0.25);
+    MinimumTravel = FMin(1, EntryDistance * 0.25);
     Axis = Normal(Axis);
     Offset = Seat - Position;
     Remaining = Offset dot Axis;
@@ -74,17 +89,32 @@ function Update(vector Position, quat Rotation, vector Entry, vector Seat,
     // angle, required push and post-capture breakaway limits unchanged.
     CaptureRadius = Radius + FMax(LateralSlack, 0);
     Match = FMax(RotationMatch(Rotation, EntryQ), RotationMatch(Rotation, AuthoredQ));
+    if (!bCaptured && NockRadius > 0 && VSize(Seat - Position) <= NockRadius
+        && FMax(RotationMatch(Rotation, EntryQ), RotationMatch(Rotation, AuthoredQ)) >= NockDot)
+    {
+        bCaptured = true;
+        bApproachSample = false;
+        StartDistance = FMax(Remaining, Tolerance + 0.01);
+        Progress = AlignmentFraction;
+        bSettling = true;
+        LastPosition = Position;
+        LastTime = Time;
+        SettleStarted = Time;
+        SettleFrom = Progress;
+        SettleDuration = 0.12;
+        return;
+    }
     if (!bCaptured)
     {
         // Acquire in front of the mouth, never through the receiver or at
         // the final pose. Require some real travel after acquisition.
         EntryDistance = VSize(Seat - Entry);
         bAtEntry = VSize(Position - Entry) <= 2 * Radius && Lateral <= CaptureRadius
-            && Remaining >= EntryDistance - Tolerance
-            && Remaining > Tolerance + 1 && Match >= CaptureDot;
-        if (!bAtEntry && bAxialOnly && bApproachSample && Match >= CaptureDot
+            && Remaining >= EntryDistance - EntryDepth
+            && Remaining > Tolerance + MinimumTravel && Match >= CaptureDot;
+        if (!bAtEntry && (bAxialOnly || bSweptCapture) && bApproachSample && Match >= CaptureDot
             && RotationMatch(ApproachRotation, EntryQ) >= CaptureDot
-            && EntryDistance > Tolerance + 1 && Lateral <= Radius)
+            && EntryDistance > Tolerance + MinimumTravel && Lateral <= Radius)
         {
             DT = Time - LastTime;
             PreviousRemaining = (Seat - LastPosition) dot Axis;
@@ -101,7 +131,7 @@ function Update(vector Position, quat Rotation, vector Entry, vector Seat,
         }
         if (!bAtEntry && !bSweptEntry)
         {
-            bApproachSample = bAxialOnly;
+            bApproachSample = bAxialOnly || bSweptCapture;
             ApproachRotation = Rotation;
             LastPosition = Position;
             LastTime = Time;

@@ -1,4 +1,4 @@
-// Audited detachable-magazine rigs. Exact classes exclude paired and derivative weapons
+// Audited detachable-magazine rigs. Exact classes exclude unaudited derivative weapons
 // whose loaded/spare geometry or stock reload contract has not been checked.
 class VRReloadCatalog extends Object;
 
@@ -15,6 +15,9 @@ struct MagazineProfile
     // A pistol whose slide locks back on the last round (AS2 slideLockOnEmptyMag;
     // its AK and M4 do not). The live gun must also carry KF2's own lock pose.
     var bool bSlideLock;
+    // A locking rifle bolt with no release button (G36C, HRG Tommy Boom):
+    // it still locks back empty, but only the hand drops it (R40).
+    var bool bHandRelease;
     // A second action part that rides the rack without being grabbed: the
     // AR-15, SCAR and MP7 rigs animate the bolt carrier and the charging handle
     // as separate children of the receiver, so pulling the handle alone would
@@ -30,10 +33,18 @@ struct MagazineProfile
     // Anatomical hand carrying the incoming part in the stock reload. The
     // Corrupter holds the gun with its left and loads with its right.
     var int InsertHand;
+    // The stock wrist working the action can differ from its magazine hand.
+    var int RackHand;
+    // These grips contact the handle pivot with the thumb rather than fingers.
+    var bool bRackThumbContact;
+    // Zero retains the ordinary 15 UU guard; long authored handles opt in.
+    var float MaxRackStroke;
     // A part stock seats into a moving assembly (the Freeze Thrower's open
-    // chamber) or that stock finishes sliding home after its ammo moment (the
-    // Ballistic Bouncer's canister): the hand seats it where the stock clip
-    // has it at that moment, and the clip carries it on.
+    // chamber): the hand seats it where the stock clip has it at that moment,
+    // and the clip carries it on. Not for a part the stock hand is still
+    // carrying at its ammo moment: the canister launchers (Bouncer,
+    // Reconstructor) seat on their authored final approach instead
+    // (bPlateauInsert), or the seat lands in mid-air beside the gun.
     var bool bSeatAtNotify;
     // Some clips withdraw the hand before the insertion lead. Sample an
     // earlier finger contact for free carry without extending the seat path.
@@ -49,6 +60,11 @@ struct MagazineProfile
     // The loaded bone rests with the hidden arm in Idle (the Doshinegun's
     // wad) and is hidden like a spare outside reloads.
     var bool bParkedLoaded;
+    // Where the loaded bone rests on the gun, in its parent bone's frame (Idle
+    // frame 0). Stock fire and reload clips park the crossbows' bolt 50-80 UU
+    // under the gun, off the flat camera; it is hidden while a clip holds it
+    // away from here (VRReloadMeshPresentation.UpdateParkedRound).
+    var vector ParkedRest;
     // Parts that leave and return with the loaded bone but hang from the gun
     // (the Pulverizer's four shells and spring plate on its clip).
     var name LoadedExtras[5];
@@ -66,9 +82,31 @@ var array<MagazineProfile> Profiles;
 static function int FindClass(class<KFWeapon> WeaponClass)
 {
     local int I;
+    // Exact audited members inherit their unchanged single rig/animations.
+    // This asset alias grants no local reload payment or aggregate-dual rig.
+    for (I = 0; I < class'VRWeaponPair'.default.Families.Length; ++I)
+        if (WeaponClass == class'VRWeaponPair'.default.Families[I].MemberClass)
+        { WeaponClass = class'VRWeaponPair'.default.Families[I].SingleClass; break; }
     for (I = 0; I < default.Profiles.Length; ++I)
         if (default.Profiles[I].WeaponClass == WeaponClass) return I;
     return -1;
+}
+
+// Asset identity only: split paired members use the single gun's sound map
+// just as they use its rig. Never use this alias for ammunition authority.
+static function class<KFWeapon> ProfileClass(class<KFWeapon> WeaponClass)
+{
+    local int Index;
+    Index = FindClass(WeaponClass);
+    if (Index >= 0) return default.Profiles[Index].WeaponClass;
+    // A member whose single gun has no magazine profile (the 1858, .500,
+    // flare guns: break and cylinder reloads) is still that gun's asset. It
+    // fell through as the member class, so a dropped paired 1858 found no
+    // world rig and flipped as it left the hand (#166).
+    for (Index = 0; Index < class'VRWeaponPair'.default.Families.Length; ++Index)
+        if (WeaponClass == class'VRWeaponPair'.default.Families[Index].MemberClass)
+            return class'VRWeaponPair'.default.Families[Index].SingleClass;
+    return WeaponClass;
 }
 
 // Shared by runtime preflight and the data-only SDK check. An unavailable or
@@ -105,6 +143,15 @@ static function name KeptBone(KFWeapon W)
     for (I = 0; I < default.Profiles.Length; ++I)
         if (default.Profiles[I].WeaponClass == W.Class) return default.Profiles[I].KeepBone;
     return '';
+}
+
+// X/A drops a locked slide only on the slide-based pistols (R40).
+static function bool HandReleaseOnly(KFWeapon W)
+{
+    local int Index;
+    if (W == None) return false;
+    Index = FindClass(W.Class);
+    return Index >= 0 && default.Profiles[Index].bHandRelease;
 }
 
 static function bool SlideLocks(KFWeapon W)
@@ -146,19 +193,19 @@ defaultproperties
     Profiles(10)=(WeaponClass=class'KFWeap_AssaultRifle_SCAR',MeshName=Wep_1stP_SCAR_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt)
     Profiles(11)=(WeaponClass=class'KFWeap_SMG_MP7',MeshName=Wep_1stP_MP7_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt)
     Profiles(12)=(WeaponClass=class'KFWeap_SMG_Kriss',MeshName=Wep_1stP_KRISS_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0)
-    Profiles(13)=(WeaponClass=class'KFWeap_SMG_P90',MeshName=Wep_1stP_P90_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0)
+    Profiles(13)=(WeaponClass=class'KFWeap_SMG_P90',MeshName=Wep_1stP_P90_Rig,RackBone=RW_Charging_Handle,bRackThumbContact=true,MaterialIndex=0)
     // 2026-09-30 wave, actions read from each stock empty clip: the G36C holds
     // open on KF2's own lock pose like the pistols; the Tommy Gun and Mac-10
     // are open-bolt guns cocked by one pull; the Zed MKIII has no action step;
     // the UMP's bolt catch has no stock lock pose and the MP5 slap is a plain pull.
     Profiles(14)=(WeaponClass=class'KFWeap_AssaultRifle_Thompson',MeshName=Wep_1stP_TommyGun_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,ActionKind=1)
     Profiles(15)=(WeaponClass=class'KFWeap_SMG_Mac10',MeshName=Wep_1stP_MAC10_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,ActionKind=1)
-    Profiles(16)=(WeaponClass=class'KFWeap_AssaultRifle_G36C',MeshName=WEP_1stP_G36C_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,bSlideLock=true,FollowBone=RW_Bolt)
+    Profiles(16)=(WeaponClass=class'KFWeap_AssaultRifle_G36C',MeshName=WEP_1stP_G36C_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,bSlideLock=true,bHandRelease=true,FollowBone=RW_Bolt)
     Profiles(17)=(WeaponClass=class'KFWeap_ZedMKIII',MeshName=WEP_1stP_ZEDMKIII_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,ActionKind=2)
     Profiles(18)=(WeaponClass=class'KFWeap_HRG_Stunner',MeshName=Wep_1stP_HRG_Stunner_Rig,RackBone=RW_ChargingHandle,MaterialIndex=0,FollowBone=RW_Bolt)
     Profiles(19)=(WeaponClass=class'KFWeap_Shotgun_S12',MeshName=Wep_1stP_Saiga12_Rig,RackBone=RW_Bolt,MaterialIndex=0)
     Profiles(20)=(WeaponClass=class'KFWeap_SMG_HK_UMP',MeshName=Wep_1stP_HK_UMP_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,ActionKind=3)
-    Profiles(21)=(WeaponClass=class'KFWeap_SMG_MP5RAS',MeshName=Wep_1stP_MP5RAS_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,ActionKind=3)
+    Profiles(21)=(WeaponClass=class'KFWeap_SMG_MP5RAS',MeshName=Wep_1stP_MP5RAS_Rig,RackBone=RW_Charging_Handle,bRackThumbContact=true,MaterialIndex=0,FollowBone=RW_Bolt,ActionKind=3)
     // Two-material medic magazines: body and rounds use different slots.
     // Their fold-out handle rides the bolt, as on the HMTech-201.
     Profiles(22)=(WeaponClass=class'KFWeap_Shotgun_Medic',MeshName=Wep_1stP_Medic_Shotgun_Rig,RackBone=RW_Bolt,MaterialIndex=0,Section1MaterialIndex=1)
@@ -197,16 +244,16 @@ defaultproperties
     Profiles(33)=(WeaponClass=class'KFWeap_Shotgun_Nailgun',MeshName=Wep_1stP_Nail_ShotGun_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2)
     Profiles(34)=(WeaponClass=class'KFWeap_HRG_Nailgun',MeshName=Wep_1stP_HRG_Nailgun_PDW_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2)
     Profiles(35)=(WeaponClass=class'KFWeap_AssaultRifle_HRGIncendiaryRifle',MeshName=WEP_1stP_HRG_IncendiaryRifle_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt)
-    Profiles(36)=(WeaponClass=class'KFWeap_AssaultRifle_HRGTeslauncher',MeshName=WEP_1stP_HRG_Teslauncher_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0)
-    Profiles(37)=(WeaponClass=class'KFWeap_AssaultRifle_MedicRifleGrenadeLauncher',MeshName=Wep_1stP_Medic_GrenadeLauncher_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0)
-    Profiles(38)=(WeaponClass=class'KFWeap_HRG_Boomy',MeshName=Wep_1stP_HRG_Boomy_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,bSlideLock=true,ActionKind=1)
-    Profiles(39)=(WeaponClass=class'KFWeap_SMG_G18',MeshName=Wep_1P_RiotShield_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true)
+    Profiles(36)=(WeaponClass=class'KFWeap_AssaultRifle_HRGTeslauncher',MeshName=WEP_1stP_HRG_Teslauncher_Rig,RackBone=RW_Charging_Handle,RackHand=1,bRackThumbContact=true,MaterialIndex=0)
+    Profiles(37)=(WeaponClass=class'KFWeap_AssaultRifle_MedicRifleGrenadeLauncher',MeshName=Wep_1stP_Medic_GrenadeLauncher_Rig,RackBone=RW_Charging_Handle,RackHand=1,bRackThumbContact=true,MaterialIndex=0)
+    Profiles(38)=(WeaponClass=class'KFWeap_HRG_Boomy',MeshName=Wep_1stP_HRG_Boomy_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,bSlideLock=true,bHandRelease=true,ActionKind=1,bEarlierCarryGrip=true)
+    Profiles(39)=(WeaponClass=class'KFWeap_SMG_G18',MeshName=Wep_1P_RiotShield_Rig,RackBone=RW_Bolt,RackHand=1,MaterialIndex=0,bSlideLock=true)
     Profiles(40)=(WeaponClass=class'KFWeap_AssaultRifle_LazerCutter',MeshName=Wep_1stP_Laser_Cutter_Rig,RackBone=RW_Weapon,MaterialIndex=1,ActionKind=2)
     Profiles(41)=(WeaponClass=class'KFWeap_AssaultRifle_Microwave',MeshName=Wep_1stP_Microwave_Assault_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2)
     Profiles(42)=(WeaponClass=class'KFWeap_HVStormCannon',MeshName=WEP_1stP_HVStormCannon_Rig,RackBone=RW_Weapon,MaterialIndex=1,ActionKind=2,Section1MaterialIndex=4)
-    Profiles(43)=(WeaponClass=class'KFWeap_Shotgun_HZ12',MeshName=Wep_1stP_HZ12_Rig,RackBone=RW_Pump,MaterialIndex=0,FollowBone=RW_Bolt,LoadedBone=RW_Magazine1,SpareBone=RW_Magazine1)
-    Profiles(44)=(WeaponClass=class'KFWeap_HRG_SonicGun',MeshName=WEP_1stP_HRG_SonicGun_Rig,RackBone=RW_ChargingHandle,MaterialIndex=0,LoadedBone=RW_Magazine1,SpareBone=RW_Magazine1)
-    Profiles(45)=(WeaponClass=class'KFWeap_RocketLauncher_SealSqueal',MeshName=WEP_1stP_Seal_Squeal_Rig,RackBone=RW_ChargingHandle,MaterialIndex=0,LoadedBone=RW_Magazine1,SpareBone=RW_Magazine1)
+    Profiles(43)=(WeaponClass=class'KFWeap_Shotgun_HZ12',MeshName=Wep_1stP_HZ12_Rig,RackBone=RW_Pump,bRackThumbContact=true,MaterialIndex=0,FollowBone=RW_Bolt,LoadedBone=RW_Magazine1,SpareBone=RW_Magazine1)
+    Profiles(44)=(WeaponClass=class'KFWeap_HRG_SonicGun',MeshName=WEP_1stP_HRG_SonicGun_Rig,RackBone=RW_ChargingHandle,MaxRackStroke=20,MaterialIndex=0,LoadedBone=RW_Magazine1,SpareBone=RW_Magazine1)
+    Profiles(45)=(WeaponClass=class'KFWeap_RocketLauncher_SealSqueal',MeshName=WEP_1stP_Seal_Squeal_Rig,RackBone=RW_ChargingHandle,MaxRackStroke=20,MaterialIndex=0,LoadedBone=RW_Magazine1,SpareBone=RW_Magazine1)
     Profiles(46)=(WeaponClass=class'KFWeap_RocketLauncher_Seeker6',MeshName=Wep_1stP_SeekerSix_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Magazine1,SpareBone=RW_Magazine1)
     Profiles(47)=(WeaponClass=class'KFWeap_HRG_Locust',MeshName=Wep_1stP_HRG_Locust_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Magazine1,SpareBone=RW_Magazine1)
     Profiles(48)=(WeaponClass=class'KFWeap_RocketLauncher_ThermiteBore',MeshName=WEP_1stP_Thermite_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Magazine,SpareBone=RW_Magazine)
@@ -224,18 +271,18 @@ defaultproperties
     // 2026-10-01: seated where the stock clip holds them at the ammo moment.
     Profiles(61)=(WeaponClass=class'KFWeap_Ice_FreezeThrower',MeshName=Wep_1stP_CryoGun_Rig,RackBone=RW_Weapon,MaterialIndex=1,ActionKind=2,LoadedBone=RW_Magazine1,SpareBone=RW_Magazine1,bSeatAtNotify=true)
     Profiles(62)=(WeaponClass=class'KFWeap_HRG_Healthrower',MeshName=Wep_1stP_HRG_Healthrower_Rig,RackBone=RW_Weapon,MaterialIndex=1,ActionKind=2,LoadedBone=RW_Magazine1,SpareBone=RW_Magazine1,bSeatAtNotify=true)
-    Profiles(63)=(WeaponClass=class'KFWeap_HRG_BallisticBouncer',MeshName=Wep_1stP_HRG_BallisticBouncer_Rig,RackBone=RW_Weapon,MaterialIndex=1,Section1MaterialIndex=2,Section2MaterialIndex=3,ActionKind=2,LoadedBone=RW_Magazine,SpareBone=RW_Magazine,bSeatAtNotify=true)
-    Profiles(64)=(WeaponClass=class'KFWeap_Mine_Reconstructor',MeshName=Wep_1stP_HMTech_Mine_Reconstructor_Rig,RackBone=RW_Weapon,MaterialIndex=1,Section1MaterialIndex=2,Section2MaterialIndex=3,ActionKind=2,LoadedBone=RW_Magazine,SpareBone=RW_Magazine,bSeatAtNotify=true)
+    Profiles(63)=(WeaponClass=class'KFWeap_HRG_BallisticBouncer',MeshName=Wep_1stP_HRG_BallisticBouncer_Rig,RackBone=RW_Weapon,MaterialIndex=1,Section1MaterialIndex=2,Section2MaterialIndex=3,ActionKind=2,LoadedBone=RW_Magazine,SpareBone=RW_Magazine,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
+    Profiles(64)=(WeaponClass=class'KFWeap_Mine_Reconstructor',MeshName=Wep_1stP_HMTech_Mine_Reconstructor_Rig,RackBone=RW_Weapon,MaterialIndex=1,Section1MaterialIndex=2,Section2MaterialIndex=3,ActionKind=2,LoadedBone=RW_Magazine,SpareBone=RW_Magazine,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
     // 2026-10-02: the Pulverizer's clip carries four shells; the Doshinegun's
     // wad goes from the hand into its fixed box (seated where the clip has it
     // at the ammo moment).
     Profiles(65)=(WeaponClass=class'KFWeap_Blunt_Pulverizer',MeshName=Wep_1stP_Pulverizer_Rig_New,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Mag1,SpareBone=RW_Mag1,LoadedExtras[0]=RW_Shell1,LoadedExtras[1]=RW_Shell2,LoadedExtras[2]=RW_Shell3,LoadedExtras[3]=RW_Shell4,LoadedExtras[4]=RW_MagSpringPlate1)
     Profiles(66)=(WeaponClass=class'KFWeap_AssaultRifle_Doshinegun',MeshName=Wep_1stP_Doshinegun_Rig,RackBone=RW_Weapon,MaterialIndex=2,ActionKind=2,LoadedBone=RW_Notes2,SpareBone=RW_Notes2,bSeatAtNotify=true,bNoEject=true,bParkedLoaded=true)
-    Profiles(60)=(WeaponClass=class'KFWeap_Rifle_ParasiteImplanter',MeshName=Wep_1stP_ParasiteImplanter_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Magazine,SpareBone=RW_Magazine,InsertHand=1)
+    Profiles(60)=(WeaponClass=class'KFWeap_Rifle_ParasiteImplanter',MeshName=Wep_1stP_ParasiteImplanter_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Magazine,SpareBone=RW_Magazine,InsertHand=1,bEarlierCarryGrip=true)
     // Single projectiles: never eject a fictitious magazine. Stock retains
     // its cable/bolt completion and each weapon's one-round ammo contract.
-    Profiles(67)=(WeaponClass=class'KFWeap_Bow_Crossbow',MeshName=Wep_1stP_Crossbow_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Projectile,SpareBone=RW_Projectile,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
-    Profiles(68)=(WeaponClass=class'KFWeap_HRG_Crossboom',MeshName=Wep_1stP_HRG_Crossboom_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Projectile,SpareBone=RW_Projectile,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
+    Profiles(67)=(WeaponClass=class'KFWeap_Bow_Crossbow',MeshName=Wep_1stP_Crossbow_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Projectile,SpareBone=RW_Projectile,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true,ParkedRest=(X=37.7,Z=8.5))
+    Profiles(68)=(WeaponClass=class'KFWeap_HRG_Crossboom',MeshName=Wep_1stP_HRG_Crossboom_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Projectile,SpareBone=RW_Projectile,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true,ParkedRest=(X=37.7,Z=8.5))
     Profiles(69)=(WeaponClass=class'KFWeap_Rifle_RailGun',MeshName=WEP_1stP_RailGun_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Bullets1,SpareBone=RW_Bullets1,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
     Profiles(70)=(WeaponClass=class'KFWeap_Rifle_HRGIncision',MeshName=WEP_1stP_HRG_Incision,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Bullets1,SpareBone=RW_Bullets1,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
     // The bow is LW_Weapon; RW_Weapon is the right-hand arrow, not the bow.

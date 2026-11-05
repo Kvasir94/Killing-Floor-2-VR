@@ -4,7 +4,6 @@ import binascii
 import ipaddress
 import json
 import re
-import breacher
 
 from workshop_loadout import parse_mods
 
@@ -13,7 +12,7 @@ PREFIX = "KF2VR1:"
 
 def validate(details):
     required = {"address", "password", "port", "query_port", "build", "mods", "map"}
-    if not isinstance(details, dict) or set(details) not in (required, required | {"breacher"}):
+    if not isinstance(details, dict) or set(details) != required:
         raise ValueError("Invalid join code fields")
     for key, pattern in (("address", r"[A-Za-z0-9.-]{1,253}"),
                          ("password", r"[A-Za-z0-9_-]{0,64}"),
@@ -31,8 +30,6 @@ def validate(details):
         raise ValueError("Invalid join code mods")
     if parse_mods(",".join(mods) or "none") != mods:
         raise ValueError("Invalid join code mods")
-    if "breacher" in details:
-        breacher.validate_descriptor(details["breacher"])
     return details
 
 

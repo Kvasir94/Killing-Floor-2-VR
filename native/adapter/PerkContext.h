@@ -38,6 +38,11 @@ private:
     void* provider_{};
 };
 
+// Snapshot only an exact weapon-owned projectile on its player's authority.
+// Shared by solo and dedicated dispatch; script owns bounded birth history.
+void RecordPerkProjectile(GameScript& script, void* provider, void* pawn,
+                          void* weapon, void* projectile);
+
 // Client adapter entry: the local player's shots anywhere, and its hits and
 // movement where this process is the authority (solo).
 void EnterLocalPerk(GameScript& script, PerkScope& scope, void* bridge, void* pawn,

@@ -1,6 +1,7 @@
 #include "WeaponContext.h"
 #include "WeaponIsolation.h"
 #include "ScriptField.h"
+#include "WeaponFan.h"
 #include <cmath>
 
 namespace kf2vr::adapter {
@@ -124,6 +125,29 @@ bool RouteItemTraceOrigin(GameScript& script, const WeaponAimStack& stack,
 bool FinishItemAim(GameScript& script, const WeaponAimStack& stack, void* bridge,
                    void* pawn, void* object, void* function, const void* locals, void* result) {
     const auto name=GameScript::ObjectName(function);
+    // Dragon's stock burst ignores SpawnAllProjectiles' AimDir and builds
+    // its fan from the head camera. Keep its offsets and spawning, replacing
+    // only the returned direction inside this weapon's accepted shot scope.
+    if (name==script.Intern(L"CalculateSpread") &&
+        GameScript::ObjectName(GameScript::ObjectClass(object))==script.Intern(L"KFWeap_HRG_Dragonbreath") &&
+        function==script.FindFunction(object,L"CalculateSpread")) {
+        const auto* pose=stack.Current();
+        float initial=0, spread=0;
+        std::uint8_t pellet=0;
+        std::uint32_t horizontal=0;
+        if (Registry(script,bridge,pawn) && pose && pose->weapon==object && pose->managed && pose->ready &&
+            GameScript::Accessible(result,sizeof(pinned::NativeVector3)) &&
+            ReadScriptLocal(function,locals,script.Intern(L"InitialOffset"),initial) &&
+            ReadScriptLocal(function,locals,script.Intern(L"CurrentSpread"),spread) &&
+            ReadScriptLocal(function,locals,script.Intern(L"PelletNum"),pellet) &&
+            ReadScriptLocal(function,locals,script.Intern(L"bHorizontal"),horizontal) &&
+            std::isfinite(initial) && std::isfinite(spread) && horizontal<=1) {
+            const auto direction=WeaponFanDirection(pose->base,pose->recoil,initial,spread,pellet,horizontal!=0);
+            if (std::isfinite(direction.x) && std::isfinite(direction.y) && std::isfinite(direction.z))
+                ReturnValue(result,pinned::NativeVector3{direction.x,direction.y,direction.z});
+        }
+        return false;
+    }
     // Temporary, bounded Stoner observation: inspect the final stock aim,
     // including spread, without replacing it or evaluating the mesh again.
     if (name==script.Intern(L"GetAdjustedAim") &&

@@ -16,16 +16,21 @@ WEAPONS AND HANDS
   Y / B tap               Previous item; opens the hand if no distinct previous exists.
   Y / B double tap        Stow an occupied hand. On an already empty hand: draw syringe.
   Y / B hold 0.25 s        Open that hand's wheel, then release the button.
-  Point/move controller   Highlight a sector; squeeze AND RELEASE trigger to confirm.
-                          Stick tilt does not select. Y/B or an unhighlighted-centre
-                          trigger click cancels. After closing the turn-hand wheel,
+  Point/move controller   TOGGLE grip: squeeze AND RELEASE trigger to confirm.
+                          HOLD grip: point, press GRIP to draw now; release to toss.
+                          Open a grip already held on entry before confirming.
+                          Stick tilt does not select. Y/B or centre confirm cancels.
+                          After closing the turn-hand wheel,
                           centre its stick before turning/jumping.
   Grip at support contact Hold two-hand support by default; release grip to detach.
                           Acquired firearm support stays held across distance drift;
                           valid tracking is required.
-                          Primary weapons stay equipped when fingers relax.
-  Support-only carry      After old primary is stowed, move to primary grip and pull
-                          trigger to claim it; release then pull again to fire.
+                          TOGGLE grip: primary weapons stay held when fingers relax.
+  Local toss/catch        HOLD grip: deliberate release tosses the same owned weapon.
+                          Fresh free-hand squeeze catches nearby, either hand.
+                          Misses return after the existing delay; ammo stays intact.
+  Support-only carry      Release primary while holding support; operate bolt/pump
+                          with freed hand. Squeeze its primary contact to regrip.
   Y / B at temple         Toggle flashlight instead of quick-swap.
   Wheel + submenu         Drop the held item (stock restrictions), God Mode, Back.
 
@@ -43,9 +48,9 @@ HEAL, GRENADE, MELEE
   Melee/gun bash           Swing for physical contacts. Two-hand guards brace across
                           body; button-guard profiles use X/A, with X/A+trigger for
                           supported secondary/heavy actions. Ion Thruster: X/A ultimate.
-  Zed/body grab            Empty hand + held grip near eligible target; release to
-                          drop/throw. Solo ON; multiplayer host-owned, initially OFF.
   Teammate gestures        Multiplayer empty fists bump, open hands high-five.
+  Zed/body grab            Empty hand + held grip near eligible target; release to
+                          drop/throw. On in Solo; online the host decides.
   Dosh                    Stock TossMoney (default KEYBOARD B); no active hip wallet.
                           VR controller B still controls right-hand inventory.
 
@@ -68,29 +73,22 @@ MOVE AND MENU (DEFAULT MOVEMENT HAND LEFT)
   Trader                  Enter trader pod and use its floating stock menu.
 
 SETTINGS AND SPECIAL ITEMS
-  VR SETTINGS > INTERACTION > RELOAD MODE: BUTTON / PHYSICAL / PHYSICAL + PUMP.
-  Button is default. Unsupported weapons keep stock reloads; hints default ON.
-  Hip reloads (Physical): with the other hand occupied, press the gun hand's
-  reload button and bring the compatible gun to its hip loader. Each hand can
-  reload independently; paired guns share reserve. New waist-triggered mode is planned.
-  Fresh graphics: Performance / 100%; Steam single-pass, HBAO+ and reflections ON.
-  Epic single-pass OFF. Authored grenade grips ON. Saved preferences win.
-  BODY HOLSTERS default OFF: fresh grip at compatible shoulder/hip slot stows;
-  empty-hand grip draws. Set HOLSTER FIT; syringe/welder are excluded.
-  LOCOMOTION AND COMFORT changes movement hand/direction, turn and crouch.
-  MENU AND INTERFACE sets pointer/panel/recenter; CALIBRATION sets fit/height/chest.
-  HUD AND READOUTS adjusts watch/readouts/lasers/hints; GRAPHICS sets render scale.
+  Headset menu > Settings: Comfort, Hands & Weapons, Graphics & HUD and Audio,
+  the same pages as the launcher. Calibration and fit live in the headset menu.
+  Reload mode: Button (X / A, the default), Manual (reload by hand; an empty
+  trigger starts the reload) or Realistic (also rack a loaded gun; eject the old
+  mag yourself). Ammo rules show with Manual or Realistic.
+  Hip reloads (Manual/Realistic): with the other hand busy, press the gun hand's
+  reload button and bring the gun to its hip loader.
+  Fresh graphics: Quality / 100%, DLSS Auto. Saved preferences win.
   Movement/dominant-hand settings do not swap physical face buttons; welder is right.
-  PRACTICE AND TOOLS opens calibration/range/armory. END PRACTICE ends the range;
-  closing its panel does not. Practice/God Mode makes the session unranked.
+  Fun & Cheats opens practice tools; they make the session unranked.
   C4/Sentinel/Bombardier: hold trigger, swing, release to throw/place; X/A+trigger detonate.
   RAVEN-7: hold trigger, swing, release to throw. Fresh airborne hold suspends; release
   recalls. Resting axe: fresh press recalls. Fresh grip is a recall shortcut.
-  Optional Solo Portal Gun: trigger blue, X/A+trigger orange, quick X/A dismisses portals.
-  Portal see-through needs threaded rendering OFF. Breacher is frozen and omitted
-  from this release; leave its launcher checkbox OFF.
+  Breacher is omitted and its controls are hidden in this stable candidate.
 
 Desktop uses stock KF2 bindings; full guide lists default keyboard controls.
-Keep the launcher open for cleanup. After a crash use Fix a stuck session.
+Keep the launcher open for cleanup. After a crash use Help > Repair after a crash.
 Save logs for a bug report; review the ZIP before sharing. See full guide for
 build-specific report privacy, launch/Host/Join, recovery and troubleshooting.

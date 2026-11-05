@@ -24,13 +24,17 @@ class OptionsTests(unittest.TestCase):
    with self.assertRaises(ValueError):prepare(old,['-kf2vr-probe'])
  def test_session_requires_early_proxy_activation_and_isolated_configs(self):
   broker=SimpleNamespace(argument='-kf2vr-epic-session=public-session-marker')
-  args=['KF-BurningParis','-kf2vr-probe','-kf2vr-stereo','-onethread']
+  args=['KF-BurningParis','-kf2vr-probe','-kf2vr-stereo','-kf2vr-threaded-render']
   args += ['-'+name+'INI=C:\\Session\\KF'+name+'.ini' for name in ['ENGINE','GAME','INPUT','SYSTEMSETTINGS']]
   plan=prepare_session('-windowed',args,broker)
   self.assertIn('-kf2vr-probe',plan.prepared)
   self.assertIn(broker.argument,plan.prepared)
-  for required in ['-kf2vr-probe','-kf2vr-stereo','-onethread']:
+  for required in ['-kf2vr-probe','-kf2vr-stereo','-kf2vr-threaded-render']:
    with self.assertRaises(ValueError):prepare_session('',[arg for arg in args if arg!=required],broker)
   with self.assertRaises(ValueError):prepare_session('',args+['-kf2vr-hand-replay'],broker)
+  with self.assertRaisesRegex(ValueError,'one render thread mode'):prepare_session('',args+['-onethread'],broker)
+  with self.assertRaisesRegex(ValueError,'Remove -onethread'):prepare_session('-windowed -onethread',args,broker)
+  single=[arg for arg in args if arg!='-kf2vr-threaded-render']+['-onethread']
+  self.assertIn('-onethread',prepare_session('-windowed -onethread',single,broker).prepared)
 
 if __name__=='__main__':unittest.main()

@@ -4,12 +4,15 @@
 // immediately on a fresh press. Grip remains a direct recall shortcut.
 class VRTomahawks extends Object;
 
+// Alyx-style release velocity for this hand throw (VRThrowRelease).
+var VRThrowRelease Thrower;
+
 var VRDualHandInput Input;
 var VRHandsBridge Bridge;
 var VRWeap_Tomahawk Sampled[2];
 var vector LastPosition[2], LastPawn[2], Velocity[2];
 var float LastTime[2], NextRecallSample[2];
-var int Samples[2], Epoch[2];
+var int Samples[2], Epoch[2], RoomSpace[2];
 struct ThrowGesture
 {
     // bReady: the trigger has been released since this hand took the axe,
@@ -28,6 +31,7 @@ function Initialize(VRDualHandInput I)
 function bool CanThrowHand(VRWeap_Tomahawk W, int Hand)
 {
     return Hand >= 0 && Hand < 2 && Input.ContextValid() && Input.Grenade.HandTracked(Hand)
+        && (Bridge.NativeTriggerActiveMask & (1 << Hand)) != 0
         && !Input.IsSelectorOpen(0) && !Input.IsSelectorOpen(1)
         && Input.Inventory.Registry.GetPrimary(Hand) != None
         && Input.Inventory.Registry.GetPrimary(Hand).Item == W;
@@ -76,7 +80,8 @@ function Update(float Delta)
         // owner's network channel instead (KF2VRNetChannel).
         if (W != None && W.Role == ROLE_Authority && W.ThrowAuthority != self)
         { W.CanThrowHand = CanThrowHand; W.ThrowAuthority = self; }
-        if (W == None || !CanThrowHand(W, Hand))
+        if (W == None || !CanThrowHand(W, Hand)
+            || (!W.bAxeAway && !class'VRPhysicalInteraction'.static.Allowed(Bridge.Human)))
         { CancelHand(Hand); continue; }
         Grip = (Bridge.NativeGripMask & (1 << Hand)) != 0;
         Trigger = (Bridge.NativeTriggerMask & Bridge.NativeTriggerActiveMask & (1 << Hand)) != 0;
@@ -115,12 +120,15 @@ function Update(float Delta)
         }
         Elapsed = Now - LastTime[Hand];
         if (Sampled[Hand] != W || Epoch[Hand] != Bridge.NativeCalibrationEpoch
+            || RoomSpace[Hand] != Bridge.NativeRoomSpaceEpoch
             || Elapsed < 0 || Elapsed > 0.1)
         {
             CancelHand(Hand); Sampled[Hand] = W;
             Epoch[Hand] = Bridge.NativeCalibrationEpoch;
+            RoomSpace[Hand] = Bridge.NativeRoomSpaceEpoch;
             LastPosition[Hand] = Bridge.PalmPosition(Hand); LastPawn[Hand] = Bridge.Human.Location;
             LastTime[Hand] = Now; Velocity[Hand] = vect(0,0,0);
+            if (Thrower == None) Thrower = new(self) class'VRThrowRelease'; Thrower.Reset(Hand);
             // A trigger already held on draw/recenter must release before a throw.
             Gesture[Hand].bReady = !Trigger;
             Gesture[Hand].bRecallOnRelease = false;
@@ -133,6 +141,7 @@ function Update(float Delta)
             if (!class'VRGrenadeThrow'.static.Bounded(Measured, 1800))
             { CancelHand(Hand); continue; }
             Velocity[Hand] = Measured * 0.65 + Velocity[Hand] * 0.35;
+            if (Thrower != None) Thrower.Add(Hand, Measured, Now);
             LastPosition[Hand] = Bridge.PalmPosition(Hand); LastPawn[Hand] = Bridge.Human.Location;
             LastTime[Hand] = Now; ++Samples[Hand];
         }
@@ -141,7 +150,8 @@ function Update(float Delta)
         if (TriggerReleased && Gesture[Hand].bPreparing && Samples[Hand] >= 3 && VSize(Velocity[Hand]) >= 120)
         {
             HandPose(W, Hand, At, Facing);
-            W.ServerThrow(Hand, At, Velocity[Hand], Facing);
+            // Alyx's release: drop the braking frames, average direction at peak speed.
+            W.ServerThrow(Hand, At, Thrower != None ? Thrower.Release(Hand, Now, Velocity[Hand]) : Velocity[Hand], Facing);
             if (R.Presenter != None && R.Presenter.PhysicalMelee != None) R.Presenter.PhysicalMelee.Cancel();
             Input.CancelSprint();
             Gesture[Hand].bReady = false; Gesture[Hand].bRecallReady = true;

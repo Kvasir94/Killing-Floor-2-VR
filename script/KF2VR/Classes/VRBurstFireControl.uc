@@ -1,4 +1,4 @@
-// Tracking/menu/ownership cancellation must also end autonomous rifle bursts.
+// Tracking/menu/ownership cancellation must also end autonomous weapon bursts.
 // Ordinary trigger release keeps the stock three-round burst semantics.
 class VRBurstFireControl extends Object;
 
@@ -6,6 +6,7 @@ static simulated function bool CancelAction(KFWeapon W)
 {
     if (W == None || W.bDeleteMe
         || (!W.IsA('KFWeap_AssaultRifle_AK12') && !W.IsA('KFWeap_AssaultRifle_AR15')
+            && !W.IsA('KFWeap_HRG_93R') && !W.IsA('KFWeap_HRG_93R_Dual')
             && !W.IsA('KFWeap_AssaultRifle_FAMAS') && !W.IsA('KFWeap_AssaultRifle_Microwave')
             && !W.IsA('KFWeap_RocketLauncher_Seeker6') && !W.IsA('KFWeap_HRG_Locust') && !W.IsA('KFWeap_SMG_MP5RAS')
             && !W.IsA('KFWeap_SMG_HK_UMP'))

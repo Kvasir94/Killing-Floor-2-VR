@@ -101,6 +101,7 @@ function Mutate(string MutateString, PlayerController Sender)
 function InitMutator(string Options, out string ErrorMessage)
 {
     super.InitMutator(Options, ErrorMessage);
+    class'VRHUDSafeWrapper'.static.ConfigureGame(KFGameInfo(WorldInfo.Game));
     if (class'GameInfo'.static.ParseOption(Options, "VRNormalGame") == "1") bNormalGame = true;
 }
 

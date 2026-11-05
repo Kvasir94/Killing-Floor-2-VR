@@ -220,25 +220,6 @@ bool HeadAim::WorldUpTransition(std::uintptr_t controller, const pinned::NativeR
     return true;
 }
 
-bool HeadAim::RebasePortal(std::uintptr_t controller, const pinned::NativeRotator& before,
-                           const xr::FrameState& frame) {
-    AppliedHeadAim previous;
-    if (!ValidFrame(frame) || SpaceChanged(frame) || !RenderState(controller,before,previous)) return false;
-    // Native camera axes reflect XR Z, so quaternion conjugation is
-    // (-x,-y,z,w). Shifting the reference removes the same local rotation
-    // from both eye orientation and position, preserving binocular geometry.
-    const auto applied=previous.cameraRotation;
-    const Quat inTracking{-applied.x,-applied.y,applied.z,applied.w};
-    reference_.rot=(reference_.rot*inTracking).Normalized();
-    appliedYaw_=appliedPitch_=0;
-    trackingYaw_=trackingPitch_=0;
-    TrackingAngles(reference_,frame.head,trackingYaw_,trackingPitch_);
-    lastSampleId_=frame.poseSampleId;
-    pendingToken_=0;
-    ++token_;
-    return true;
-}
-
 bool HeadAim::SpaceChanged(const xr::FrameState& frame) const noexcept {
     return ready_ && referenceSpaceEpoch_ != frame.referenceSpaceEpoch;
 }

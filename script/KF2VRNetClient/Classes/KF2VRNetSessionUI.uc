@@ -11,6 +11,7 @@ function bool LocalContext()
 
 function class<VRHandsBridge> HandPreferenceClass()
 {
+    class'KF2VRNetHandsBridge'.static.MigrateAmmoDefaults();
     return class'KF2VRNetHandsBridge';
 }
 

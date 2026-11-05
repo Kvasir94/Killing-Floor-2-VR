@@ -2,6 +2,22 @@
 // Suppress only the exact icon with an already placed stereo replacement.
 class VRHUDWrapper extends KFGFxHudWrapper;
 
+simulated function bool DrawObjectiveHUD()
+{
+    local VRSpatialHUD H;
+    if (VRHUDMovie(HudMovie) != None) H = VRHUDMovie(HudMovie).SpatialHUD;
+    if (H != None && H.ObjectiveMarker != None && H.ObjectiveMarker.bPresented && !H.ObjectiveMarker.bPreview) return true;
+    return Super.DrawObjectiveHUD();
+}
+
+simulated function bool DrawContaminationModeObjectiveHUD()
+{
+    local VRSpatialHUD H;
+    if (VRHUDMovie(HudMovie) != None) H = VRHUDMovie(HudMovie).SpatialHUD;
+    if (H != None && H.ObjectiveMarker != None && H.ObjectiveMarker.bPresented && H.ObjectiveMarker.bPreview) return true;
+    return Super.DrawContaminationModeObjectiveHUD();
+}
+
 // A teammate with a VR world tag (VRSpatialHUD.PlaceTeammateTags) is not also
 // drawn flat. Counting it as drawn keeps the stock hidden-player icon off it.
 simulated function bool DrawFriendlyHumanPlayerInfo(KFPawn_Human KFPH)

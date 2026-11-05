@@ -61,7 +61,7 @@ try {
     if (-not $fixture.StartsWith($allowed + '\', [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Synthetic fixture escaped its workspace test directory.'
     }
-    $runtimeNames = @('KF2VR.u','KF2VRPortal.upk','KF2VRSource.upk','KF2VREngineer.upk','KF2VRHands.upk')
+    $runtimeNames = @('KF2VR.u','KF2VRSource.upk','KF2VREngineer.upk','KF2VRHands.upk')
     $runtimeFiles = @()
     $expected = [ordered]@{}
     $artHashes = [ordered]@{}

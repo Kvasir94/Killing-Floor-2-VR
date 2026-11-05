@@ -6,82 +6,72 @@ Tracked hands, independently held weapons, physical melee, VR menus and wrist
 readouts run through a native OpenXR/D3D11 adapter and UnrealScript packages.
 KF2-VR is unaffiliated with Tripwire Interactive.
 
+Made by Kvasir94 and optimumbox.
+
 ## Play the mod
 
-The current playable prerelease is [v0.2.0-alpha.20261011 (build 213005)](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/tag/v0.2.0-alpha.20261011).
+**Download:** [KF2VR-Multiplayer-v0.3.0-alpha.20261105-054158.zip](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/download/v0.3.0-alpha.20261105/KF2VR-Multiplayer-v0.3.0-alpha.20261105-054158.zip)
+(release [v0.3.0-alpha.20261105](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/tag/v0.3.0-alpha.20261105), build 054158).
 
-| Download | Use |
-| --- | --- |
-| **[KF2VR-Multiplayer-v0.2.0-alpha.20261011-213005.zip](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/download/v0.2.0-alpha.20261011/KF2VR-Multiplayer-v0.2.0-alpha.20261011-213005.zip)** | Complete Windows player launcher: Steam Solo/Host/Join and experimental Epic Solo VR |
-| **…-LinuxKit.zip** | Experimental Steam/Proton desktop joining; [Linux setup](docs/LINUX-DESKTOP.md) |
-| **…-Epic-Desktop-Pack.zip** | Experimental manual Epic desktop joining; [Epic desktop setup](docs/EPIC-DESKTOP.md) |
-| **KF2VR-Source-v0.2.0-alpha.20261011.zip** | Matching source for development; requires local game/SDK inputs to build |
-| **SHA256SUMS.txt** | Archive checksums |
+1. You need Windows 10 or 11, your own Killing Floor 2 on Steam, and your
+   headset's PC app (SteamVR, Quest Link / Air Link, Virtual Desktop or
+   similar). Desktop play works without a headset. Epic is experimental Solo
+   VR only.
+2. Extract the whole ZIP into a new folder. Open Killing Floor 2 from Steam
+   once, then quit it.
+3. Open **Start KF2-VR**. The first time, it finds your game and asks a few
+   setup questions; the recommended choices are fine.
+4. Press **Quick start** for a solo match, or **Host a game** / **Join a
+   friend**. Everyone in a match needs this same version. The first time you
+   host, KF2-VR downloads the free game server (about 9 GB); friends outside
+   your home network need UDP 7777 and 27015 forwarded to you.
 
-GitHub's automatic **Source code** archives are also development downloads.
-Use the release notes and `app/release.json` for exact compatibility and build
-identity. Keep your previous release folder for rollback; extract updates into
-a fresh folder. Existing release ZIPs and tags stay intact.
+Start with [READ ME FIRST](docs/public-alpha/READ-ME-FIRST.txt), then the
+[player guide](docs/PLAYER-GUIDE.md), [quick controls](docs/public-alpha/CONTROLS-CARD.txt)
+and [release notes](docs/public-alpha/RELEASE-NOTES-DRAFT.md) (what's new since
+v0.5.2 and known issues).
 
-Extract the whole playable ZIP into a fresh folder, leave `app` intact,
-connect your headset and activate its OpenXR runtime, then open
-**Start KF2-VR**. Auto selects a sole installation or the last valid folder
-used in that extracted release. With both stores installed, choose the store
-you want. Steam offers Solo/Host/Join in VR or Desktop; Epic offers Solo VR only.
-Keep the launcher open until KF2 exits and cleanup finishes.
+**Bugs:** in the launcher, **Help > Save logs for a bug report** makes a ZIP of
+anonymized logs (check it before sharing), and **Help > Report a bug** opens the
+KF2-VR thread on the Flat2VR Discord. You can also use
+[GitHub Issues](https://github.com/Kvasir94/Killing-Floor-2-VR/issues). After a crash, quit KF2 and use **Help >
+Repair after a crash**.
 
-You need your own Steam or Epic KF2 on Windows 10/11. Start ordinary
-KF2 once before first setup. Exact game-executable hashes are checked before
-deployment; updates require a compatible release. Python and launcher runtimes
-are bundled; the store supplies the game's normal prerequisites. Solo/Join need no dedicated
-server; first hosting downloads the free server (about 32 GB). Internet hosts
-forward UDP 7777/27015. Share join codes privately because they include passwords.
+**VAC is off:** KF2-VR only plays Solo and VAC-off servers. The adapter loads as
+`dinput8.dll` with MinHook, which some antivirus tools flag; the source is here
+to review.
 
-Epic requires copying generated session Launch Options into the official Epic
-launcher, then launching there. Remove that line and restore your previous options
-after quitting. Host/Join/Desktop, cross-store online play and recording are disabled.
-The current Epic menu-first route has not passed overall headset acceptance;
-earlier tests confirmed only partial controller/gameplay functionality.
+**Hands disclaimer.** The playable ZIP ships the KF2VR hands package (gloves,
+wristwatch and wrists), which is derived from Killing Floor 2's first-person
+arms. Its redistribution clearance is unresolved; it is included for this
+alpha, and its rights remain with their owners. The source archive does not
+contain it.
 
-Steam Solo has had the most developer headset testing, using Quest over Link.
-The developer has also tested remote joining of a hosted server and
-install/recovery. This is an early alpha; broader hardware, complete matches,
-remote gestures, travel and arsenal coverage need feedback. Defaults are
-Performance graphics, 100% render scale and Button reloads. Steam single-pass
-stereo, HBAO+ and reflections start ON; Epic single-pass stays OFF. Saved preferences win.
-
-Begin with [READ ME FIRST](docs/public-alpha/READ-ME-FIRST.txt), the
-[quick controls card](docs/public-alpha/CONTROLS-CARD.txt) and
-[full controls guide](docs/VR_CONTROLS.md). See [known issues](docs/public-alpha/RELEASE-NOTES-DRAFT.md)
-and [feedback questions](docs/public-alpha/FEEDBACK-QUESTIONS.md).
-
-For reports, use **Save logs for a bug report**. It creates a local ZIP of
-sanitized report copies; originals remain local and nothing uploads automatically.
-Review the ZIP before sharing: unrecognized personal details in free-form text
-may need removal. Use [GitHub Issues](https://github.com/Kvasir94/Killing-Floor-2-VR/issues)
-for public bug reports; keep sensitive details private.
-After interruption, quit KF2 and use **Fix a stuck session** before changing or
-deleting that release folder. Never mix DLLs or bypass game/package checks.
+Other downloads on the release page: a **LinuxKit** for experimental
+Steam/Proton desktop joining ([Linux setup](docs/LINUX-DESKTOP.md)), an
+**Epic-Desktop-Pack** for experimental Epic desktop joining ([Epic desktop
+setup](docs/EPIC-DESKTOP.md)), the matching **source ZIP** and
+**SHA256SUMS.txt**. Desktop friends without a headset can also get the mod from
+Steam Workshop item
+[3817663661](https://steamcommunity.com/sharedfiles/filedetails/?id=3817663661)
+when it matches this version.
 
 ## Current source status
 
-This source snapshot integrates OptimumBox's `v0.5.0-alpha.20261011`
-(`e35ec355ae951dda72ee80b20cb1cef12345b9ac`) with retained local interaction,
+This source snapshot integrates OptimumBox's `v0.5.2-alpha.20261014`
+and distribution source through `68932aef5ee76b2bcc834eed4d2f3275ea4d6995` with retained local interaction,
 rendering and launcher choices. His reload, multiplayer, interaction, camera,
 rendering, launcher and desktop-companion contributions are credited in
-[CREDITS](CREDITS.md). The combined source is compiled and checked
-with the offline CPU/launcher gate; headset and real online acceptance remain
-pending. Release `v0.2.0-alpha.20261011` includes this integration in the
-unchanged compiled 213005 payload, with matching source and full credits/notices.
-Its tag pins the release source; main can contain later documentation updates.
-Compilation and offline checks do not establish runtime parity.
+[CREDITS](CREDITS.md). Release `v0.3.0-alpha.20261105` is build 054158 from this source, with
+matching credits and notices. Its tag pins the release source; main can contain
+later documentation updates. Earlier releases and their tags stay available.
 
 The source includes one-hand and paired hip reloads, sender-timed remote poses,
 walking with the weapon wheel open, fixed boss-introduction views, level
-spectator views and authored grenade grips. Button, Physical and Physical + Pump
-reload modes remain available. An additional waist-triggered reload mode is
-planned only. Breacher development is frozen and the current combined candidate
-omits its optional content. See [provenance](docs/PROVENANCE.md) for attribution.
+spectator views, authored grenade grips and incoming wristwatch chat. Reloads
+offer three styles, Button, Manual and Realistic, plus a separate Ammo rules
+choice. Breacher development is frozen and the release omits its optional
+content; the Portal Gun and Zed Defense have been removed. See [provenance](docs/PROVENANCE.md) for attribution.
 
 ## Build and contribute
 
@@ -94,8 +84,7 @@ cd Killing-Floor-2-VR
 ```
 
 The source is for review and development. Building a playable candidate requires
-your own supported KF2/SDK and Portal 2 installations, Windows build tools and
-Blender. The source build extracts needed game inputs locally and regenerates
+your own supported KF2/SDK installation, Windows build tools and Blender. The source build extracts needed game inputs locally and regenerates
 its glove/watch, reload props and weapon art; generated outputs stay excluded.
 This route does not recreate the released hand-art revision or ZIP bytes.
 **The launcher can be audited and built independently**, without KF2, the SDK

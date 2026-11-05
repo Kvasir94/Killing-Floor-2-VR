@@ -1,23 +1,21 @@
-"""Offline optional-content/launch contract tests; never launches KF2 or changes user INIs."""
+"""Offline tests of the optional Breacher content contract used by packaging and acceptance builds."""
 import hashlib
 import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import breacher
-import friends
-import join_code
-import launch_menu
-import launch_state
-import workshop_loadout
 import package
-from session import config_hashes, read_ini
+from session import read_ini
 
 
 class BreacherTests(unittest.TestCase):
     def setUp(self):
+        self.experimental_gate = patch("stable_features.experimental_content_enabled", return_value=True)
+        self.experimental_gate.start(); self.addCleanup(self.experimental_gate.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -45,49 +43,6 @@ class BreacherTests(unittest.TestCase):
         self.assertEqual(breacher.add_mutator("KF-Outpost?Mutator=Existing.Mod", args), "KF-Outpost?Mutator=Existing.Mod")
         breacher.configure_content(self.root / "absent", args)
 
-    def test_default_off_explicit_toggle_and_persistence_in_both_modes(self):
-        for mode in ("--desktop", "--vr"):
-            args = friends.parse_options(["--solo", mode])
-            args.profile_root = self.root / mode[2:]
-            workshop_loadout.load_preferences(args)
-            self.assertFalse(args.breacher)
-            args.breacher = True
-            workshop_loadout.save_preferences(args)
-            restored = friends.parse_options(["--solo", mode])
-            restored.profile_root = args.profile_root
-            workshop_loadout.load_preferences(restored)
-            self.assertTrue(restored.breacher)
-            off = friends.parse_options(["--solo", mode, "--no-breacher"])
-            off.profile_root = args.profile_root
-            workshop_loadout.load_preferences(off)
-            self.assertFalse(off.breacher)
-            join = friends.parse_options([mode])
-            join.profile_root = args.profile_root
-            workshop_loadout.load_preferences(join)
-            self.assertFalse(join.breacher, "host preference must not silently enable unknown joins")
-
-    def test_saved_host_on_can_be_disabled_without_optional_package(self):
-        from unittest.mock import patch
-        profile = self.root / 'profile'
-        profile.mkdir()
-        (profile / 'launcher.json').write_text(json.dumps({'breacher': True}))
-        with patch.object(workshop_loadout, 'profile_root', return_value=profile):
-            self.assertTrue(launch_state.describe(None, None, self.root)['breacher'])
-        args = friends.parse_options(['--host', '--desktop', '--no-breacher', '--mods', 'none'])
-        args.profile_root = profile
-        workshop_loadout.load_preferences(args)
-        self.assertFalse(args.breacher)
-        breacher.prepare(args, self.root / 'missing-package', {})
-        self.assertIsNone(breacher.descriptor(args))
-        self.assertNotIn('Breacher', launch_menu.host_url(args))
-        workshop_loadout.save_preferences(args)
-        restored = friends.parse_options(['--host'])
-        restored.profile_root = profile
-        workshop_loadout.load_preferences(restored)
-        self.assertFalse(restored.breacher)
-        with patch.object(workshop_loadout, 'profile_root', return_value=profile):
-            self.assertFalse(launch_state.describe(None, None, self.root)['breacher'])
-
     def test_compiled_core_package_and_hash_are_required(self):
         with self.assertRaisesRegex(RuntimeError, "experimental core"):
             breacher.prepare(self.args, self.root, {})
@@ -109,42 +64,18 @@ class BreacherTests(unittest.TestCase):
         self.args.breacher_expected = self.contract
         self.assertEqual(breacher.prepare(self.args, self.root, self.release), self.contract)
 
-    def test_join_code_round_trip_rejects_invalid_protocol_and_digest(self):
-        data = dict(address="host.example", password="password", port=7777, query_port=27015,
-                    build="experiment", mods=[], map="KF-Outpost", breacher=self.contract)
-        self.assertEqual(join_code.decode(join_code.encode(data), "experiment"), data)
-        for bad in (None, {}, dict(self.contract, protocol=True), dict(self.contract, protocol=2),
-                    dict(self.contract, sha256="bad?Mutator=Injected"), dict(self.contract, extra=1)):
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
-                join_code.encode(dict(data, breacher=bad))
-
-    def test_single_mutator_option_and_shared_host_modes(self):
+    def test_single_mutator_option(self):
         breacher.prepare(self.args, self.root, self.release)
-        for mode in (True, False):
-            for mods in ([], ["ukfp"]):
-                self.args.vr, self.args.mods = mode, mods
-                url = launch_menu.host_url(self.args)
-                self.assertEqual(url.count("?Mutator="), 1)
-                self.assertEqual(url.count(breacher.MUTATOR), 1)
-                self.assertIn("?BreacherProtocol=1?BreacherPackage=" + self.contract["sha256"], url)
-                self.assertEqual(breacher.add_mutator(url, self.args), url)
+        for base in ("KF-Outpost?Game=Any", "KF-Outpost?Mutator=UnofficialKFPatch.UKFPMutator"):
+            url = breacher.add_mutator(base, self.args) + breacher.options(self.args)
+            self.assertEqual(url.count("?Mutator="), 1)
+            self.assertEqual(url.count(breacher.MUTATOR), 1)
+            self.assertIn("?BreacherProtocol=1?BreacherPackage=" + self.contract["sha256"], url)
+            self.assertEqual(breacher.add_mutator(url, self.args), url)
         with self.assertRaises(ValueError):
             breacher.add_mutator("KF-Outpost?Mutator=A?mutator=B", self.args)
 
-    def test_development_perk_level_switches_and_mutator_config(self):
-        args = friends.parse_options(["--solo", "--breacher-level", "25", "--breacher-skills", "12121"])
-        self.assertTrue(args.breacher)
-        self.assertEqual((args.breacher_level, args.breacher_skills), (25, "12121"))
-        self.assertTrue(friends.parse_options(["--host", "--breacher-level", "5"]).breacher)
-        for argv in (["--solo", "--breacher-level", "26"], ["--solo", "--breacher-level", "0"],
-                     ["--solo", "--breacher-level", "5", "--breacher-skills", "123"],
-                     ["--solo", "--breacher-skills", "11111"],
-                     ["--solo", "--no-breacher", "--breacher-level", "5"],
-                     ["--breacher-level", "5"]):
-            with self.assertRaises(SystemExit):
-                friends.parse_options(argv)
-        saved = friends.parse_options(["--solo"])
-        self.assertIsNone(saved.breacher_level)
+    def test_development_perk_level_mutator_config(self):
         configs = self.root / "configs"
         configs.mkdir()
         path = configs / "KFGame.ini"
@@ -250,36 +181,6 @@ class BreacherTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Compile current Breacher"):
             package.copy_breacher_package(self.root, self.root / "stale")
 
-    def test_actual_role_preparation_for_solo_host_desktop_vr_and_disabled(self):
-        user = self.root / "user"
-        user.mkdir()
-        (user / "KFEngine.ini").write_text("[Core.System]\nPaths=stock\nScriptPaths=stock\nSeekFreePCPaths=stock\nBrewedPCPaths=stock\n", encoding="utf-16")
-        (user / "KFGame.ini").write_text("[Engine.AccessControl]\n", encoding="utf-16")
-        before = config_hashes(user)
-        for match in ("--solo", "--host"):
-            for mode in ("--desktop", "--vr"):
-                for enabled in (True, False):
-                    with self.subTest(match=match, mode=mode, enabled=enabled):
-                        args = friends.parse_options([match, mode, "--breacher" if enabled else "--no-breacher", "--mods", "none"])
-                        args.profile_root = self.root / "profile"
-                        args.server_root = self.root / "server"
-                        args.address, args.password = "127.0.0.1", "fixture"
-                        workshop_loadout.load_preferences(args)
-                        breacher.prepare(args, self.root, self.release)
-                        run = self.root / (match + mode + str(enabled))
-                        for name in (["driver"] if args.solo else ["server", "driver"]):
-                            role = friends.configure_role(run, name, user, self.root / "game", args)
-                            engine = read_ini(Path(role["config_root"]) / "KFEngine.ini")
-                            self.assertEqual(str(self.folder.resolve()) in engine, enabled)
-                            if args.solo or name == "server":
-                                self.assertEqual(breacher.MUTATOR in role["args"][0], enabled)
-                                self.assertLessEqual(role["args"][0].count("?Mutator="), 1)
-                            if not args.solo:
-                                self.assertEqual("?BreacherPackage=" in role["args"][0], enabled)
-                            if args.solo and args.vr:
-                                game = read_ini(Path(role["config_root"]) / "KFGame.ini")
-                                self.assertEqual(breacher.MUTATOR in game, enabled)
-        self.assertEqual(before, config_hashes(user))
 
 
 if __name__ == "__main__":

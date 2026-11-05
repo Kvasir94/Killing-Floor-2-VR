@@ -189,9 +189,11 @@ float4 PS(Vertex input) : SV_Target {
                     float3 plateColor = lerp(float3(0.028, 0.032, 0.038), float3(0.016, 0.018, 0.022), vGrad);
 
                     if (all(uv >= 0.0) && all(uv <= 1.0)) {
-                        float4 ui = SampleMenu(uv);
-                        float uiAlpha = saturate(max(ui.a, max(ui.r, max(ui.g, ui.b)) > 0.02 ? 1.0 : 0.0));
-                        color = lerp(plateColor, ui.rgb, uiAlpha);
+                        // The custom shell paints this entire image opaquely.
+                        // RGB-only Canvas/movie draws need not preserve alpha;
+                        // inferring coverage from brightness punched dark video
+                        // blocks into the backing plate at a hard threshold.
+                        color = SampleMenu(uv).rgb;
                     } else {
                         color = plateColor;
                     }

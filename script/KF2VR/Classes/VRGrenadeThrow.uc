@@ -19,6 +19,17 @@ static function vector AssistedVelocity(vector Measured)
     return Normal(Measured) * FMin(HandSpeed * Gain, 2500.0);
 }
 
+// Peak-sample release still needs modest assistance for a comfortable wrist
+// throw. Blend it out on gentle drops, preserving the measured direction and
+// a shared response across grenade classes (including cryo).
+static function vector GrenadeVelocity(vector Measured)
+{
+    local float Speed, Gain;
+    Speed = VSize(Measured);
+    Gain = 1.0 + 0.6 * FClamp((Speed - 100.0) / 300.0, 0.0, 1.0);
+    return Normal(Measured) * FMin(Speed * Gain, 2500.0);
+}
+
 static function bool Launch(Actor Spawner, KFPawn_Human Human, KFWeapon WeaponOwner,
     class<KFProj_Grenade> GrenadeClass, int Hand, vector Position, vector Velocity,
     vector Head)
@@ -54,7 +65,7 @@ static function bool Launch(Actor Spawner, KFPawn_Human Human, KFWeapon WeaponOw
     if (!bOwned || Spawner.Trace(HitLocation, HitNormal, Position, Head, false, vect(6,6,6)) != None)
         return false;
 
-    Velocity = AssistedVelocity(Velocity);
+    Velocity = GrenadeVelocity(Velocity);
     Spawner.Instigator = Human;
     Projectile = Spawner.Spawn(GrenadeClass, WeaponOwner,, Position, rotator(Velocity));
     if (Projectile == None || Projectile.bDeleteMe) return false;

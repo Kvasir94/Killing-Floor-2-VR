@@ -113,6 +113,7 @@ def main():
             launch.profile_root = run / "Profile"
             launch.cache_root = run / "Cache"
             launch.address, launch.password = "127.0.0.1", "fixture"
+            launch.vr_demo = True
             load_preferences(launch)
             launch.workshop_content = []
             role = friends.configure_role(run / ("enabled" if enabled else "off"), "driver", user, game, launch)

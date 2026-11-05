@@ -70,7 +70,7 @@ public:
     // Post-DLSS AMD FidelityFX CAS sharpening, 0 (off) to 1 (maximum).
     // DLSS 2.5.1+ ignores its own sharpness parameter, so this replaces it.
     void SetSharpness(float sharpness) noexcept { sharpness_=sharpness<0 ? 0.0f : (sharpness>1 ? 1.0f : sharpness); }
-    float Sharpness() const noexcept { return sharpness_; }
+    float Sharpness() const noexcept { return sharpness_.load(std::memory_order_relaxed); }
     DlssMode Mode() const noexcept { return mode_; }
     // Requested and not failed. Read by the game thread to size the eye passes.
     bool Active() const noexcept { return mode_!=DlssMode::Off && !failed_.load(std::memory_order_acquire); }
@@ -79,7 +79,7 @@ public:
     // output: output-size texture in the colour's UNORM format with UAV binding.
     bool Evaluate(ID3D11Device* device, ID3D11DeviceContext* context, unsigned eye,
                   ID3D11Texture2D* color, ID3D11Texture2D* depth, ID3D11Texture2D* output,
-                  const DlssEyeInput& input, std::string& error);
+                  ID3D11Texture2D* objectMotion, const DlssEyeInput& input, std::string& error);
     // Drop both histories (resize, menu, travel). Render thread.
     void Reset() noexcept;
     // Render thread, with the device still alive.
@@ -93,7 +93,7 @@ private:
     std::unique_ptr<Impl> impl_;
     DlssMode mode_=DlssMode::Off;
     std::atomic<bool> failed_{false};
-    float sharpness_=0.0f;
+    std::atomic<float> sharpness_{0.0f};
     std::string failure_;
 };
 } // namespace kf2vr::adapter

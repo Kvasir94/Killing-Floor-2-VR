@@ -2,17 +2,19 @@
 // particle beams cache simulated endpoints before late weapon placement.
 class VRWeaponLaser extends Actor;
 
-var StaticMeshComponent Beam, ExitBeam, Dot;
+var StaticMeshComponent Beam, Dot, Core;
 var Actor HitActor;
 var vector Start, End, SurfaceNormal, BeamMeshCenter, BeamMeshExtent;
-var vector ExitStart, ExitEnd;
-var VRPortal EntryPortal;
 var float LastUpdateTime;
 var float TraceOffAxis;
 var transient float NextTraceDebugTime;
 var bool bVisible;
 var KFWeapon DisplayedWeapon;
 var transient MaterialInstanceConstant RedBeamMaterial, RedDotMaterial;
+// The player's laser colour and sizes (VRInteractionColours), reapplied on change.
+var transient int ColourRevision, GlowChannel;
+var transient float BeamWidthScale, DotSizeScale;
+var transient bool bSmallDot;
 
 struct HUDTraceState
 {
@@ -27,14 +29,11 @@ simulated event PostBeginPlay()
     local LinearColor Red;
     Super.PostBeginPlay();
     Beam.SetAbsolute(true, true, true);
-    ExitBeam.SetAbsolute(true, true, true);
     Dot.SetAbsolute(true, true, true);
+    Core.SetAbsolute(true, true, true);
     Beam.SetTranslation(vect(0,0,0));
     Beam.SetRotation(rot(0,0,0));
     Beam.ForceUpdate(true);
-    ExitBeam.SetTranslation(vect(0,0,0));
-    ExitBeam.SetRotation(rot(0,0,0));
-    ExitBeam.ForceUpdate(true);
     // Verified EngineMeshes.Cube native bounds: center 0, half-size 128.
     // Component bounds add a 1 UU safety pad; scaling that pad would shorten
     // a long beam and move its visible start away from the muzzle.
@@ -47,24 +46,43 @@ simulated event PostBeginPlay()
     Red = MakeLinearColor(1,0,0,1);
     RedBeamMaterial.SetVectorParameterValue('Color', Red);
     Beam.SetMaterial(0, RedBeamMaterial);
-    ExitBeam.SetMaterial(0, RedBeamMaterial);
     RedDotMaterial = new(self) class'MaterialInstanceConstant';
     RedDotMaterial.SetParent(Material'WEP_AutoTurret_EMIT.Turret_Laser_Dot_SM_PM');
     RedDotMaterial.SetScalarParameterValue('0blue_1red', 1);
     Dot.SetMaterial(0, RedDotMaterial);
+    // The glow card is additive, so it washes out on bright surfaces. A small
+    // solid core in the beam's unlit red keeps the point readable there.
+    Core.SetMaterial(0, RedBeamMaterial);
+    ColourRevision = -1;
+    ApplyLook();
     `log("KF2VR laser color configured: mesh=LevelColorationUnlitMaterial Color=1,0,0 dot=Turret_Laser_Dot_SM_PM 0blue_1red=1"
         @ "meshExtent=" $ BeamMeshExtent);
     HideLaser();
 }
 
+simulated function ApplyLook()
+{
+    local LinearColor Tint;
+    if (ColourRevision == class'VRInteractionColours'.default.Revision) return;
+    ColourRevision = class'VRInteractionColours'.default.Revision;
+    Tint = class'VRInteractionColours'.static.Linear(class'VRInteractionColours'.const.ROLE_LASER);
+    RedBeamMaterial.SetVectorParameterValue('Color', Tint);
+    GlowChannel = class'VRInteractionColours'.static.LaserGlowChannel();
+    if (GlowChannel >= 0) RedDotMaterial.SetScalarParameterValue('0blue_1red', GlowChannel);
+    BeamWidthScale = class'VRInteractionColours'.static.BeamWidth() / 100.0;
+    // 100% is 85% of the original dot (Kvasir94, 11-03, #163); the player's
+    // DOT SIZE percentage scales from there.
+    DotSizeScale = class'VRInteractionColours'.static.DotSize() / 100.0 * 0.85;
+    bSmallDot = class'VRInteractionColours'.default.bLaserSmallDot;
+}
+
 simulated function HideLaser()
 {
     Beam.SetHidden(true);
-    ExitBeam.SetHidden(true);
     Dot.SetHidden(true);
+    Core.SetHidden(true);
     bVisible = false;
     HitActor = None;
-    EntryPortal = None;
 }
 
 // Read back the renderer's actual transform, including its native rotation
@@ -94,7 +112,7 @@ simulated function bool IsHUDHit(Actor A, TraceHitInfo HitInfo)
 }
 
 // Reuse the session-only ALIGN MARKERS switch on the root hand rig. Each
-// laser samples at most once a second, including its portal exit if present.
+// laser samples at most once a second.
 simulated function bool SampleTraceDebug()
 {
     local VRHandsBridge B;
@@ -182,44 +200,14 @@ simulated function Actor TraceAim(KFWeapon W, vector RayStart, vector RayEnd, ou
     return FirstHit;
 }
 
-simulated function VRPortal FirstPortal(vector RayStart, vector Direction, float Range, Actor FirstHit, vector HitLocation,
-    out vector PlaneHit, out float PlaneDistance)
-{
-    local VRPortal P, Best;
-    local vector N, LocalHit, CandidateHit;
-    local float Along, Distance, FirstDistance;
-    FirstDistance = FirstHit == None ? Range : FClamp((HitLocation - RayStart) dot Direction, 0, Range);
-    PlaneDistance = Range;
-    foreach WorldInfo.DynamicActors(class'VRPortal', P)
-    {
-        if (P.LinkedPortal == None || P.bDeleteMe || P.LinkedPortal.bDeleteMe) continue;
-        N = vector(P.Rotation);
-        Along = Direction dot N;
-        if (Along >= -0.001 || ((RayStart - P.Location) dot N) <= 0) continue;
-        Distance = ((P.Location - RayStart) dot N) / Along;
-        if (Distance < 0 || Distance >= PlaneDistance || Distance > Range) continue;
-        // Static-map collision can stand proud of the rendered aperture.
-        // Never skip a pawn or movable blocker before the entry plane.
-        if (Distance > FirstDistance + (class'VRPortalPlacement'.static.IsPortalable(FirstHit)
-            ? P.CollisionSkin + Range * 0.001 + 8.0 : 0.0)) continue;
-        CandidateHit = RayStart + Direction * Distance;
-        LocalHit = (CandidateHit - P.Location) << P.Rotation;
-        if (!class'VRPortalMath'.static.InsideEllipse(LocalHit.Y, LocalHit.Z, P.HalfWidth, P.HalfHeight)) continue;
-        Best = P;
-        PlaneHit = CandidateHit;
-        PlaneDistance = Distance;
-    }
-    return Best;
-}
-
 simulated function DrawSegment(StaticMeshComponent Segment, vector From, vector To, rotator Aim)
 {
     local vector Scale, Center;
     local float Distance;
     Distance = VSize(To - From);
     Scale.X = Distance / (2 * BeamMeshExtent.X);
-    Scale.Y = 0.05 / BeamMeshExtent.Y;
-    Scale.Z = 0.05 / BeamMeshExtent.Z;
+    Scale.Y = 0.05 * BeamWidthScale / BeamMeshExtent.Y;
+    Scale.Z = 0.05 * BeamWidthScale / BeamMeshExtent.Z;
     Center.X = BeamMeshCenter.X * Scale.X;
     Center.Y = BeamMeshCenter.Y * Scale.Y;
     Center.Z = BeamMeshCenter.Z * Scale.Z;
@@ -232,8 +220,8 @@ simulated function DrawSegment(StaticMeshComponent Segment, vector From, vector 
 
 simulated function UpdateAim(KFWeapon W, vector Muzzle, rotator Aim)
 {
-    local vector HitLocation, Direction, PlaneHit, ExitDirection, ExitHit, DotEnd;
-    local float Distance, DirectionLength, Range, PlaneDistance;
+    local vector HitLocation, Direction;
+    local float Distance, DirectionLength, Range;
     local bool bLogTrace;
 
     if (BeamMeshExtent.X <= 0 || BeamMeshExtent.Y <= 0 || BeamMeshExtent.Z <= 0)
@@ -241,6 +229,7 @@ simulated function UpdateAim(KFWeapon W, vector Muzzle, rotator Aim)
         HideLaser();
         return;
     }
+    ApplyLook();
     DisplayedWeapon = W;
     Start = Muzzle;
     // Use the same native matrix basis as the mesh renderer for the optical
@@ -263,24 +252,6 @@ simulated function UpdateAim(KFWeapon W, vector Muzzle, rotator Aim)
         End = Start + Direction * Distance;
         TraceOffAxis = VSize(HitLocation - End);
     }
-    EntryPortal = FirstPortal(Start, Direction, Range, HitActor, HitLocation, PlaneHit, PlaneDistance);
-    DotEnd = End;
-    if (EntryPortal != None)
-    {
-        End = PlaneHit;
-        ExitDirection = Normal(EntryPortal.MapDirection(Direction));
-        ExitStart = EntryPortal.MapPointThrough(PlaneHit) + ExitDirection * 2;
-        ExitEnd = ExitStart + ExitDirection * (Range - PlaneDistance);
-        HitActor = TraceAim(W, ExitStart, ExitEnd, ExitHit, SurfaceNormal, bLogTrace, 'exit');
-        if (HitActor != None)
-        {
-            Distance = FClamp((ExitHit - ExitStart) dot ExitDirection, 0, Range - PlaneDistance);
-            ExitEnd = ExitStart + ExitDirection * Distance;
-        }
-        DotEnd = ExitEnd;
-        DrawSegment(ExitBeam, ExitStart, ExitEnd, rotator(ExitDirection));
-    }
-    else ExitBeam.SetHidden(true);
     Distance = VSize(End - Start);
 
     // 1 mm beam in the same depth buffer as the gun. Transform and bounds
@@ -288,11 +259,21 @@ simulated function UpdateAim(KFWeapon W, vector Muzzle, rotator Aim)
     DrawSegment(Beam, Start, End, Aim);
     bVisible = true;
     LastUpdateTime = WorldInfo.TimeSeconds;
-    Dot.SetTranslation(DotEnd + SurfaceNormal * 0.15);
+    Dot.SetTranslation(End + SurfaceNormal * 0.15);
     Dot.SetRotation(Aim);
-    Dot.SetScale(FClamp(1 + Distance / 6000, 1, 3));
-    Dot.SetHidden(HitActor == None);
+    // Grow with distance so the point keeps a readable angular size: the glow
+    // past about 15 ft, the core at roughly a quarter of a degree everywhere.
+    // The small-dot option keeps the older fixed glow with no core, unless the
+    // laser colour has no glow card, when the core carries the dot.
+    if (bSmallDot) Dot.SetScale(FClamp(1 + Distance / 6000, 1, 3) * DotSizeScale);
+    else Dot.SetScale(FClamp(Distance / 450, 1, 8) * DotSizeScale);
+    Dot.SetHidden(HitActor == None || GlowChannel < 0);
     Dot.ForceUpdate(true);
+    Core.SetTranslation(End + SurfaceNormal * 0.3);
+    Core.SetRotation(Aim);
+    Core.SetScale(FMax(Distance * 0.0022, 0.25) * DotSizeScale * (GlowChannel < 0 ? 1.6 : 1.0) / BeamMeshExtent.X);
+    Core.SetHidden(HitActor == None || (bSmallDot && GlowChannel >= 0));
+    Core.ForceUpdate(true);
 }
 
 simulated event Tick(float DeltaTime)
@@ -327,24 +308,6 @@ defaultproperties
     End Object
     Beam=LaserBeamComponent
     Components.Add(LaserBeamComponent)
-    Begin Object Class=StaticMeshComponent Name=LaserExitBeamComponent
-        StaticMesh=StaticMesh'EngineMeshes.Cube'
-        HiddenGame=true
-        DepthPriorityGroup=SDPG_World
-        bOwnerNoSee=false
-        bOnlyOwnerSee=false
-        CastShadow=false
-        bCastDynamicShadow=false
-        bAcceptsLights=false
-        bAcceptsDecals=false
-        CollideActors=false
-        BlockActors=false
-        BlockZeroExtent=false
-        BlockNonZeroExtent=false
-        BlockRigidBody=false
-    End Object
-    ExitBeam=LaserExitBeamComponent
-    Components.Add(LaserExitBeamComponent)
     Begin Object Class=StaticMeshComponent Name=LaserDotComponent
         StaticMesh=StaticMesh'FX_Wep_Laser_MESH.laser_dot_SM'
         HiddenGame=true
@@ -362,4 +325,22 @@ defaultproperties
     End Object
     Dot=LaserDotComponent
     Components.Add(LaserDotComponent)
+    Begin Object Class=StaticMeshComponent Name=LaserCoreComponent
+        StaticMesh=StaticMesh'EngineMeshes.Cube'
+        HiddenGame=true
+        DepthPriorityGroup=SDPG_World
+        bOwnerNoSee=false
+        bOnlyOwnerSee=false
+        CastShadow=false
+        bCastDynamicShadow=false
+        bAcceptsLights=false
+        bAcceptsDecals=false
+        CollideActors=false
+        BlockActors=false
+        BlockZeroExtent=false
+        BlockNonZeroExtent=false
+        BlockRigidBody=false
+    End Object
+    Core=LaserCoreComponent
+    Components.Add(LaserCoreComponent)
 }

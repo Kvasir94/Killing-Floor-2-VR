@@ -26,6 +26,10 @@ var float ContactDistance;
 var bool bRackSampled;
 // VRReloadCatalog.ActionKind of the gun being sampled, set by the caller.
 var byte ActionKind;
+// Caller settings from the catalog, independent of the incoming part's wrist.
+var name RackSourceHand;
+var bool bRackThumbContact;
+var float MaxRackStroke;
 var vector RackAxisLocal, RackRestLocal;
 var quat RackRestLocalQ;
 var float RackStroke;
@@ -143,15 +147,44 @@ function bool SelectAmmoTrack(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     local name Candidate;
     local vector Entry, AtNotify, Position;
     local quat EntryQ, AtNotifyQ, Rotation;
-    local float Score, BestScore, EndTime, PoseScore, BestPose;
+    local float Score, BestScore, EndTime, PoseScore, BestPose, CandidateEntry, BestEntry;
     BestScore = 100000;
+    BestEntry = EntryTime;
     EndTime = FMin(SequenceLength, SeatTime + 0.16 * RateScale);
     for (I = 0; I < 2; ++I)
     {
         Candidate = I == 0 ? Loaded : Spare;
         if (I == 1 && Candidate == Loaded) continue;
+        CandidateEntry = EntryTime;
         Pose(M, Seq, EntryTime);
         Relative(M, Root, Candidate, Entry, EntryQ);
+        // Some clips seat well before their ammo notify (Zed MKIII, Freeze
+        // Thrower, Healthrower, Tommy Gun tactical, Doshinegun, Bladed
+        // pistol, P90 empty): the fixed lead lands on an already seated
+        // part, leaving no approach and a hand that has let go. Walking back
+        // from that seated pose, the first pose 6 UU out is the incoming
+        // part's own final approach, never the earlier outgoing one.
+        // The same applies when the lead lands on an overshoot: the Tommy
+        // Gun's empty clip slides its drum 1.4 UU past the seat and back, so
+        // the lead caught it on the far side and left a 1.3 UU "approach"
+        // against the tactical clip's 6.7 UU slide along the same track.
+        if (VSize(Entry - SeatLocal) < 6)
+            for (J = 1; J <= 64; ++J)
+            {
+                if (EntryTime - 1.2 * RateScale * float(J) / 64.0 < 0) break;
+                Pose(M, Seq, EntryTime - 1.2 * RateScale * float(J) / 64.0);
+                Relative(M, Root, Candidate, Position, Rotation);
+                if (VSize(Position - SeatLocal) < 6) continue;
+                if (VSize(Entry - SeatLocal) < 1
+                    || (M.SkeletalMesh.Name == 'WEP_1stP_HRG_Boomy_Rig')
+                    || ((Entry - SeatLocal) dot (Position - SeatLocal))
+                        < -0.5 * VSize(Entry - SeatLocal) * VSize(Position - SeatLocal))
+                {
+                    CandidateEntry = EntryTime - 1.2 * RateScale * float(J) / 64.0;
+                    Entry = Position; EntryQ = Rotation;
+                }
+                break;
+            }
         BestPose = 100000;
         for (J = 0; J <= 8; ++J)
         {
@@ -169,32 +202,63 @@ function bool SelectAmmoTrack(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
             || VSize(Entry - AtNotify) <= 0.1
             || VSize(Entry - SeatLocal) <= VSize(AtNotify - SeatLocal) + 0.1) continue;
         Score = SeatScore(AtNotify, AtNotifyQ);
-        if (Score < BestScore) { BestScore = Score; AmmoTrack = Candidate; }
+        if (Score < BestScore) { BestScore = Score; AmmoTrack = Candidate; BestEntry = CandidateEntry; }
     }
+    // The insertion path and the carried hand are both read from this time.
+    EntryTime = BestEntry;
     return AmmoTrack != '';
 }
 
 // Ammo timing and full visual seating are different authored events on these
-// rigs. Keep SeatTime unchanged, and look only shortly after it for the same
-// incoming magazine's closest seated pose. Never search the earlier ejection.
+// rigs: the notify can land after the seat (FAMAS Reload_Half seats at 1.20 s,
+// notifies at 1.25 s, by when the stock wrist has turned off the magazine, #130)
+// or just before it (the Kriss tactical clip). Keep SeatTime unchanged and end
+// the insert at the first time the incoming magazine is at its seat, searching
+// a short window either side of the notify. The window never reaches back past
+// EntryTime, so it cannot find the earlier ejection.
 function FindInsertEnd(KFSkeletalMeshComponent M, AnimNodeSequence Seq, name Root,
     float SequenceLength, float RateScale)
 {
     local int I;
     local vector Position;
     local quat Rotation;
-    local float Time, EndTime, Score, BestScore;
+    local float Time, StartTime, EndTime, Score, BestScore;
     InsertEndTime = SeatTime;
+    StartTime = FMax(EntryTime, SeatTime - 0.16 * RateScale);
     EndTime = FMin(SequenceLength, SeatTime + 0.16 * RateScale);
     BestScore = 100000;
-    for (I = 0; I <= 32; ++I)
+    for (I = 0; I <= 64; ++I)
     {
-        Time = SeatTime + (EndTime - SeatTime) * float(I) / 32.0;
+        Time = StartTime + (EndTime - StartTime) * float(I) / 64.0;
         Pose(M, Seq, Time);
         Relative(M, Root, AmmoTrack, Position, Rotation);
         Score = SeatScore(Position, Rotation);
+        // Strictly better only: of equal poses the earliest is kept.
         if (Score < BestScore) { BestScore = Score; InsertEndTime = Time; }
         if (VSize(Position - SeatLocal) <= 0.05 && RotationMatch(Rotation, SeatLocalQ) >= 0.99996192) break;
+    }
+}
+
+// Shorten a long carry approach to the final authored insertion mouth. The
+// normal path guard still rejects discontinuities; no seat tolerance changes.
+function TrimLongInsertApproach(KFSkeletalMeshComponent M, AnimNodeSequence Seq, name Root,
+    optional float MaximumLength=30)
+{
+    local int I;
+    local float Time;
+    local vector Position;
+    local quat Rotation;
+    Pose(M, Seq, EntryTime);
+    Relative(M, Root, AmmoTrack, Position, Rotation);
+    if (VSize(Position - SeatLocal) < MaximumLength) return;
+    for (I = 1; I <= 64; ++I)
+    {
+        Time = InsertEndTime - (InsertEndTime - EntryTime) * float(I) / 64.0;
+        Pose(M, Seq, Time);
+        Relative(M, Root, AmmoTrack, Position, Rotation);
+        if (VSize(Position - SeatLocal) < 8) continue;
+        EntryTime = Time;
+        return;
     }
 }
 
@@ -212,7 +276,7 @@ function float RackFingerContact(KFSkeletalMeshComponent M, name Rack, name Hand
     Distance = 100000;
     Side = Hand == 'RightHand_1stP' ? "Right" : "Left";
     ActionPosition = M.GetBoneLocation(Rack);
-    for (I = 0; I < 4; ++I)
+    for (I = 0; I < (bRackThumbContact ? 5 : 4); ++I)
     {
         switch (I)
         {
@@ -220,6 +284,7 @@ function float RackFingerContact(KFSkeletalMeshComponent M, name Rack, name Hand
             case 1: Digit = "Middle"; break;
             case 2: Digit = "Ring"; break;
             case 3: Digit = "Pinky"; break;
+            case 4: Digit = "Thumb"; break;
         }
         for (Joint = 2; Joint <= 3; ++Joint)
         {
@@ -235,7 +300,7 @@ function bool FindRackHand(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     name Anim, name Root, name Rack, name Hand, optional bool bAllowRotation)
 {
     local int I;
-    local float StartTime, Time, FingerDistance, HandDistance, Score, BestScore, Travel;
+    local float StartTime, Time, FingerDistance, HandDistance, Score, BestScore, Travel, ContactLimit;
     local vector Position, HandPosition;
     local quat Rotation, HandRotation;
     local AnimSequence Clip;
@@ -252,6 +317,10 @@ function bool FindRackHand(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     // plateau can also show the released, open hand rather than its pull grip.
     if (ActionKind == 1) StartTime = 0;
     else if (StartTime <= 0 || StartTime >= Clip.SequenceLength) return false;
+    // The P90's charging-handle pivot is inset from its thumb contact surface.
+    // Both stock pulls put the thumb 7.1-7.3 UU away; retain the tighter default
+    // on other rigs and keep all travel/rotation checks unchanged.
+    ContactLimit = M.SkeletalMesh.Name == 'Wep_1stP_P90_Rig' ? 8 : 7;
     BestScore = 100000;
     for (I = 0; I <= 64; ++I)
     {
@@ -274,7 +343,7 @@ function bool FindRackHand(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
         FingerDistance = RackFingerContact(M, Rack, Hand);
         // Positive comparisons also reject invalid (NaN) poses. Keep this
         // cosmetic gate independent from the proven action mechanics.
-        if (!(HandDistance >= 0 && HandDistance <= 24 && FingerDistance >= 0 && FingerDistance <= 7
+        if (!(HandDistance >= 0 && HandDistance <= 24 && FingerDistance >= 0 && FingerDistance <= ContactLimit
             && RotationMatch(HandRotation, HandRotation) >= 0.95
             && RotationMatch(HandRotation, HandRotation) <= 1.05)) continue;
         Score = FingerDistance + HandDistance * 0.05;
@@ -307,6 +376,7 @@ function SampleRack(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     // An open bolt is cocked wherever the clip does it (the Tommy Gun and
     // Mac-10 cock before the magazine change), so its whole clip is measured.
     if (ActionKind == 1) From = 0;
+    if (RackSourceHand != '') Hand = RackSourceHand;
     if (Hand == '') Hand = 'LeftHand_1stP';
     if (Rack == '' || ActionKind == 2) { RackFailureReason = "not-requested"; return; }
     if (M.MatchRefBone(Rack) < 0) { RackFailureReason = "missing-action-bone"; return; }
@@ -332,7 +402,7 @@ function SampleRack(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
         Distance = VSize(Offset);
         if (Distance > RackStroke) { RackStroke = Distance; Farthest = Offset; }
     }
-    if (RackStroke < 0.5 || RackStroke > 15)
+    if (RackStroke < 0.5 || RackStroke > (MaxRackStroke > 0 ? MaxRackStroke : 15.0))
     { RackFailureReason = "action-travel-out-of-range"; return; }
     RackAxisLocal = Farthest / RackStroke;
     // Idle is an open bolt's cocked (rear) stop and its farthest point is the
@@ -530,25 +600,146 @@ function bool SampleBoxInsert(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     return true;
 }
 
-// The HX25's normal clip brings the shell to the loading hand late in its
-// insertion. Carry it at the first actual contact, independently of the path.
-function bool FindLateCarryGrip(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
+// Long rounds and paired shell grips contact the geometry away from its bone
+// origin. Use the existing bone-local prop bounds only for carry sampling;
+// rack controls retain their own pivot/contact policy.
+function float CarryFingerContact(KFSkeletalMeshComponent M, name Ammo, name Hand,
+    vector Centre, vector Extent)
+{
+    local int I, Joint;
+    local name Finger;
+    local string Side, Digit;
+    local float Distance;
+    local vector AmmoPosition, At, Outside;
+    local quat InvAmmo;
+    if (!class'VRReloadMotionGuard'.static.ValidPosition(Centre)
+        || !(VSize(Centre) <= 50 && Extent.X > 0 && Extent.Y > 0 && Extent.Z > 0
+            && Extent.X < 50 && Extent.Y < 50 && Extent.Z < 50))
+        return RackFingerContact(M, Ammo, Hand);
+    AmmoPosition = M.GetBoneLocation(Ammo);
+    InvAmmo = QuatInvert(M.GetBoneQuaternion(Ammo));
+    if (!class'VRReloadMotionGuard'.static.ValidPosition(AmmoPosition)
+        || !class'VRHandRolePose'.static.ValidQuaternion(InvAmmo)) return 100000;
+    Distance = 100000;
+    Side = Hand == 'RightHand_1stP' ? "Right" : "Left";
+    for (I = 0; I < 4; ++I)
+    {
+        switch (I)
+        {
+            case 0: Digit = "Index"; break;
+            case 1: Digit = "Middle"; break;
+            case 2: Digit = "Ring"; break;
+            case 3: Digit = "Pinky"; break;
+        }
+        for (Joint = 2; Joint <= 3; ++Joint)
+        {
+            Finger = name(Side $ "Hand" $ Digit $ Joint $ "_1stP");
+            if (M.MatchRefBone(Finger) < 0) continue;
+            At = QuatRotateVector(InvAmmo, M.GetBoneLocation(Finger) - AmmoPosition) - Centre;
+            if (!class'VRReloadMotionGuard'.static.ValidPosition(At)) continue;
+            Outside.X = FMax(Abs(At.X) - Extent.X, 0);
+            Outside.Y = FMax(Abs(At.Y) - Extent.Y, 0);
+            Outside.Z = FMax(Abs(At.Z) - Extent.Z, 0);
+            Distance = FMin(Distance, VSize(Outside));
+        }
+    }
+    return Distance;
+}
+
+// How far the ammunition centre slides in the wrist's frame per ~1/30 s of
+// stock motion. A hand carrying a round holds it still; a round sweeping
+// through an open palm mid-transfer passes the wrist closely but never rests.
+function float HeldMotion(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
+    name Ammo, name Hand, float Time, vector Centre)
+{
+    local vector Before, After, At;
+    local quat Q;
+    local float Step;
+    Step = 0.035 * Seq.AnimSeq.RateScale;
+    Pose(M, Seq, FMax(Time - Step, 0));
+    Relative(M, Hand, Ammo, At, Q);
+    Before = At + QuatRotateVector(Q, Centre);
+    Pose(M, Seq, FMin(Time + Step, Seq.AnimSeq.SequenceLength));
+    Relative(M, Hand, Ammo, At, Q);
+    After = At + QuatRotateVector(Q, Centre);
+    return VSize(After - Before) * 0.5;
+}
+
+// Read one authored carry contact. Failed candidates leave the caller's pair
+// intact; ammo and wrist must come from the same time and root frame.
+function bool ReadCarryGrip(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
+    name Root, name Ammo, name Hand, float Time, out vector AmmoP, out quat AmmoQ,
+    out vector HandP, out quat HandQ, out float Score, vector Centre, vector Extent)
+{
+    local vector Wrist, At, HandAt;
+    local quat WristQ, Q, HandRotation;
+    local float FingerDistance, WristDistance, Motion;
+    Motion = HeldMotion(M, Seq, Ammo, Hand, Time, Centre);
+    Pose(M, Seq, Time);
+    Relative(M, Ammo, Hand, Wrist, WristQ);
+    FingerDistance = CarryFingerContact(M, Ammo, Hand, Centre, Extent);
+    WristDistance = VSize(Wrist);
+    if (!(FingerDistance >= 0 && FingerDistance <= 6 && WristDistance >= 0 && WristDistance <= 24)
+        || !class'VRHandRolePose'.static.ValidQuaternion(WristQ)) return false;
+    Relative(M, Root, Ammo, At, Q);
+    Relative(M, Root, Hand, HandAt, HandRotation);
+    if (!class'VRReloadMotionGuard'.static.ValidPosition(At)
+        || !class'VRReloadMotionGuard'.static.ValidPosition(HandAt)
+        || !class'VRHandRolePose'.static.ValidQuaternion(Q)
+        || !class'VRHandRolePose'.static.ValidQuaternion(HandRotation)) return false;
+    AmmoP = At; AmmoQ = Q; HandP = HandAt; HandQ = HandRotation;
+    // Steadiness dominates: the HX25's pass through the palm (f102, 5.7 UU
+    // from the wrist) otherwise outscores its rigid thumb-index pinch.
+    Score = FingerDistance + WristDistance + 8 * Motion;
+    return true;
+}
+
+// Free carry can precede the short insertion track (rifles), or acquire its
+// contact late in it (HX25). Preserve a valid entry grip; otherwise prefer a
+// strong nearby earlier grip, then the first later contact. Never move Path.
+function bool FindCarryGrip(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     name Root, name Ammo, name Hand, float StartTime, float EndTime,
-    out float Time, out vector AmmoP, out quat AmmoQ, out vector HandP, out quat HandQ)
+    out float Time, out vector AmmoP, out quat AmmoQ, out vector HandP, out quat HandQ,
+    optional vector Centre, optional vector Extent, optional bool bLateOnly)
 {
     local int I;
-    local float Candidate;
-    local vector Wrist;
-    local quat WristQ;
-    for (I = 0; I <= 32; ++I)
+    local float Candidate, Earliest, Score, BestScore, BestTime;
+    local vector At, HandAt;
+    local quat Q, HandRotation;
+    if (M == None || M.SkeletalMesh == None || Seq == None || Seq.AnimSeq == None
+        || M.MatchRefBone(Root) < 0 || M.MatchRefBone(Ammo) < 0 || M.MatchRefBone(Hand) < 0
+        || !(StartTime >= 0 && EndTime >= StartTime && EndTime <= Seq.AnimSeq.SequenceLength
+            && Seq.AnimSeq.SequenceLength < 100000000
+            && Seq.AnimSeq.RateScale > 0 && Seq.AnimSeq.RateScale < 100000000)) return false;
+    BestScore = 100000;
+    BestTime = -1;
+    if (ReadCarryGrip(M, Seq, Root, Ammo, Hand, StartTime, AmmoP, AmmoQ, HandP, HandQ, Score, Centre, Extent))
+    {
+        Time = StartTime;
+        // HX25 hands the grenade across near the insertion marker. A merely
+        // nearby finger at entry is weaker than its earlier carrying grip.
+        if (M.SkeletalMesh.Name != 'Wep_1stP_HX25_Pistol_Rig') return true;
+        BestScore = Score; BestTime = StartTime;
+    }
+    Earliest = FMax(StartTime - 0.8 * Seq.AnimSeq.RateScale, 0);
+    for (I = 1; !bLateOnly && I <= 64; ++I)
+    {
+        Candidate = StartTime - (StartTime - Earliest) * float(I) / 64.0;
+        if (!ReadCarryGrip(M, Seq, Root, Ammo, Hand, Candidate, At, Q, HandAt, HandRotation, Score, Centre, Extent)
+            || Score >= BestScore) continue;
+        BestScore = Score; BestTime = Candidate;
+    }
+    if (BestTime >= 0)
+    {
+        if (!ReadCarryGrip(M, Seq, Root, Ammo, Hand, BestTime, AmmoP, AmmoQ, HandP, HandQ, Score, Centre, Extent)) return false;
+        Time = BestTime;
+        return true;
+    }
+    for (I = 1; I <= 32; ++I)
     {
         Candidate = StartTime + (EndTime - StartTime) * float(I) / 32.0;
-        Pose(M, Seq, Candidate);
-        Relative(M, Ammo, Hand, Wrist, WristQ);
-        if (RackFingerContact(M, Ammo, Hand) > 6 || VSize(Wrist) > 24) continue;
+        if (!ReadCarryGrip(M, Seq, Root, Ammo, Hand, Candidate, AmmoP, AmmoQ, HandP, HandQ, Score, Centre, Extent)) continue;
         Time = Candidate;
-        Relative(M, Root, Ammo, AmmoP, AmmoQ);
-        Relative(M, Root, Hand, HandP, HandQ);
         return true;
     }
     return false;
@@ -592,7 +783,7 @@ function bool SamplePumpInsert(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     local InsertPose Point;
     local int I, J;
     local bool bFoundNotify, bFoundContact, bChooseCarry;
-    local float LatestTime, EarliestTime, Distance, HandDistance, BestTime, BestScore, Score, CandidateLength;
+    local float LatestTime, EarliestTime, Distance, HandDistance, BestTime, BestScore, Score, CandidateLength, CarrySearchEnd;
     local vector Position, HandPosition, PreviousPosition, PathPosition;
     local quat Rotation, HandRotation, PathRotation;
     Reset();
@@ -629,7 +820,7 @@ function bool SamplePumpInsert(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     // The MB500 port clip leaves a fingertip near the shell after opening
     // the palm. Among valid authored contacts choose the closest carry pose,
     // rather than the latest withdrawn hand. Tube inserts retain their timing.
-    bChooseCarry = M.SkeletalMesh.Name == 'Wep_1stP_MB500_Rig'
+    bChooseCarry = class'VRPumpCatalog'.static.CoversMesh(M.SkeletalMesh.Name)
         && (Anim == 'Reload_Open_Shell' || Anim == 'Reload_Open_Shell_Elite');
     BestScore = 100000;
     for (I = 0; I <= 64; ++I)
@@ -667,6 +858,15 @@ function bool SamplePumpInsert(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     }
     EntryTime = BestTime;
     if (!bFoundContact) { FailureReason = "no-stock-shell-grip"; return false; }
+    CarrySearchEnd = EntryTime;
+    // The M4 drops its first shell from an overhead carry into the open port,
+    // then pushes it forward. Its best finger grip is about 11 UU above the
+    // receiver; that is the carry pose, not the physical insertion mouth.
+    // Use the authored final approach for acquisition while retaining the
+    // exact earlier carry search and finger pose below. Other shotguns keep
+    // their existing first-port and tube-loading choreography.
+    if (bChooseCarry && M.SkeletalMesh.Name == 'Wep_1stP_M4Shotgun_Rig')
+        EntryTime = FMax(EntryTime, SeatTime - FClamp(EntryLead, 0, 0.45) * Clip.RateScale);
     for (I = 0; I <= 16; ++I)
     {
         Pose(M, Seq, EntryTime + (InsertEndTime - EntryTime) * float(I) / 16.0);
@@ -686,7 +886,7 @@ function bool SamplePumpInsert(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     Pose(M, Seq, EntryTime);
     Relative(M, Root, Hand, HandLocal, HandLocalQ);
     CarryTime = EntryTime; CarryLocal = EntryLocal; CarryLocalQ = EntryLocalQ;
-    if ((M.SkeletalMesh.Name == 'Wep_1stP_MB500_Rig' || M.SkeletalMesh.Name == 'Wep_1stP_M4Shotgun_Rig')
+    if (class'VRPumpCatalog'.static.CoversMesh(M.SkeletalMesh.Name)
         && (Anim == 'Reload_Open_Shell' || Anim == 'Reload_Open_Shell_Elite'))
     {
         // Search only before entry: the later open palm and the returning
@@ -694,7 +894,7 @@ function bool SamplePumpInsert(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
         BestScore = 100000;
         for (I = 0; I <= 64; ++I)
         {
-            LatestTime = EntryTime * float(I) / 64.0;
+            LatestTime = CarrySearchEnd * float(I) / 64.0;
             Pose(M, Seq, LatestTime);
             Relative(M, AmmoTrack, Hand, HandPosition, HandRotation);
             Distance = RackFingerContact(M, AmmoTrack, Hand);
@@ -768,6 +968,16 @@ function bool Sample(KFSkeletalMeshComponent M, AnimNodeSequence Seq, name Anim,
     if (!SelectAmmoTrack(M, Seq, Root, Loaded, Spare, Clip.SequenceLength, Clip.RateScale))
     { FailureReason = "no-incoming-magazine"; return false; }
     FindInsertEnd(M, Seq, Root, Clip.SequenceLength, Clip.RateScale);
+    // The reconstructor's empty reload covers more than 30 UU in the fixed
+    // entry lead. Keep its authored final eight-unit approach, like box inserts,
+    // instead of rejecting an otherwise valid reload for the long hand reach.
+    if (M.SkeletalMesh.Name == 'Wep_1stP_HMTech_Mine_Reconstructor_Rig')
+        TrimLongInsertApproach(M, Seq, Root);
+    // Corrupter's stock carry begins almost thirty units below its well.
+    // Only its final approach is an insertion contact, as for box feeds.
+    // Its separately sampled earlier carry grip still follows the right hand.
+    if (M.SkeletalMesh.Name == 'Wep_1stP_ParasiteImplanter_Rig')
+        TrimLongInsertApproach(M, Seq, Root, 8);
     for (I = 0; I <= 16; ++I)
     {
         Pose(M, Seq, EntryTime + (InsertEndTime - EntryTime) * float(I) / 16.0);

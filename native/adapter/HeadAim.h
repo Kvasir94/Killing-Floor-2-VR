@@ -75,11 +75,6 @@ public:
     void ConsumeRoomMovement(Vec3 acceptedWorld, const AppliedHeadAim& before);
     void PivotTurn(const xr::FrameState& frame, const AppliedHeadAim& before,
                    const AppliedHeadAim& after);
-    // The engine already mapped controller orientation through a portal.
-    // Fold the old applied HMD rotation into the tracking reference so eye
-    // and hand residuals remain continuous without adding that rotation twice.
-    bool RebasePortal(std::uintptr_t controller, const pinned::NativeRotator& before,
-                      const xr::FrameState& frame);
     // A stock map/server relocation replaced controller rotation absolutely.
     // Keep its camera heading, but restore the level body underneath the HMD
     // pitch already accounted for by Commit. No tracking origin is recaptured.

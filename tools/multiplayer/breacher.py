@@ -2,6 +2,7 @@
 from pathlib import Path
 import hashlib
 import json
+import stable_features
 import re
 
 PROTOCOL = 1
@@ -21,6 +22,8 @@ def prepare(args, root, release):
     args.breacher_content = None
     if not getattr(args, "breacher", False):
         return None
+    if not stable_features.experimental_content_enabled():
+        raise RuntimeError("Breacher is parked in this stable candidate")
     if release.get("breacher_protocol") != PROTOCOL:
         raise RuntimeError("Breacher requires the experimental core build; this release has no Breacher compatibility support.")
     folder = Path(root) / "optional/breacher"
@@ -52,6 +55,8 @@ def descriptor(args):
 def options(args):
     if not getattr(args, "breacher", False):
         return ""
+    if not stable_features.experimental_content_enabled():
+        raise RuntimeError("Breacher is parked in this stable candidate")
     contract = descriptor(args)
     if contract is None:
         raise RuntimeError("Breacher package must be validated before preparing a launch URL.")
@@ -123,7 +128,7 @@ def configure_content(configs, args, *, game_root=None):
     from session import read_ini, set_ini
     configure_dev_level(configs, args)
     path = Path(configs) / "KFEngine.ini"
-    enabled = bool(getattr(args, "breacher", False) and content)
+    enabled = stable_features.experimental_content_enabled() and bool(getattr(args, "breacher", False) and content)
     if not path.is_file() and not enabled:
         return
     text = read_ini(path)

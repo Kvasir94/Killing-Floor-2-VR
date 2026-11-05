@@ -7,14 +7,21 @@ online acceptance. This workflow supports desktop joining; use Windows for VR.
 1. Install KF2 in Steam. In **Properties > Compatibility**, select a Steam Play
    compatibility tool, such as Proton. Start ordinary KF2 once, reach the menu,
    then quit.
-2. If you downloaded LinuxKit, extract the kit, then extract its enclosed full
-   playable ZIP into a fresh folder accessible to Steam. If your host supplied
-   the full playable ZIP directly, extract that instead. Keep the whole `app`
-   directory together. Use its `app/tools/multiplayer/linux-desktop.sh`, rather
-   than the standalone helper beside the kit's nested ZIP. No additional
-   installation script, system Python, or package copying is required.
-3. In **Properties > General > Launch Options**, save your previous text, then
-   enter this line, replacing both paths:
+2. If you downloaded LinuxKit, extract the kit and run this in its directory:
+
+   ```sh
+   bash linux-desktop.sh --setup
+   ```
+
+   Setup finds the single adjacent full playable ZIP and extracts it into a new
+   `<ZIP-name>-linux` folder. This convenience needs `python3`; you can instead
+   extract the full ZIP yourself. Setup refuses to overwrite an existing folder.
+   If your host supplied a full playable ZIP directly, extract it and run
+   `bash app/tools/multiplayer/linux-desktop.sh --setup` from its top directory.
+   Keep the whole `app` directory together.
+3. Setup prints the exact Steam Launch Options. In **Properties > General >
+   Launch Options**, save your previous text, then paste the printed line. Setup
+   does not edit Steam settings. You can also enter the line manually:
 
    ```text
    bash "/path/KF2VR-release/app/tools/multiplayer/linux-desktop.sh" --game-root "/path/steamapps/common/killingfloor2" --launch %command%
@@ -24,6 +31,13 @@ online acceptance. This workflow supports desktop joining; use Windows for VR.
    it empty to start ordinary KF2. The helper preserves Steam's Proton wrapper
    and starts the packaged desktop launcher, which verifies package integrity
    and the exact Steam executable before starting the game.
+
+Without `--game-root`, the helper searches Steam's usual Linux and Flatpak roots
+and their configured libraries. It requires exactly one KF2 installation. If it
+finds none or more than one, specify `--game-root "/path/to/killingfloor2"` during
+setup or in Launch Options. `--package "/path/release/app"` selects an already
+extracted release for setup. Ordinary launching needs no system Python; Proton
+runs the release's packaged Python.
 
 Install a desktop dialog tool through your normal Linux setup if neither Zenity
 nor KDialog is available. A launch from a terminal can use its terminal prompt.

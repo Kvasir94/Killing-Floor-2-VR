@@ -1,4 +1,6 @@
 """Launch real role configuration with small local Workshop package fixtures."""
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -103,7 +105,7 @@ class WorkshopLoadoutTests(unittest.TestCase):
             self.assertTrue(choose_options(args, ["KF-BurningParis"],
                 read=lambda _: next(answers), write=lambda _: None))
             self.assertTrue(args.inventory_focus)
-            self.assertIn("?VRInventoryFocus=1", host_url(args))
+            self.assertIn("?VRInventoryFocus=0", host_url(args))
             loadout.save_preferences(args)
             again = self.args(root)
             self.assertNotIn("lti", again.mods)
@@ -119,6 +121,21 @@ class WorkshopLoadoutTests(unittest.TestCase):
             diagnostic = self.args(root, "--replay-teammate")
             self.assertEqual(diagnostic.mods, [])
             self.assertNotIn("Mutator=", host_url(diagnostic))
+
+    def test_host_grab_permissions_default_on_and_saved_choice_reaches_the_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fresh = self.args(root)
+            self.assertEqual((True, True), (fresh.zed_grabs, fresh.gravity_grab))
+            self.assertIn("?VRMultiplayerGrabs=1?VRGravityPull=1", host_url(fresh))
+            loadout.save_preferences(self.args(root, "--no-zed-grabs", "--no-gravity-grab"))
+            saved = self.args(root)
+            self.assertEqual((False, False), (saved.zed_grabs, saved.gravity_grab))
+            self.assertIn("?VRMultiplayerGrabs=0?VRGravityPull=0", host_url(saved))
+            overridden = self.args(root, "--zed-grabs")
+            self.assertIn("?VRMultiplayerGrabs=1?VRGravityPull=0", host_url(overridden))
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                friends.parse_options(["--solo", "--vr", "--no-zed-grabs"])
 
     def test_every_launcher_selection_survives_the_next_launch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -151,14 +168,14 @@ class WorkshopLoadoutTests(unittest.TestCase):
             scenario = friends.parse_options(["--host", "--vr", "--prepare-only", "--replay-teammate"])
             scenario.profile_root = root / "profile"
             loadout.load_preferences(scenario)
-            self.assertEqual(("KF-BurningParis", "normal", "short"),
+            self.assertEqual(("KF-BurningParis", "normal", "medium"),
                              (scenario.map, scenario.difficulty, scenario.game_length))
             self.assertEqual([], scenario.mods)
 
     def test_installs_all_required_packages_and_configures_both_roles(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            args = self.args(root, "--mods", "ukfp,yas", "--map", "KF-TF2_Gorge")
+            args = self.args(root, "--mods", "ukfp,yas", "--map", "KF-TF2_Gorge", "--no-workshop-desktop")
             game = root / "steamapps/common/killingfloor2"
             requested = [value[1] for value in loadout.MODS.values()] + [loadout.MAPS[args.map]]
             for item in requested:
@@ -190,6 +207,9 @@ class WorkshopLoadoutTests(unittest.TestCase):
                     self.assertNotIn("AdminId=", read_ini(config / "KFAAL.ini"))
                     self.assertNotIn("Item=", read_ini(config / "KFLTI.ini"))
                 if role["role"] == "server":
+                    settings = read_ini(config / "KFGame.ini")
+                    self.assertIn("ServerMOTD=" + friends.WELCOME_MOTD, settings)
+                    self.assertIn("WebsiteLink=" + loadout.KF2VR_FULL_WORKSHOP_URL, settings)
                     self.assertEqual(role["args"][0], host_url(args))
                     for item in requested:
                         self.assertIn("ServerSubscribedWorkshopItems=" + item, engine)

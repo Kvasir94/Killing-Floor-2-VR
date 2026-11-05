@@ -1,7 +1,7 @@
 # Validates the optional Engineer package/art without changing ordinary runs.
 function Get-CombinedEngineerFixtureState([string]$ProjectRoot, [string]$BuildRoot) {
-    . (Join-Path $PSScriptRoot 'portal-combined.ps1')
-    $state = Get-CombinedPortalState $ProjectRoot $BuildRoot
+    . (Join-Path $PSScriptRoot 'combined-state.ps1')
+    $state = Get-CombinedBuildState $ProjectRoot $BuildRoot
     $manifest = Get-Content -LiteralPath (Join-Path $ProjectRoot 'docs/intake/install_manifest.json') -Raw | ConvertFrom-Json
     if ($state.Build.sdk_sha256 -ne $manifest.binaries.editor.sha256) {
         throw 'Combined Engineer package uses a different SDK target.'

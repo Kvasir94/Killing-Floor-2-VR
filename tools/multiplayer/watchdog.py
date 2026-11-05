@@ -8,7 +8,8 @@ import sys
 import time
 
 from native_fixture import NativeDeployment
-from session import digest
+from launch_support import digest
+from vr_config import export_session_preferences
 
 
 def api():
@@ -84,24 +85,10 @@ def main():
                     kernel.ReleaseMutex(mutex)
                 if mutex:
                     kernel.CloseHandle(mutex)
-        if record.get("vr"):
-            try:
-                from vr_config import export_preferences
-                driver = next(r for r in record.get("roles", []) if r["role"] == "driver")
-                if driver.get("pid"):
-                    export_preferences(Path(driver["config_root"]), network=record.get("session_mode") != "solo")
-                    record["preferences_saved"] = True
-            except (OSError, ValueError, StopIteration) as error:
-                errors.append("Could not save VR preferences: " + str(error))
-        elif record.get("vr") is False and record.get("user_config_root"):
-            try:
-                from desktop_settings import export
-                driver = next(r for r in record.get("roles", []) if r["role"] == "driver")
-                if driver.get("pid"):
-                    export(Path(driver["config_root"]), Path(record["user_config_root"]))
-                    record["preferences_saved"] = True
-            except (OSError, ValueError, StopIteration) as error:
-                errors.append("Could not save desktop settings: " + str(error))
+        try:
+            export_session_preferences(record)
+        except (OSError, ValueError) as error:
+            errors.append("Could not save preferences: " + str(error))
         record.update(status="launcher_closed_cleanup", cleanup_complete=not errors, cleanup_errors=errors)
         from friends import save_session_record
         save_session_record(record_path, record)

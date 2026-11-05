@@ -49,6 +49,7 @@ int main() {
     Expect(ParseDlssMode(L"Quality",mode) && mode==DlssMode::Quality,"parse quality");
     Expect(ParseDlssMode(L"ultra_performance",mode) && mode==DlssMode::UltraPerformance,"parse ultra performance");
     Expect(ParseDlssMode(L"DLAA",mode) && mode==DlssMode::Dlaa,"parse dlaa");
+    Expect(ParseDlssMode(L"auto",mode) && mode==DlssMode::Quality,"parse auto as quality");
     Expect(ParseDlssMode(L"",mode) && mode==DlssMode::Off,"parse empty as off");
     Expect(!ParseDlssMode(L"ultra",mode),"reject unknown mode");
 

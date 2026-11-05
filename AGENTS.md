@@ -8,6 +8,9 @@ These instructions apply to automated contributors as well as human changes.
   output, game extracts, user profiles, logs and caches stay out of Git.
 - Solo and multiplayer share gameplay defaults and launch setup; keep transport
   differences limited to what each mode needs.
+- Every playable build includes DLSS support and its pinned runtime. Rendering
+  may default to Off; do not build or package an Off-only adapter for playtesting
+  or deployment.
 - Changes to launcher switches/defaults also update `PLAY-MULTIPLAYER.md` and the
   affected launcher/package tests.
 - Build affected artifacts and run native CTest plus launcher/package checks.

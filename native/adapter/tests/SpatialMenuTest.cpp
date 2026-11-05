@@ -5,6 +5,7 @@
 #include "VRSessionInput.h"
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <string>
 using namespace kf2vr;
@@ -143,6 +144,19 @@ void MenuRenderTests() {
         if (failed=='L' || failed=='R')
             Test(sink.events.find('U')==std::string::npos,"incomplete stereo world cannot produce a mixed menu frame");
     }
+    // Startup/death have no world backdrop. Failures must still restore HUD
+    // and movie flags, and a following frame must recover without stale eyes.
+    for (const char failed:std::string("BUIX")) {
+        sink.events.clear(); sink.fail=failed;
+        Test(!RenderMenuLayers(sink,false) && sink.events.back()=='X'
+            && sink.events.find('X')==sink.events.size()-1,
+            "UI-only failure restores stock HUD state exactly once");
+        Test(sink.events.find('L')==std::string::npos && sink.events.find('R')==std::string::npos,
+            "startup/death failure cannot leak world-eye renders");
+        sink.events.clear(); sink.fail=0;
+        Test(RenderMenuLayers(sink,false) && sink.events=="BUIX",
+            "UI-only frame recovers after each partial failure");
+    }
     sink.events.clear(); sink.fail=0; sink.throwing=true;
     try { RenderMenuLayers(sink); Test(false,"expected simulated eye failure"); }
     catch (int) { Test(sink.events=="BLRX","render unwind restores hidden movie and viewport state"); }
@@ -226,17 +240,19 @@ void CurvedPanelTests() {
     Test(m.Panel().curveRadius==0,"live-world backdrop keeps the flat panel");
 }
 void SessionInputTests() {
-    Test(Near(ScaleSmoothTurnAxis(1.f,.1f),.1f),"smooth turn supports the displayed ten-percent minimum");
-    Test(Near(ScaleSmoothTurnAxis(.01f,.5f),.5f) && Near(ScaleSmoothTurnAxis(.9f,.5f),.5f),
-        "smooth turn uses the same rate for every live horizontal input");
-    Test(Near(ScaleSmoothTurnAxis(-.01f,.1f),-.1f) && ScaleSmoothTurnAxis(0.f,2.f)==0.f,
-        "smooth turn preserves direction and neutral at all speeds");
-    Test(ScaleSmoothTurnAxis(1.f,2.f)==1.f && ScaleSmoothTurnAxis(-1.0001f,2.f)==-1.f,
-        "high smooth sensitivity saturates both signs before gamepad conversion");
-    Test(Near(ScaleSmoothTurnAxis(1.f,std::numeric_limits<float>::quiet_NaN()),.5f),
-        "invalid smooth scale recovers the default");
-    Test(ScaleSmoothTurnAxis(std::numeric_limits<float>::quiet_NaN(),1.f)==0.f,
-        "invalid turn axis cannot rotate");
+    // 100% is 120 degrees a second: one second in ten 0.1 s ticks, whatever the deflection.
+    const auto yawPerSecond=[](float axis,float scale,int ticks,double seconds) {
+        SmoothTurnInput t; long long sum=0; for (int i=0;i<ticks;++i) sum+=t.Update(axis,true,scale,seconds); return sum; };
+    Test(std::llabs(yawPerSecond(1.f,1.f,10,.1)-21845)<=1 && std::llabs(yawPerSecond(.05f,1.f,10,.1)-21845)<=1,
+        "smooth turn is 120 degrees a second at 100% for any live deflection");
+    Test(std::llabs(yawPerSecond(-1.f,.75f,10,.1)+16384)<=1,"75% turns 90 degrees a second, left too");
+    Test(std::llabs(yawPerSecond(1.f,2.f,10,.1)-43690)<=1,"200% really is twice 100%");
+    Test(std::llabs(yawPerSecond(1.f,1.f,1000,.001)-21845)<=2,"fast frames carry the fraction and turn alike");
+    Test(yawPerSecond(1.f,1.f,1,5.0)==2184,"a stalled frame turns at most a tenth of a second");
+    Test(yawPerSecond(0.f,2.f,10,.1)==0 && yawPerSecond(std::numeric_limits<float>::quiet_NaN(),1.f,10,.1)==0,
+        "neutral or invalid stick cannot rotate");
+    Test(std::llabs(yawPerSecond(1.f,std::numeric_limits<float>::quiet_NaN(),10,.1)-21845)<=1,"invalid speed recovers 100%");
+    { SmoothTurnInput t; Test(t.Update(1.f,false,1.f,.1)==0,"smooth turn waits while unavailable"); }
     SnapTurnInput turn;
     Test(turn.Update(1,true,30)==0,"held stick at entry cannot turn");
     turn.Update(0,true,30);

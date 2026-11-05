@@ -78,6 +78,12 @@ inline void* Apply(std::uintptr_t base, FindObject find, const std::wstring& pac
             if (end == std::wstring::npos) break;
             pos = end + 1;
         }
+    } else if ((key == L"BodySetup" || key == L"BoundsBodies") && packageName == L"KF2VRHands"
+               && path == L"KF2VRHands.VRFloatingHandsBounds") {
+        expectedClassName = L"Engine.PhysicsAsset";
+        propertyClassName = L"Core.ArrayProperty";
+        if (value.size() < 3 || value.size() > 32768 || value.front() != L'(' || value.back() != L')'
+            || fields[3] != L"0") return nullptr;
     } else if (key == L"RawAnimationData") {
         expectedClassName = L"Engine.AnimSequence";
         propertyClassName = L"Core.ArrayProperty";

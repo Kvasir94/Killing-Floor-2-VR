@@ -10,13 +10,22 @@ Host, Join, and Desktop through that launcher are unavailable. Copying this
 desktop pack does not enable those options or change native VR support.
 
 1. Get the desktop companion pack built from the same release as the host.
-   The `KF2VR` folder contains `KF2VR.u`, `KF2VRNet.u`, and `KF2VRHands.upk`.
+   The `KF2VR` folder contains `KF2VR.u`, `KF2VRNet.u`, `KF2VRHands.upk`,
+   and the VR practice map `KF-VRRange.kfm`.
    Do not mix files from donor, older, or other local releases.
-2. Close KF2 and its launcher. Locate your Epic installation's
-   `KFGame/BrewedPC` folder explicitly.
-3. If `KFGame/BrewedPC/KF2VR` already exists, move it to a backup folder outside
-   `BrewedPC` before copying. Preserve it until the new pack is accepted.
-4. Copy the pack's whole `KF2VR` folder into `KFGame/BrewedPC`. For example:
+2. Close KF2 and its launcher. Double-click **Install KF2VR for Epic.bat**.
+   It finds completed Epic/Heroic installs or asks for the game folder. You may
+   also run `"Install KF2VR for Epic.bat" "D:\Epic Games\KillingFloor2"`.
+3. The installer verifies companion/package hashes and the exact Epic executable,
+   rechecks that KF2 is closed, and preserves an existing package folder at
+   `<game>/KF2VR-desktop-backup`, outside `BrewedPC`. Keep it until the new pack
+   is accepted; move it elsewhere before a later update. An existing backup or
+   `KFGame/BrewedPC/.KF2VR-installing` stops installation for manual recovery.
+   A failed final replacement restores the old folder. If Windows denies access,
+   rerun the BAT as Administrator; no automatic elevation or Python is required.
+4. Manual alternative: locate the Epic `KFGame/BrewedPC` folder, move any existing
+   `KF2VR` folder to a backup outside `BrewedPC`, then copy the pack's whole
+   `KF2VR` folder there. Preserve the backup until accepted. For example:
    `D:\Epic Games\KillingFloor2\KFGame\BrewedPC\KF2VR\KF2VRNet.u`.
 5. Start ordinary KF2 through Epic and join the host using the server browser
    and its normal address/password. No special Launch Options, native DLLs,
@@ -45,4 +54,4 @@ joining even when both packages advertise the same protocol number. Package
 availability does not establish cross-store authentication or runtime acceptance.
 
 The manual-copy approach follows the
-[donor Epic desktop pack](https://github.com/optimumbox/Killing-Floor-2-VR/releases/tag/v0.5.0-alpha.20261011).
+[donor Epic desktop pack](https://github.com/optimumbox/Killing-Floor-2-VR/releases/tag/v0.5.2-alpha.20261014).

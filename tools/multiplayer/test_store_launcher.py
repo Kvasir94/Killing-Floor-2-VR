@@ -114,7 +114,7 @@ class StoreLauncherTests(unittest.TestCase):
             (user/'KFGame.ini').write_text('[Stock]\nPreserve=true\n')
             before = {p.name: p.read_bytes() for p in user.iterdir()}
             args = friends.parse_options(['--store', 'epic', '--solo', '--vr', '--map', 'KF-Outpost',
-                                         '--difficulty', 'hard', '--game-length', 'long', '--no-breacher'])
+                                         '--difficulty', 'hard', '--game-length', 'long'])
             args.profile_root = root/'profile'
             workshop_loadout.load_preferences(args)
             args.address, args.password, args.mods, args.workshop_content = '127.0.0.1', 'solo-unused', [], []
@@ -124,8 +124,7 @@ class StoreLauncherTests(unittest.TestCase):
             config = Path(role['config_root'])
             url = values(read_ini(config/'KFEngine.ini'), 'URL')
             self.assertEqual('KFMainMenu', url['LocalMap'])
-            self.assertIn('?Mutator=KF2VR.VRBootstrap,KF2VR.VRDemo', url['LocalOptions'])
-            self.assertIn('?VRNormalGame=1', url['LocalOptions'])
+            self.assertNotIn('?Mutator=', url['LocalOptions'])
             self.assertIn('?Difficulty=1?GameLength=2', url['LocalOptions'])
             self.assertEqual('KF-Outpost', values(read_ini(config/'KFGame.ini'), 'KF2VR.VRSessionUI')['LocalMap'])
             self.assertTrue(all(arg.startswith('-') for arg in role['args']))

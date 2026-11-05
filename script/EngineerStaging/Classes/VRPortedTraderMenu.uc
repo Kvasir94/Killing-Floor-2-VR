@@ -10,12 +10,10 @@ function bool IsOfferedInVR(const out KFGFxObject_TraderItems.STraderItem Item)
     return class'VRPortedTraderRegistry'.static.IsPortedDefinition(Item.WeaponDef) || Super.IsOfferedInVR(Item);
 }
 
-// The fifth tab owns the ported weapons and the perkless portal gun, which
-// stock would otherwise list under every perk.
+// The fifth tab owns the ported weapons.
 function bool IsPortedTabItem(const out KFGFxObject_TraderItems.STraderItem Item)
 {
-    return class'VRPortedTraderRegistry'.static.IsPortedDefinition(Item.WeaponDef)
-        || Item.WeaponDef == class'VRWeapDef_PortalGun';
+    return class'VRPortedTraderRegistry'.static.IsPortedDefinition(Item.WeaponDef);
 }
 
 function bool ShowsInCurrentTab(const out KFGFxObject_TraderItems.STraderItem Item)

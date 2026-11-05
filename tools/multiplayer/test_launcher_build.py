@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import build_launcher
+import package
 from package import LAUNCHER_MODULES
 from release_state import digest
 
@@ -22,7 +23,13 @@ class LauncherBuildTests(unittest.TestCase):
             for name in LAUNCHER_MODULES:
                 (tools / name).write_text("# audited module\n")
             (tools / "linux-desktop.sh").write_text("#!/usr/bin/env bash\n")
-            for name in ("install-multiplayer-server.ps1", "vr-defaults.json", "dependency-pins.json"):
+            (tools / "epic_desktop_install.ps1").write_text("# standalone Epic installer\n")
+            (tools / "assets").mkdir()
+            (tools / "assets/kf2vr-icon.png").write_bytes(b"\x89PNG test icon")
+            epic = source / "tools/epic-pack"
+            epic.mkdir()
+            (epic / "Install KF2VR for Epic.bat").write_bytes(b"@echo off\r\n")
+            for name in ("install-multiplayer-server.ps1", "vr-defaults.json", "settings-definition.json", "dependency-pins.json"):
                 (source / "tools" / name).write_text("{}")
             (source / "private.log").write_text("private local data")
             (source / "release.json").write_text("private playable identity")
@@ -34,10 +41,12 @@ class LauncherBuildTests(unittest.TestCase):
             output = folder / "launcher"
             with patch.object(build_launcher, "ROOT", source), \
                  patch.object(build_launcher, "extract_verified", side_effect=extract), \
-                 patch.object(build_launcher, "add_tkinter") as tkinter, \
+                 patch.object(build_launcher, "add_qt") as qt, \
                  patch.object(build_launcher, "check_portable_launchers") as check:
                 self.assertEqual(output, build_launcher.build_launcher(output))
-                tkinter.assert_called_once_with(output / "app/runtime")
+                qt.assert_called_once_with(output / "app/runtime")
+                for name in ("LGPL-3.0.txt", "GPL-3.0.txt", "Qt-for-Python-NOTICE.txt"):
+                    self.assertTrue((output / "app/notices" / name).is_file())
                 check.assert_called_once_with(output / "app", output / "app/runtime/python.exe")
             manifest = json.loads((output / "app/launcher-build.json").read_text())
             self.assertFalse(manifest["playable"])
@@ -47,6 +56,23 @@ class LauncherBuildTests(unittest.TestCase):
             for name in ("private.log", "release.json", "Native", "Packages", "sessions"):
                 self.assertFalse((output / "app" / name).exists())
             self.assertTrue((output / "Start KF2-VR.cmd").is_file())
+            for name in ("tools/multiplayer/epic_desktop_install.ps1", "tools/epic-pack/Install KF2VR for Epic.bat"):
+                self.assertEqual((source / name).read_bytes(), (output / "app" / name).read_bytes())
+                self.assertIn("app/" + name, manifest["files_sha256"])
+
+    def test_qt_payload_is_only_what_the_launcher_loads(self):
+        for name in ("PySide6/QtCore.pyd", "PySide6/QtGui.pyd", "PySide6/QtWidgets.pyd", "PySide6/Qt6Widgets.dll",
+                     "PySide6/plugins/platforms/qwindows.dll", "shiboken6/Shiboken.pyd"):
+            self.assertTrue(package.qt_wanted(name), name)
+        for name in ("PySide6/QtWebEngineCore.pyd", "PySide6/QtSvg.pyd", "PySide6/Qt6Qml.dll", "PySide6/opengl32sw.dll",
+                     "PySide6/translations/qt_de.qm", "PySide6/plugins/styles/qmodernwindowsstyle.dll",
+                     "shiboken6/include/shiboken6/shiboken.h"):
+            self.assertFalse(package.qt_wanted(name), name)
+
+    def test_qt_wheels_are_pinned_and_verified(self):
+        for wheel in package.QT_WHEELS:
+            self.assertRegex(package.PINS[wheel]["sha256"], r"^[0-9A-F]{64}$")
+            self.assertTrue(package.PINS[wheel]["url"].startswith("https://files.pythonhosted.org/"))
 
     def test_existing_destination_is_preserved_before_assembly(self):
         with tempfile.TemporaryDirectory() as temporary:

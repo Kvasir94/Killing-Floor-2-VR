@@ -6,10 +6,6 @@
 class VRTraderCatalog extends Object abstract config(Game);
 
 var array<class<KFWeaponDefinition> > Definitions;
-// Launcher choice (Solo only): the experimental Portal Gun is for sale only
-// when the player asked for it. Portals are local, so networked games never
-// offer the gun whatever this says.
-var config bool bOfferPortalGun;
 
 static function bool Register(KFGameReplicationInfo GRI)
 {
@@ -20,9 +16,6 @@ static function bool Register(KFGameReplicationInfo GRI)
     for (I = 0; I < default.Definitions.Length; ++I)
     {
         if (GRI.TraderItems.SaleItems.Find('WeaponDef', default.Definitions[I]) != INDEX_NONE) continue;
-        // Portals are local-only: offer the gun in standalone games, and only on request.
-        if (default.Definitions[I] == class'VRWeapDef_PortalGun'
-            && (GRI.WorldInfo.NetMode != NM_Standalone || !default.bOfferPortalGun)) continue;
         // KF2's server purchase indices are bytes.
         if (GRI.TraderItems.SaleItems.Length + Additions.Length >= 255) break;
         Entry.WeaponDef = default.Definitions[I];
@@ -51,6 +44,5 @@ static function bool IsVROnly(class<KFWeaponDefinition> Definition)
 defaultproperties
 {
     Definitions(0)=class'VRWeapDef_Tomahawk'
-    Definitions(1)=class'VRWeapDef_PortalGun'
-    Definitions(2)=class'VRWeapDef_TomahawkSecond'
+    Definitions(1)=class'VRWeapDef_TomahawkSecond'
 }

@@ -88,8 +88,10 @@ def prepare_session(existing,arguments,broker):
     keys={key(arg) for arg in arguments}
     if '-kf2vr-probe' not in keys or '-kf2vr-stereo' not in keys:
         raise ValueError('Epic VR startup requires both proxy opt-in and stereo flags')
-    if not keys.intersection({'-onethread','-kf2vr-threaded-render'}):
-        raise ValueError('Epic VR startup requires an explicit supported render mode')
+    if ('-kf2vr-threaded-render' in keys) == ('-onethread' in keys):
+        raise ValueError('Epic VR startup requires exactly one render thread mode')
+    if '-kf2vr-threaded-render' in keys and any(key(arg) == '-onethread' for arg in tokens(existing)):
+        raise ValueError('Remove -onethread from existing Epic Launch Options before starting threaded VR')
     if not {'-engineini','-gameini','-inputini','-systemsettingsini'}.issubset(keys):
         raise ValueError('Epic VR startup requires isolated session INI paths')
     if any('replay' in arg.casefold() for arg in arguments if arg.startswith('-')):

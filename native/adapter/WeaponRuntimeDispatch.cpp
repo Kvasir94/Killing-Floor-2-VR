@@ -3,6 +3,7 @@
 #include "ScriptField.h"
 #include "MagazineFeedState.h"
 #include "EmptyMagazineState.h"
+#include "WeaponReadiness.h"
 
 namespace kf2vr::adapter {
 namespace {
@@ -32,6 +33,23 @@ bool AuditedMagazineWeapon(GameScript& script, void* weapon) {
         L"KFWeap_AssaultRifle_Medic",
         L"KFWeap_Pistol_G18C",
         L"KFWeap_AssaultRifle_FNFal",
+        L"KFWeap_Shotgun_S12",
+        L"KFWeap_AssaultRifle_M16M203",
+        L"KFWeap_SMG_G18",
+        L"KFWeap_AssaultRifle_HRGIncendiaryRifle",
+        L"KFWeap_AssaultRifle_HRGTeslauncher",
+        L"KFWeap_AssaultRifle_MedicRifleGrenadeLauncher",
+        L"KFWeap_AssaultRifle_FAMAS",
+        L"KFWeap_HRG_93R",
+        L"KFWeap_Pistol_AF2011",
+        // Exact stock-derived single members, with their own feed/runtime.
+        // Aggregate dual actors never satisfy this admission.
+        L"VRWeap_Paired9mm",
+        L"VRWeap_PairedDeagle",
+        L"VRWeap_PairedColt1911",
+        L"VRWeap_PairedG18C",
+        L"VRWeap_Paired93R",
+        L"VRWeap_PairedAF2011",
     };
     for (const auto* type:classes) if (name==script.Intern(type)) return true;
     return false;
@@ -174,23 +192,36 @@ bool ResolveItemPresenter(GameScript& script, void* bridge, void* pawn,
 
 bool MagazineFeedBlocksShot(GameScript& script, void* bridge, void* pawn,
                              void* weapon, void* function) {
-    if (!weapon || !IsDeclaredFunction(script,weapon,function,L"KFWeapon")) return false;
+    // Lazer Cutter, Ballistic Bouncer and Mine Reconstructor implement their
+    // own FireAmmunition without entering the KFWeapon body. Check readiness
+    // before derived/state bodies as well as Super; these checks pay nothing.
+    if (!script.IsClass(weapon,L"KFWeapon") ||
+        GameScript::ObjectName(function)!=script.Intern(L"FireAmmunition")) return false;
     auto* registry=Registry(script,bridge,pawn);
     if (!registry) return false;
     auto* runtime=Runtime(script,registry,weapon);
     if (!runtime) return false;
     const auto mode=script.Read<std::uint8_t>(weapon,L"CurrentFireMode");
-    if (mode>1 || !(script.Read<int>(runtime,L"MagazineFeedModeMask") & (1<<mode))) return false;
-    const EmptyMagazineState empty{script.Read<int>(runtime,L"EmptyMagazineFlags")};
-    if (empty.BlocksFire()) return true;
-    MagazineFeedState state{script.Read<int>(runtime,L"MagazineFeedFlags"),
-                            script.Read<int>(runtime,L"MagazineFeedLastAmmo")};
-    if (!(state.flags&MagazineFeedState::Ready)) return false;
+    WeaponReadiness state;
+    if (mode==1 && script.IsClass(weapon,L"KFWeap_AssaultRifle_FAMAS")) {
+        const auto flags=script.Read<int>(runtime,L"SecondaryMagazineFlags");
+        state.secondaryBlocked=script.Read<int>(runtime,L"SecondaryMagazinePending")!=0 || (flags&2)!=0
+            || script.Read<int>(runtime,L"SecondaryShotCyclePending")!=0;
+    }
+    state.cylinderClosePending=script.Read<int>(runtime,L"M32ClosePending")>0;
+    // A paid finishing control survives reload/presenter interruption. The
+    // separate mask retains same-ammo custom beams across magazine resets.
+    state.finishProfileToken=script.Read<int>(runtime,L"FinishProfileToken");
+    state.finishModeMask=script.Read<int>(runtime,L"FinishModeMask");
+    state.feedModeMask=script.Read<int>(runtime,L"MagazineFeedModeMask");
+    state.empty.flags=script.Read<int>(runtime,L"EmptyMagazineFlags");
+    state.feed={script.Read<int>(runtime,L"MagazineFeedFlags"),script.Read<int>(runtime,L"MagazineFeedLastAmmo")};
+    const auto before=state.feed;
     const auto ammo=script.Read<int>(weapon,L"AmmoCount");
-    if (!state.Apply(MagazineFeedState::Event::Observe,ammo)) return false;
-    script.Write(runtime,L"MagazineFeedFlags",state.flags);
-    script.Write(runtime,L"MagazineFeedLastAmmo",state.lastAmmo);
-    return state.BlocksFire(ammo);
+    const auto blocked=state.BlocksShot(mode,ammo,script.Read<int>(runtime,L"AmmoRules")!=0);
+    if (state.feed.flags!=before.flags) script.Write(runtime,L"MagazineFeedFlags",state.feed.flags);
+    if (state.feed.lastAmmo!=before.lastAmmo) script.Write(runtime,L"MagazineFeedLastAmmo",state.feed.lastAmmo);
+    return blocked;
 }
 
 void CompleteMagazineShot(GameScript& script, void* bridge, void* pawn,
@@ -201,6 +232,12 @@ void CompleteMagazineShot(GameScript& script, void* bridge, void* pawn,
     auto* runtime=Runtime(script,registry,weapon);
     if (!runtime) return;
     const auto mode=script.Read<std::uint8_t>(weapon,L"CurrentFireMode");
+    if (mode==1 && (script.Read<int>(runtime,L"SecondaryMagazineFlags")&1)) {
+        script.Write(runtime,L"SecondaryMagazineFlags",3);
+        return;
+    }
+    if (mode==1 && script.IsClass(weapon,L"KFWeap_AssaultRifle_FAMAS"))
+        script.Invoke(runtime,script.FindFunction(runtime,L"SecondaryShotFired"),nullptr);
     if (mode>1 || !(script.Read<int>(runtime,L"MagazineFeedModeMask") & (1<<mode))) return;
     MagazineFeedState state{script.Read<int>(runtime,L"MagazineFeedFlags"),
                             script.Read<int>(runtime,L"MagazineFeedLastAmmo")};
@@ -482,8 +519,12 @@ void WeaponEffectsScope::Enter(void* bridge, void* pawn, void* object, void* fun
         savedDefensiveWeapon_=script_.Read<void*>(pawn,L"MyKFWeapon");
         if (parameters.weapon) {
             auto* runtime=Runtime(script_,registry,parameters.weapon);
-            if (!runtime || !CurrentPose(script_,registry,runtime) ||
-                !script_.IsClass(parameters.weapon,L"KFWeap_MeleeBase") ||
+            const bool shield=script_.IsClass(parameters.weapon,L"KFWeap_SMG_G18") && runtime &&
+                script_.Read<int>(runtime,L"NativeShieldReady")==1 &&
+                script_.Read<int>(runtime,L"ShieldPoseSequence")==script_.Read<int>(registry,L"PoseSequence") &&
+                script_.Read<int>(runtime,L"ShieldPoseRevision")==script_.Read<int>(runtime,L"OwnershipRevision");
+            if (!runtime || (!shield && (!CurrentPose(script_,registry,runtime) ||
+                !script_.IsClass(parameters.weapon,L"KFWeap_MeleeBase"))) ||
                 !IsOwned(script_,registry,parameters.weapon)) {
                 script_.Write(registry,L"NativeRuntimeFault",13);
                 return;
@@ -492,7 +533,8 @@ void WeaponEffectsScope::Enter(void* bridge, void* pawn, void* object, void* fun
             // A selected managed melee item may still be in its stock block
             // state during pose/menu cancellation. Do not let that stale item
             // defend; unrelated stock weapons retain their original callback.
-            if (!script_.IsClass(savedDefensiveWeapon_,L"KFWeap_MeleeBase") ||
+            if ((!script_.IsClass(savedDefensiveWeapon_,L"KFWeap_MeleeBase") &&
+                !script_.IsClass(savedDefensiveWeapon_,L"KFWeap_SMG_G18")) ||
                 !Runtime(script_,registry,savedDefensiveWeapon_)) return;
         }
         if (!script_.Write(pawn,L"MyKFWeapon",parameters.weapon)) {

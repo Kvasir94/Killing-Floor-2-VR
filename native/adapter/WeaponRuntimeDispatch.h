@@ -16,8 +16,8 @@ bool SuppressManagedRecoil(GameScript& script, void* bridge, void* pawn,
 // Only a current primary pose returns a presenter that may originate gameplay.
 bool ResolveItemPresenter(GameScript& script, void* bridge, void* pawn,
                            void* weapon, void*& presenter);
-// Gate only the actual stock shot body for an owned, tracked primary-ammo
-// feed. Separate ammo modes and untracked weapons retain stock dispatch.
+// Gate stock shot entry (including derived/state bodies) for an owned item's
+// persistent readiness obligations. Separate ammo modes retain stock dispatch.
 bool MagazineFeedBlocksShot(GameScript& script, void* bridge, void* pawn,
                              void* weapon, void* function);
 // Called only after the real stock shot body, including ammo-saving perks.

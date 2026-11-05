@@ -54,7 +54,7 @@ foreach ($suite in @(
     }
     Write-Output ('PASS ' + $suite.prefix + ' strict evidence rejection')
 }
-foreach ($relative in @('tools/play-kf2vr.ps1','tools/launch-portal.ps1','tools/test-portal.ps1','tools/test-bootstrap.ps1')) {
+foreach ($relative in @('tools/launch-combined.ps1','tools/test-combined.ps1','tools/test-bootstrap.ps1')) {
     $tokens=$null; $errors=$null
     [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $projectRoot $relative),[ref]$tokens,[ref]$errors)
     Assert-True ($errors.Count -eq 0) ($relative + ' must parse under Windows PowerShell 5.1.')

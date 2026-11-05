@@ -1,4 +1,5 @@
 #include "HandWrist.h"
+#include "kf2vr/Basis.h"
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -22,6 +23,16 @@ int main() {
     Check(Near(WristFromGrip({},yaw,{-6.f,0,0},1),yaw.Rotate({-6.f,0,0})),"the offset turns with the hand");
     // Rolled 90 degrees: the hand's "up" is now sideways in the world.
     const auto roll=Quat::FromAxisAngle({1,0,0},1.5707963f);
+    for (unsigned hand=0;hand<2;++hand) {
+        const auto orientation=(yaw*roll).Normalized();
+        const auto wrist=WristFromGrip(grip,orientation,offset,hand);
+        Check(Near(GripFromWrist(wrist,orientation,offset,hand),grip),"authored wrists invert the mirrored controller offset");
+        const auto xrQ=BasisUnrealToXr(orientation);
+        const auto xrP=BasisUnrealToXr(GripFromWrist(wrist,orientation,offset,hand))*(1.f/kProvisionalUnrealUnitsPerMetre);
+        Check(Near(WristFromGrip(BasisXrToUnreal(xrP)*kProvisionalUnrealUnitsPerMetre,
+            BasisXrToUnreal(xrQ),offset,hand),wrist),"authored tracking samples return through the normal wrist conversion");
+        Check(Near(BasisXrToUnreal(xrQ).Rotate({1,0,0}),orientation.Rotate({1,0,0})),"inverse basis preserves authored aim");
+    }
     Check(std::abs(WristFromGrip({},roll,{0,0,1.f},1).z)<1e-3f,"a rolled hand carries its up offset sideways");
     const float nan=std::numeric_limits<float>::quiet_NaN();
     Check(Near(WristFromGrip(grip,{},{nan,0,0},1),grip),"a corrupt offset leaves the grip origin");

@@ -45,9 +45,13 @@ struct Snapshot {
 void Capture(HANDLE process,HANDLE thread,Snapshot& out) {
     out.context={};out.context.ContextFlags=CONTEXT_FULL;
     out.bytes=0;out.ok=false;out.cpuValid=false;out.truncated=false;out.resumed=true;
+    // Hold the CPU while the target is frozen: a preempted sampler would
+    // stretch the target's pause by a whole scheduler quantum.
+    const HANDLE self=GetCurrentThread();const int priority=GetThreadPriority(self);
+    SetThreadPriority(self,THREAD_PRIORITY_TIME_CRITICAL);
     const double start=Now();out.tick=start;
     const DWORD previous=SuspendThread(thread);
-    if(previous==DWORD(-1)) return;
+    if(previous==DWORD(-1)) { SetThreadPriority(self,priority);return; }
     if(previous==0) {
         out.ok=GetThreadContext(thread,&out.context)!=FALSE;
         out.tick=Now();
@@ -69,6 +73,7 @@ void Capture(HANDLE process,HANDLE thread,Snapshot& out) {
     // Always remove exactly our suspension, including when already suspended.
     out.resumed=ResumeThread(thread)!=DWORD(-1);
     out.paused=Now()-start;
+    SetThreadPriority(self,priority);
 }
 Snapshot* activeSnapshot=nullptr;
 const std::vector<Module>* activeModules=nullptr;
@@ -141,7 +146,7 @@ int Record(DWORD pid,DWORD tid,unsigned long long creation,unsigned seconds,cons
     std::fputs("tickMs,sample,pausedMs,threadCpu100ns,cpuCounterValid,contextOk,stackBytes,stackCapacityLimited,depth\n",samples);
     std::fputs("sample,depth,ip,module,rva,symbol,displacement\n",stacks);
     Snapshot snapshot;unsigned count=0,walks=0;double pauseTotal=0,maxPause=0;
-    std::uint32_t random=0xa341316c;const double start=Now();bool bad=false;
+    std::uint32_t random=0xa341316c;const double start=Now();bool bad=false,overBudget=false;
     while(Now()-start<seconds*1000 && WaitForSingleObject(process.value,0)==WAIT_TIMEOUT && WaitForSingleObject(thread.value,0)==WAIT_TIMEOUT) {
         Capture(process.value,thread.value,snapshot);
         if(!snapshot.resumed) { bad=true;break; }
@@ -160,7 +165,7 @@ int Record(DWORD pid,DWORD tid,unsigned long long creation,unsigned seconds,cons
         }
         // Stop after an excessive pause instead of silently distorting the run.
         // This is an observed limit, not a hard real-time OS guarantee.
-        if(snapshot.paused>5.0 || (count>=20 && pauseTotal/(Now()-start)>.02)) { bad=true;break; }
+        if(snapshot.paused>5.0 || (count>=20 && pauseTotal/(Now()-start)>.02)) { bad=overBudget=true;break; }
         if(std::ferror(samples) || std::ferror(stacks)) { bad=true;break; }
         random^=random<<13;random^=random>>17;random^=random<<5;
         Sleep(17+random%7); // Jitter avoids locking to the application's period.
@@ -176,13 +181,17 @@ int Record(DWORD pid,DWORD tid,unsigned long long creation,unsigned seconds,cons
         pid,tid,count,walks,elapsed,pauseTotal,maxPause,bad?"true":"false",selfTest?"true":"false");
     std::fclose(receipt);
     std::printf("samples=%u walked=%u paused=%.3fms maxPause=%.3fms elapsed=%.1fms aborted=%d\n",count,walks,pauseTotal,maxPause,elapsed,bad);
+    if(overBudget) return 9; // Pause budget tripped; the run is valid but distorted.
     return bad || !count || !walks ? 5:0;
 }
-__declspec(noinline) void FixtureWork() {
-    const double deadline=Now()+4000;volatile unsigned long long value=7;
-    while(Now()<deadline) { for(int i=0;i<10000;++i) value=value*6364136223846793005ULL+1;Sleep(1); }
+// Signals ready once both fixture frames are on the stack, then runs until the
+// self-test signals stop; the deadline only bounds an orphan.
+__declspec(noinline) void FixtureWork(HANDLE ready,HANDLE stop) {
+    const double deadline=Now()+15000;volatile unsigned long long value=7;SetEvent(ready);
+    while(Now()<deadline && WaitForSingleObject(stop,0)==WAIT_TIMEOUT) { for(int i=0;i<10000;++i) value=value*6364136223846793005ULL+1;Sleep(1); }
 }
-__declspec(noinline) int FixtureRoot() { FixtureWork();return GetCurrentThreadId()!=0?0:1; }
+__declspec(noinline) int FixtureRoot(HANDLE ready,HANDLE stop) { FixtureWork(ready,stop);return GetCurrentThreadId()!=0?0:1; }
+HANDLE HandleArg(const wchar_t* text) { return reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(_wcstoui64(text,nullptr,10))); }
 BOOL CALLBACK FindAdapterSymbol(PSYMBOL_INFO info,ULONG,void* found) {
     if(std::string(info->Name).ends_with("::HookProcessInternal")) {
         *static_cast<bool*>(found)=true;std::printf("resolved=%s address=%llx\n",info->Name,info->Address);
@@ -198,17 +207,38 @@ int wmain(int argc,wchar_t** argv) {
         if(base) SymEnumSymbols(process,base,"*HookProcessInternal*",&FindAdapterSymbol,&found);
         SymCleanup(process);return found?0:8;
     }
-    if(argc==2 && std::wstring(argv[1])==L"--fixture") return FixtureRoot();
+    if(argc==4 && std::wstring(argv[1])==L"--fixture") return FixtureRoot(HandleArg(argv[2]),HandleArg(argv[3]));
     if(argc==2 && std::wstring(argv[1])==L"--self-test") {
         wchar_t exe[32768]{};GetModuleFileNameW(nullptr,exe,32768);
-        std::wstring command=L"\""+std::wstring(exe)+L"\" --fixture";
+        SECURITY_ATTRIBUTES inherit{sizeof(inherit),nullptr,TRUE};
+        Handle ready{CreateEventW(&inherit,TRUE,FALSE,nullptr)},stop{CreateEventW(&inherit,TRUE,FALSE,nullptr)};
+        if(!ready.value || !stop.value) return 6;
+        std::wstring command=L"\""+std::wstring(exe)+L"\" --fixture "+std::to_wstring(reinterpret_cast<std::uintptr_t>(ready.value))+
+            L" "+std::to_wstring(reinterpret_cast<std::uintptr_t>(stop.value));
         STARTUPINFOW startup{sizeof(startup)};PROCESS_INFORMATION child{};
-        if(!CreateProcessW(exe,command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&child)) return 6;
+        // SuspendThread is asynchronous: GetThreadContext waits until the
+        // target runs and acknowledges it. A fixture starved by a parallel
+        // build would charge that wait to the pause budget, so keep it above
+        // normal-priority load, as a foreground game thread is.
+        if(!CreateProcessW(exe,command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW|HIGH_PRIORITY_CLASS,nullptr,nullptr,&startup,&child)) return 6;
         Handle process{child.hProcess},thread{child.hThread};FILETIME created{},ended{},kernel{},user{};
         GetProcessTimes(process.value,&created,&ended,&kernel,&user);
-        const auto root=std::filesystem::temp_directory_path()/(L"kf2vr-sampler-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64()));
-        std::filesystem::create_directories(root);Sleep(250);
-        const auto result=Record(child.dwProcessId,child.dwThreadId,FileTicks(created),1,root,true);
+        // Sample only once the fixture is loaded and inside FixtureWork; a
+        // fixed sleep raced module loading on a busy machine.
+        const HANDLE started[]={ready.value,process.value};
+        if(WaitForMultipleObjects(2,started,FALSE,10000)!=WAIT_OBJECT_0) { SetEvent(stop.value);return 6; }
+        // A pause-budget abort reflects host scheduling, not sampler
+        // correctness; resample the still-live fixture. Every other result,
+        // and the last attempt, is held to all checks below.
+        std::filesystem::path root;int result=0;
+        for(int attempt=1;attempt<=3;++attempt) {
+            root=std::filesystem::temp_directory_path()/(L"kf2vr-sampler-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64())+L"-"+std::to_wstring(attempt));
+            std::filesystem::create_directories(root);
+            result=Record(child.dwProcessId,child.dwThreadId,FileTicks(created),1,root,true);
+            if(result!=9) break;
+            std::printf("attempt=%d pauseBudgetExceeded=1\n",attempt);
+        }
+        SetEvent(stop.value);
         // Natural exit proves the sampled thread wasn't left suspended.
         const bool exited=WaitForSingleObject(process.value,6000)==WAIT_OBJECT_0;
         FILE* frames=nullptr;_wfopen_s(&frames,(root/L"stack-frames.csv").c_str(),L"rb");

@@ -3,7 +3,8 @@
 param(
     [string]$ServerRoot,
     [switch]$Update,
-    [ValidateRange(60,7200)][int]$TimeoutSeconds = 1800
+    [ValidateRange(60,7200)][int]$TimeoutSeconds = 1800,
+    [ValidateRange(0,1024)][int]$MinimumFreeGB = 35
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
@@ -20,6 +21,21 @@ if (-not $Update -and (Test-Path -LiteralPath $receiptPath) -and (Test-Path -Lit
 }
 $steamRoot = Join-Path $projectRoot 'build/multiplayer/steamcmd'
 New-Item -ItemType Directory -Path $steamRoot,$ServerRoot -Force | Out-Null
+# SteamCMD otherwise reports a full disk as the opaque state 0x202. Once the
+# server exists, allow updates/resumes without demanding the entire install size.
+# An interrupted first install already holds its preallocated files, so only the
+# remainder has to be free; otherwise one failed download blocks every retry.
+$drive = [IO.Path]::GetPathRoot($ServerRoot)
+$freeGB = [Math]::Floor((New-Object IO.DriveInfo $drive).AvailableFreeSpace / 1GB)
+if (-not (Test-Path -LiteralPath $serverExe)) {
+    $partialBytes = (Get-ChildItem -LiteralPath $ServerRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
+        Measure-Object -Property Length -Sum).Sum
+    $neededGB = [Math]::Max(0, $MinimumFreeGB - [Math]::Floor([double]$partialBytes / 1GB))
+    if ($freeGB -lt $neededGB) {
+        throw ("Not enough free disk space to install the KF2 dedicated server: it needs about $neededGB GB more " +
+               "on $drive and only $freeGB GB is free. Free up space on $drive and try again.")
+    }
+}
 $steamExe = Join-Path $steamRoot 'steamcmd.exe'
 if (-not (Test-Path -LiteralPath $steamExe)) {
     $archive = Join-Path $steamRoot 'steamcmd.zip'
@@ -37,31 +53,39 @@ $record = [ordered]@{ schema='kf2vr/server-install/1'; app_id=232130; success=$f
 $owned = $null
 try {
     Write-Output "Installing dedicated server (Steam app 232130): $ServerRoot"
-    Write-Output "Download log: $log"
-    $owned = Start-Process -FilePath $steamExe -ArgumentList $arguments -WorkingDirectory $steamRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $log -RedirectStandardError $errors
-    # Open the handle before waiting so Windows PowerShell retains ExitCode.
-    $null = $owned.Handle
-    if (-not $owned.WaitForExit($TimeoutSeconds*1000)) { throw 'Dedicated server installation timed out.' }
-    $owned.Refresh()
-    $record['exit_code'] = $owned.ExitCode
-    $logText = Get-Content -LiteralPath $log -Raw
-    # Fresh SteamCMD can return before its app metadata cache is populated.
-    # Retry only that known bootstrap failure; retain both logs for diagnosis.
-    if ($logText -match 'Missing configuration') {
-        Write-Output 'SteamCMD metadata initialized; retrying the server download.'
-        $record['bootstrap_log'] = $log
-        $log = Join-Path $steamRoot "install-$stamp-retry.log"
-        $errors = Join-Path $steamRoot "install-$stamp-retry-errors.log"
-        $record['log'] = $log; $record['error_log'] = $errors
+    # Fresh SteamCMD returns before its app metadata cache is populated
+    # ('Missing configuration'), and a download can stop on a transient error
+    # such as a file briefly locked by a virus scan (state 0x602). app_update
+    # resumes from what is already on disk, so retry; only a full disk is final.
+    $logs = @()
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        if ($attempt -gt 1) {
+            $log = Join-Path $steamRoot "install-$stamp-retry$($attempt-1).log"
+            $errors = Join-Path $steamRoot "install-$stamp-retry$($attempt-1)-errors.log"
+            $record['log'] = $log; $record['error_log'] = $errors
+        }
+        $logs += $log
+        Write-Output "Download log: $log"
         $owned = Start-Process -FilePath $steamExe -ArgumentList $arguments -WorkingDirectory $steamRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $log -RedirectStandardError $errors
+        # Open the handle before waiting so Windows PowerShell retains ExitCode.
         $null = $owned.Handle
-        if (-not $owned.WaitForExit($TimeoutSeconds*1000)) { throw 'Dedicated server installation retry timed out.' }
+        if (-not $owned.WaitForExit($TimeoutSeconds*1000)) { throw 'Dedicated server installation timed out.' }
         $owned.Refresh()
         $record['exit_code'] = $owned.ExitCode
         $logText = Get-Content -LiteralPath $log -Raw
+        $installed = $owned.ExitCode -eq 0 -and $logText -match "Success! App '232130' fully installed" -and (Test-Path -LiteralPath $serverExe)
+        if ($installed -or $logText -match 'state is 0x202') { break }
+        if ($attempt -lt 4) {
+            if ($logText -match 'Missing configuration') { Write-Output 'SteamCMD metadata initialized; retrying the server download.' }
+            else { Write-Output 'The server download stopped early; resuming it.'; Start-Sleep -Seconds 5 }
+        }
     }
-    if ($owned.ExitCode -ne 0 -or $logText -notmatch "Success! App '232130' fully installed" -or -not (Test-Path -LiteralPath $serverExe)) {
-        throw "Dedicated server installation did not complete; see $log"
+    $record['attempt_logs'] = $logs
+    if (-not $installed) {
+        if ($logText -match "state is 0x202") {
+            throw "The disk ran out of space while installing the KF2 dedicated server ($drive). Free up space and try again."
+        }
+        throw "Dedicated server installation did not complete after $($logs.Count) attempts; see $log"
     }
     $record['server_sha256'] = (Get-FileHash -LiteralPath $serverExe -Algorithm SHA256).Hash
     $record['success'] = $true

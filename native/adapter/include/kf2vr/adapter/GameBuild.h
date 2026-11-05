@@ -45,11 +45,39 @@ inline constexpr Range functions[]{
     {0x7aed0, 0x7cdf0, 0x249}, // ProcessInternal
     {0xc4990, 0xc64a0, 0x25}, // ConstructName
     {0xc9de0, 0xcba60, 0x16b}, // FindFunction
-    {0x693430, 0x692db0, 0x91a}, // PortalRender
-    {0x68c850, 0x68c170, 0x127}, // PortalClip
     {0x4bd7b0, 0x4bd8d0, 0x2238}, // InputGlobals
     {0xd67810, 0xd72330, 0x35f6}, // PositionName
-    {0x695880, 0x6951f0, 0x6fb}, // PortalProbeConstruct
+    {0x656720, 0x655ee0, 0x62}, // FlexHardwareSupported
+    {0x657960, 0x657120, 0x60}, // FlexHardwareLevel
+    {0x6561d0, 0x655990, 0x62}, // FlexInitialize
+    {0x64c960, 0x64c0d0, 0x3a}, // FlexAcquireGpuContext
+    {0xde2810, 0xded520, 0x406}, // ApplyNativeGraphicsSettings (menu and GSA startup)
+    {0xdb42d0, 0xdbeed0, 0x362}, // GsaStartup
+    // Single-pass stereo and DLSS object motion: docs/re/EPIC_SINGLE_PASS.md.
+    {0x90ef10, 0x910e10, 0x473}, // RenderScene (single-pass)
+    {0x911620, 0x913520, 0x1d0}, // RenderLighting (single-pass)
+    {0x909480, 0x90b4f0, 0x1ec4}, // InitViews (single-pass)
+    {0x902560, 0x904580, 0xe12}, // BeginOcclusionTests (single-pass)
+    {0xcd61d0, 0xce10c0, 0xa0}, // ViewConstants (single-pass)
+    {0x2a50f0, 0x2a72f0, 0x42}, // FlareOcclusion (single-pass)
+    {0xcb60e0, 0xcc1850, 0xa5a}, // RhiClear (single-pass)
+    {0x3605d0, 0x360990, 0x2b9}, // SsrCompute (single-pass)
+    {0x8e1bb0, 0x8e36f0, 0x406}, // Quad (single-pass)
+    {0x935340, 0x936fe0, 0x3a3}, // ShadowProjection (single-pass)
+    {0xcd03b0, 0xcdb2c0, 0x322}, // HbaoRhi (single-pass)
+    {0x36b490, 0x36b950, 0x11a7}, // Visibility (single-pass InitViews)
+    {0x360a30, 0x360df0, 0xbe9}, // ViewSetup (single-pass InitViews)
+    {0x950320, 0x951e10, 0x115}, // SortTranslucency (single-pass InitViews)
+    {0x904df0, 0x906e90, 0x7cf}, // FamilyStep (single-pass InitViews)
+    {0x8f95e0, 0x8fb370, 0x4a}, // LightGate (single-pass InitViews)
+    {0x949970, 0x94b240, 0xcc1}, // PerLightVisibility (single-pass InitViews)
+    {0x8c2a20, 0x8c3470, 0xcf9}, // FinishInitViews (single-pass InitViews)
+    {0x94d240, 0x94ed00, 0xc22}, // RenderVelocities (DLSS object motion)
+    {0x94b270, 0x94cc20, 0x3af}, // PrimeVelocities (DLSS object motion)
+    {0x91be70, 0x91ddb0, 0x9f}, // BeginVelocities (DLSS object motion)
+    {0x94e140, 0x94fc30, 0x169}, // VelocityScale (DLSS object motion)
+    {0x34a3c0, 0x34ac30, 0x58d}, // TileMaxBlur (DLSS object motion)
+    {0x34ad20, 0x34b590, 0x274}, // LegacyBlur (DLSS object motion)
 };
 // Globals cross-referenced by uniquely matched functions; settings table/string
 // additionally verified directly in both PE images. No assumed global delta.
@@ -78,6 +106,13 @@ inline constexpr Range globals[]{
     {0x1eda1a4, 0x202b194, 1},
     {0x1eda1ac, 0x202b19c, 1},
     {0x171ec98, 0x17f3238, 1},
+    {0x221ad20, 0x236d560, 1}, // FleX initialized flag
+    {0x22174c8, 0x2369d08, 1}, // GEngine
+    {0x1ec2398, 0x2013398, 1}, // HiZ enable (single-pass)
+    {0x1fbafec, 0x210d83c, 1}, // view gate off (single-pass)
+    {0x1ec2388, 0x2013388, 1}, // view gate on (single-pass)
+    {0x2225590, 0x2377de0, 1}, // foreground velocity flag (object motion)
+    {0x21f6ed0, 0x2349710, 1}, // RHI pointer (object motion)
 };
 constexpr std::uintptr_t Translate(Store store, std::uintptr_t steam) noexcept {
     if (store==Store::Steam) return steam;

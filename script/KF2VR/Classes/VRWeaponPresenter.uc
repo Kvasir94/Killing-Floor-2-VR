@@ -9,6 +9,23 @@ var vector AuthoredPrimaryGrip, AuthoredSupportGrip;
 var vector AuthoredSupportGripOffset, AuthoredSupportFrameOrigin;
 var quat AuthoredSupportGripRotation, AuthoredSupportFrameRotation;
 var int AuthoredPrimaryHand, AuthoredSupportHand;
+// A real foregrip grasp from M32's closing clip, never its shell-carry wrist.
+var bool bM32SupportContactReady;
+var vector M32SupportFrameOrigin, M32SupportWrist;
+var quat M32SupportFrameRotation, M32SupportWristRotation;
+// R20: a second support contact on the FAMAS pump (VRSecondaryReloadCatalog.
+// PumpGrip), sampled from the stock shot clip. bPumpSupport says the bound
+// support hand holds it instead of the authored idle grip.
+var bool bPumpGripReady, bPumpSupport;
+var name PumpGripBone, PumpGripClip;
+var float PumpGripTime;
+var vector PumpGripFrameOrigin, PumpGripWrist;
+var quat PumpGripFrameRotation, PumpGripWristRotation;
+// R20 (Kvasir94, 10-29): with no hand on the rifle grip, the hand on the
+// shotgun's trigger grip is the aiming (primary) hand and fires the shotgun;
+// the pump is its fore-end. The primary contact is then the authored support
+// grip (the stock left hand on the shotgun grip), wrist and fingers.
+var bool bShotgunGrip;
 // A trader/equip transition can replace the mesh/tree on the same inventory
 // actor. These identify exactly what the authored grip was sampled from.
 var SkeletalMesh CapturedGripMesh;
@@ -16,6 +33,12 @@ var AnimNode CapturedGripAnimationTree;
 var array<AnimSet> CapturedGripAnimSets;
 var vector PrimaryContactGrip;
 var int BoundPrimary, BoundSupport;
+var bool bForegripCarryPose;
+var vector CarryRootOffset;
+var quat CarryRootRotation;
+var float CarryEntryPumpPull;
+var int CarryVisualFrame, CarryVisualRevision, CarryVisualCalibration;
+var bool bCarryVisualReady;
 var bool bRolesInitialized;
 var bool bSupportCarryPending;
 var vector SupportCarryReference;
@@ -101,7 +124,7 @@ simulated function CaptureAuthoredGrip()
 {
     if (ActiveWeapon == None || ActiveWeapon.MySkelMesh == None || ActiveProfile < 0
         || ActiveProfile >= WeaponProfiles.Length) return;
-    AuthoredPrimaryHand = WeaponProfiles[ActiveProfile].bPhysicalLowerHandlePrimary ? 0 : 1;
+    AuthoredPrimaryHand = AuthoredPrimaryIndex();
     AuthoredSupportHand = 1 - AuthoredPrimaryHand;
     AuthoredPrimaryGrip = GripInWeapon[AuthoredPrimaryHand];
     AuthoredSupportGrip = GripInWeapon[AuthoredSupportHand];
@@ -117,6 +140,165 @@ simulated function CaptureAuthoredGrip()
     CapturedGripMesh = ActiveWeapon.MySkelMesh.SkeletalMesh;
     CapturedGripAnimationTree = ActiveWeapon.MySkelMesh.Animations;
     CapturedGripAnimSets = ActiveWeapon.MySkelMesh.AnimSets;
+    CaptureM32SupportContact();
+    CapturePumpGrip();
+}
+
+// The stock wrist on the pump, relative to the pump bone, at the moment the
+// shot clip's hand has closed on it. Fingers are frozen at the same moment
+// (SupportPoseSample), so the hand is the stock one, not a generic grip.
+simulated function CapturePumpGrip()
+{
+    local VRActionPath Sample;
+    bPumpGripReady = false;
+    if (!class'VRSecondaryReloadCatalog'.static.PumpGrip(ActiveWeapon.Class, PumpGripBone, PumpGripClip, PumpGripTime))
+        return;
+    Sample = new(self) class'VRActionPath';
+    if (!Sample.PrepareRef(self, ActiveWeapon, WeaponProfiles[ActiveProfile].RootBone)) return;
+    if (Sample.Ref.MatchRefBone(PumpGripBone) < 0 || Sample.Ref.MatchRefBone(HandBone(AuthoredSupportHand)) < 0) return;
+    AttachComponent(Sample.Ref);
+    Sample.RefSeq.SetAnim(PumpGripClip);
+    if (Sample.RefSeq.AnimSeq == None || Sample.RefSeq.AnimSeq.SequenceLength < PumpGripTime)
+    { DetachComponent(Sample.Ref); return; }
+    Sample.PoseRef(PumpGripTime);
+    Sample.RefRelative(PumpGripBone, PumpGripFrameOrigin, PumpGripFrameRotation);
+    Sample.RefRelative(HandBone(AuthoredSupportHand), PumpGripWrist, PumpGripWristRotation);
+    DetachComponent(Sample.Ref);
+    bPumpGripReady = FiniteContactPosition(PumpGripFrameOrigin) && FiniteContactPosition(PumpGripWrist)
+        && class'VRHandRolePose'.static.ValidQuaternion(PumpGripFrameRotation)
+        && class'VRHandRolePose'.static.ValidQuaternion(PumpGripWristRotation);
+}
+
+// A support contact sampled from a stock clip in the root frame: the anchor
+// bone's frame and the stock wrist. The other anatomical hand takes the wrist
+// reflected through the root's XZ plane; the result is anchor-relative.
+simulated function SampledSupportContact(vector FrameOrigin, quat FrameRotation, vector Wrist, quat WristQ,
+    int StockHand, int SupportRoleHand, out vector GripPosition, out quat GripRotation)
+{
+    if (SupportRoleHand != StockHand)
+    {
+        Wrist = class'VRHandRolePose'.static.MirrorRootPosition(Wrist);
+        WristQ = QuatProduct(class'VRHandRolePose'.static.MirrorCanonicalRotation(
+            QuatProduct(WristQ, QuatInvert(FreeHandPose.WristBasis[StockHand]))),
+            FreeHandPose.WristBasis[SupportRoleHand]);
+    }
+    GripPosition = QuatRotateVector(QuatInvert(FrameRotation), Wrist - FrameOrigin);
+    GripRotation = QuatProduct(QuatInvert(FrameRotation), WristQ);
+}
+
+simulated function bool PumpGripAvailable()
+{
+    local int SupportRoleHand;
+    SupportRoleHand = BoundSupport >= 0 ? BoundSupport : 1 - BoundPrimary;
+    return bPumpGripReady && bCalibrated && ActiveWeapon != None && ActiveWeapon.MySkelMesh != None
+        && ActiveWeapon.MySkelMesh.MatchRefBone(PumpGripBone) >= 0
+        && SupportRoleHand >= 0 && SupportRoleHand <= 1
+        && (SupportRoleHand == AuthoredSupportHand || (FreeHandPose != None && FreeHandPose.bReady));
+}
+
+// World wrist position of the pump contact for the hand that would support.
+simulated function bool PumpGripWorld(KFWeapon W, out vector At, optional int ForHand = -1)
+{
+    local vector GripPosition;
+    local quat GripRotation, BoneQ;
+    if (W == None || W != ActiveWeapon || !PumpGripAvailable()) return false;
+    if (ForHand < 0 || ForHand > 1) ForHand = BoundSupport >= 0 ? BoundSupport : 1 - BoundPrimary;
+    if (ForHand != AuthoredSupportHand && (FreeHandPose == None || !FreeHandPose.bReady)) return false;
+    SampledSupportContact(PumpGripFrameOrigin, PumpGripFrameRotation, PumpGripWrist, PumpGripWristRotation,
+        AuthoredSupportHand, ForHand, GripPosition, GripRotation);
+    BoneQ = W.MySkelMesh.GetBoneQuaternion(PumpGripBone);
+    At = W.MySkelMesh.GetBoneLocation(PumpGripBone) + QuatRotateVector(BoneQ, GripPosition);
+    return FiniteContactPosition(At);
+}
+
+// Move the bound support between the authored grip and the pump. Two-hand aim
+// re-captures its span from the visible correction (the release blend), so
+// the gun does not turn when the hand changes contact.
+simulated function SelectPumpSupport(bool bPump)
+{
+    bPump = bPump && bPumpGripReady;
+    if (bPumpSupport == bPump) return;
+    bPumpSupport = bPump;
+    if (bWasTwoHandedAim)
+    {
+        bWasTwoHandedAim = false;
+        bTwoHandReleaseSmoothing = true;
+        TwoHandReleaseTime = WorldInfo.RealTimeSeconds;
+    }
+}
+
+// A gun whose second trigger grip can be held as the primary (the FAMAS).
+simulated function bool HasShotgunGrip()
+{
+    return bPumpGripReady && ActiveProfile >= 0 && WeaponProfiles[ActiveProfile].SupportBone != '';
+}
+
+simulated function bool ShotgunGripHeld()
+{
+    return bShotgunGrip && PresentedItem != None && PresentedItem.PrimaryHand >= 0 && HasShotgunGrip();
+}
+
+// Choose the primary contact before BindRoles: the rifle grip or the
+// shotgun's trigger grip.
+simulated function SelectShotgunGrip(bool bShotgun)
+{
+    bShotgunGrip = bShotgun && HasShotgunGrip();
+}
+
+simulated function int PrimaryContactSourceHand()
+{
+    if (ShotgunGripHeld()) return AuthoredSupportHand;
+    return super.PrimaryContactSourceHand();
+}
+
+// World wrist position of either trigger grip for this hand, whichever role
+// holds the gun now: the rifle grip or the shotgun's trigger grip.
+simulated function vector TriggerGripWorld(bool bShotgun, int Hand)
+{
+    local vector Grip;
+    local name RootBone;
+    if (ActiveWeapon == None || ActiveWeapon.MySkelMesh == None || ActiveProfile < 0) return Location;
+    Grip = bShotgun ? AuthoredSupportGrip : AuthoredPrimaryGrip;
+    if (Hand != (bShotgun ? AuthoredSupportHand : AuthoredPrimaryHand))
+        Grip = class'VRHandRolePose'.static.MirrorRootPosition(Grip);
+    RootBone = WeaponProfiles[ActiveProfile].RootBone;
+    return ActiveWeapon.MySkelMesh.GetBoneLocation(RootBone)
+        + QuatRotateVector(ActiveWeapon.MySkelMesh.GetBoneQuaternion(RootBone), Grip);
+}
+
+simulated function bool PumpSupportHeld()
+{
+    return bPumpSupport && PresentedItem != None && PresentedItem.SupportHand >= 0 && PumpGripAvailable();
+}
+
+simulated function SupportPoseSample(out name Clip, out float Time)
+{
+    if (PumpSupportHeld()) { Clip = PumpGripClip; Time = PumpGripTime; return; }
+    super.SupportPoseSample(Clip, Time);
+}
+
+simulated function CaptureM32SupportContact()
+{
+    local VRActionPath Sample;
+    bM32SupportContactReady = false;
+    if (!class'VRM32Action'.static.Supported(ActiveWeapon)) return;
+    Sample = new(self) class'VRActionPath';
+    if (!Sample.PrepareRef(self, ActiveWeapon, WeaponProfiles[ActiveProfile].RootBone)) return;
+    if (Sample.Ref.MatchRefBone('RW_ForeGrip') < 0 || Sample.Ref.MatchRefBone(HandBone(0)) < 0) return;
+    AttachComponent(Sample.Ref);
+    Sample.RefSeq.SetAnim('Reload_Empty_Close');
+    if (Sample.RefSeq.AnimSeq == None || Sample.RefSeq.AnimSeq.SequenceLength < 0.35)
+    { DetachComponent(Sample.Ref); return; }
+    // VRM32Action uses this same established grasp after the hand reaches the
+    // fore-end. During inserts that stock left wrist carries a grenade instead.
+    Sample.PoseRef(0.35);
+    Sample.RefRelative('RW_ForeGrip', M32SupportFrameOrigin, M32SupportFrameRotation);
+    Sample.RefRelative(HandBone(0), M32SupportWrist, M32SupportWristRotation);
+    DetachComponent(Sample.Ref);
+    bM32SupportContactReady = FiniteContactPosition(M32SupportFrameOrigin)
+        && FiniteContactPosition(M32SupportWrist)
+        && class'VRHandRolePose'.static.ValidQuaternion(M32SupportFrameRotation)
+        && class'VRHandRolePose'.static.ValidQuaternion(M32SupportWristRotation);
 }
 
 simulated function bool GripIdentityChanged()
@@ -244,9 +426,9 @@ simulated function bool SetOffhandGauntletEnabled(bool bEnabled)
     {
         if (OffhandGauntletMelee != None) OffhandGauntletMelee.Cancel();
         if (RiotShield != None) RiotShield.Suspend();
-        ActiveWeapon.MySkelMesh.HideBoneByName('LW_Weapon', PBO_None);
+        class'VRBoneVisibility'.static.SetVisible(ActiveWeapon.MySkelMesh, 'LW_Weapon', false);
     }
-    else ActiveWeapon.MySkelMesh.UnHideBoneByName('LW_Weapon');
+    else class'VRBoneVisibility'.static.SetVisible(ActiveWeapon.MySkelMesh, 'LW_Weapon', true);
     return true;
 }
 
@@ -268,6 +450,9 @@ simulated function BindRoles()
     ClearHandAttachments();
     BoundPrimary = PresentedItem.PrimaryHand;
     BoundSupport = PresentedItem.SupportHand;
+    // A released support forgets the pump; the next grab chooses its contact.
+    if (BoundSupport < 0) bPumpSupport = false;
+    if (BoundPrimary >= 0 || PresentedItem.CarryPrimaryHand < 0) bForegripCarryPose = false;
     bRolesInitialized = true;
     WeaponHand = BoundPrimary >= 0 ? BoundPrimary : BoundSupport;
     // Always derive from calibration, never from a previous mirrored role.
@@ -281,6 +466,14 @@ simulated function BindRoles()
     SupportRoleHand = BoundSupport >= 0 ? BoundSupport : 1 - BoundPrimary;
     if (PrimaryRoleHand != AuthoredPrimaryHand)
         PrimaryContactGrip = class'VRHandRolePose'.static.MirrorRootPosition(AuthoredPrimaryGrip);
+    // R20: only a held primary can be on the shotgun's trigger grip.
+    if (BoundPrimary < 0 || !HasShotgunGrip()) bShotgunGrip = false;
+    if (bShotgunGrip)
+    {
+        PrimaryContactGrip = AuthoredSupportGrip;
+        if (PrimaryRoleHand != AuthoredSupportHand)
+            PrimaryContactGrip = class'VRHandRolePose'.static.MirrorRootPosition(AuthoredSupportGrip);
+    }
     if (SupportRoleHand != AuthoredSupportHand)
     {
         SupportGrip = class'VRHandRolePose'.static.MirrorRootPosition(AuthoredSupportGrip);
@@ -295,14 +488,34 @@ simulated function BindRoles()
     RefreshSupportAnchorReference(true);
 }
 
-simulated function bool GetSupportGripWorld(KFWeapon W, out vector GripPosition, out quat GripRotation)
+simulated function bool GetSupportGripContact(KFWeapon W, out name SupportBone,
+    out vector GripPosition, out quat GripRotation, optional out byte RetargetedContact)
 {
     local int SupportRoleHand;
-    if (!Super.GetSupportGripWorld(W, GripPosition, GripRotation)) return false;
+    if (!Super.GetSupportGripContact(W, SupportBone, GripPosition, GripRotation, RetargetedContact)) return false;
+    RetargetedContact = 1;
     SupportRoleHand = BoundSupport >= 0 ? BoundSupport : 1 - BoundPrimary;
+    if (bM32SupportContactReady && class'VRM32Action'.static.Supported(W) && W.IsInState('Reloading')
+        && W.MySkelMesh.MatchRefBone('RW_ForeGrip') >= 0
+        && (SupportRoleHand == 0 || (FreeHandPose != None && FreeHandPose.bReady)))
+    {
+        SupportBone = 'RW_ForeGrip';
+        SampledSupportContact(M32SupportFrameOrigin, M32SupportFrameRotation, M32SupportWrist,
+            M32SupportWristRotation, 0, SupportRoleHand, GripPosition, GripRotation);
+        return true;
+    }
+    // R20: the support hand on the pump rides the pump bone, which the
+    // secondary session moves through an owed stroke.
+    if (bPumpSupport && PumpGripAvailable())
+    {
+        SupportBone = PumpGripBone;
+        SampledSupportContact(PumpGripFrameOrigin, PumpGripFrameRotation, PumpGripWrist,
+            PumpGripWristRotation, AuthoredSupportHand, SupportRoleHand, GripPosition, GripRotation);
+        return true;
+    }
     if (SupportRoleHand != AuthoredSupportHand)
-        GripRotation = QuatProduct(W.MySkelMesh.GetBoneQuaternion(WeaponProfiles[ActiveProfile].SupportBone),
-            class'VRHandRolePose'.static.RetargetWrist(self, AuthoredSupportHand, SupportRoleHand, AuthoredSupportGripRotation));
+        GripRotation = class'VRHandRolePose'.static.RetargetWrist(self,
+            AuthoredSupportHand, SupportRoleHand, AuthoredSupportGripRotation);
     return true;
 }
 
@@ -346,7 +559,8 @@ simulated function SyncTracking()
     {
         Hands[I] = RootBridge.Hands[I];
         Hands[I].AimRotation = ControllerAimRotation(I == 0 ? LeftRotation : RightRotation, ActiveWeapon);
-        Hands[I].SupportOwner = (I == PresentedItem.SupportHand && PresentedItem.PrimaryHand >= 0)
+        Hands[I].SupportOwner = (I == PresentedItem.SupportHand && PresentedItem.PrimaryHand >= 0
+            && PresentedItem.Item.Class!=class'KFWeap_SMG_G18')
             ? PresentedItem.PrimaryHand : -1;
         if (RootBridge.HandInventory.Input != None && RootBridge.HandInventory.Input.IsSelectorOpen(I))
             Hands[I].SupportOwner = -1;
@@ -566,6 +780,68 @@ simulated function bool SupportContactWithinReleaseRange()
     return Distance >= 0 && Distance <= MaximumSeparation;
 }
 
+simulated function BeginForegripCarry(vector RootPosition, quat RootRotation)
+{
+    local int Hand;
+    local quat ControllerQ;
+    if (PresentedItem == None || RootBridge == None || PresentedItem.CarryPrimaryHand < 0
+        || PresentedItem.PrimaryHand >= 0 || PresentedItem.SupportHand < 0) return;
+    Hand = PresentedItem.SupportHand;
+    ControllerQ = QuatFromRotator(Hand == 0 ? RootBridge.LeftRotation : RootBridge.RightRotation);
+    CarryRootRotation = QuatProduct(QuatInvert(ControllerQ), RootRotation);
+    CarryRootOffset = QuatRotateVector(QuatInvert(ControllerQ), RootPosition
+        - (Hand == 0 ? RootBridge.LeftPosition : RootBridge.RightPosition));
+    CarryEntryPumpPull = PumpPull();
+    bForegripCarryPose = true;
+}
+
+simulated function bool ForegripCarryRoot(out vector Position, out quat Q)
+{
+    local int Hand;
+    local quat ControllerQ;
+    if (!bForegripCarryPose || PresentedItem == None || PresentedItem.PrimaryHand >= 0
+        || PresentedItem.CarryPrimaryHand < 0 || PresentedItem.SupportHand < 0 || RootBridge == None) return false;
+    Hand = PresentedItem.SupportHand;
+    ControllerQ = QuatFromRotator(Hand == 0 ? RootBridge.LeftRotation : RootBridge.RightRotation);
+    Position = (Hand == 0 ? RootBridge.LeftPosition : RootBridge.RightPosition) + QuatRotateVector(ControllerQ, CarryRootOffset);
+    Q = QuatProduct(ControllerQ, CarryRootRotation);
+    // The carrier holds the fore-end. Move the receiver by the opposite
+    // amount to its controlled pump bones, preserving that exact contact.
+    Position += QuatRotateVector(Q, vect(1,0,0)) * (PumpPull() - CarryEntryPumpPull);
+    return true;
+}
+
+simulated function float PumpPull()
+{
+    if (RootBridge == None || RootBridge.HandInventory == None || RootBridge.HandInventory.Input == None
+        || RootBridge.HandInventory.Input.Reloads == None || RootBridge.HandInventory.Input.Reloads.Pump == None) return 0;
+    return RootBridge.HandInventory.Input.Reloads.Pump.VisualPull(ActiveWeapon);
+}
+
+// Cosmetic freshness is separate from native firing-pose publication.
+simulated function MarkCarryVisual()
+{
+    if (PresentedItem == None || !PresentedItem.IsCurrent() || RootBridge == None
+        || PresentedItem.PrimaryHand >= 0 || PresentedItem.SupportHand < 0
+        || PresentedItem.CarryPrimaryHand < 0 || !bForegripCarryPose || !bCalibrated
+        || Arms == None || AttachedHands[PresentedItem.SupportHand] == None
+        || (RootBridge.NativeValidMask & (1 << PresentedItem.SupportHand)) == 0) return;
+    CarryVisualFrame = PresentedItem.Inventory.PoseSequence;
+    CarryVisualRevision = PresentedItem.OwnershipRevision;
+    CarryVisualCalibration = RootBridge.NativeCalibrationEpoch;
+    bCarryVisualReady = true;
+}
+
+simulated function bool FreshCarryVisual(int Hand)
+{
+    return bCarryVisualReady && PresentedItem != None && PresentedItem.IsCurrent()
+        && RootBridge != None && PresentedItem.PrimaryHand < 0 && PresentedItem.SupportHand == Hand
+        && PresentedItem.CarryPrimaryHand >= 0 && CarryVisualFrame == PresentedItem.Inventory.PoseSequence
+        && CarryVisualRevision == PresentedItem.OwnershipRevision
+        && CarryVisualCalibration == RootBridge.NativeCalibrationEpoch
+        && (RootBridge.NativeValidMask & (1 << Hand)) != 0;
+}
+
 simulated function BeginSupportCarry(vector CapturedControllerReference)
 {
     bSupportCarryPending = false;
@@ -622,6 +898,26 @@ simulated function vector PrimaryGripWorld()
 
 simulated function PlaceWeapon()
 {
+    bCarryVisualReady = false;
+    // Loss of the Glock controller must not move or hide a still-tracked
+    // independent shield. Keep the actor/stock action untouched and update
+    // only its world-space shield control against the last receiver frame.
+    if (PresentedItem!=None && ActiveWeapon!=None && ActiveWeapon.Class==class'KFWeap_SMG_G18'
+        && PresentedItem.PrimaryHand>=0 && (NativeValidMask & (1<<PresentedItem.PrimaryHand))==0
+        && PresentedItem.SupportHand>=0
+        && (NativeValidMask & NativeGripActiveMask & (1<<PresentedItem.SupportHand))!=0
+        && RootBridge!=None && RootBridge.PC.Pawn==Human && Human.Health>0
+        && bCalibrated && RiotShield!=None && RiotShield.bCalibrated
+        && ActiveWeapon.MySkelMesh!=None && ActiveWeapon.MySkelMesh.bAttached)
+    {
+        Suspend();
+        ActiveWeapon.SetHidden(false); ActiveWeapon.MySkelMesh.SetHidden(false);
+        class'VRBoneVisibility'.static.SetVisible(ActiveWeapon.MySkelMesh,'RW_Weapon',false);
+        RiotShield.Update(self,ActiveWeapon,PresentedItem.SupportHand);
+        class'VRBoneVisibility'.static.SetVisible(ActiveWeapon.MySkelMesh,'LW_Weapon',
+            RiotShield.Control!=None && RiotShield.Control.ControlStrength>0);
+        return;
+    }
     if (PresentedItem == None || PresentedItem.Item == None || WeaponHand < 0
         || (NativeValidMask & (1 << WeaponHand)) == 0 || RootBridge == None
         || RootBridge.PC.Pawn != Human || Human.Health <= 0)
@@ -644,8 +940,43 @@ simulated function PlaceWeapon()
     HandFillLight.SetEnabled(true);
     RefreshGripIdentity();
     EnsurePhysicalCombat();
+    if (RootBridge.HandInventory != None && RootBridge.HandInventory.Input != None
+        && RootBridge.HandInventory.Input.Bow != None) RootBridge.HandInventory.Input.Bow.Prepare(self);
     Super.PlaceWeapon();
     RefreshSupportAnchorReference();
+}
+
+// Physical hinge controls are applied after ordinary weapon placement. Refresh
+// only the optical guide from that final stock muzzle frame; firing keeps its
+// existing receiver aim and already-published wall-safe origin.
+simulated function RefreshBreakActionLaser()
+{
+    local VRBreakAction Action;
+    local vector At, Second;
+    local rotator Aim;
+    if (ActiveWeapon == None || ActiveWeapon.bDeleteMe || ActiveWeapon.MySkelMesh == None
+        || (ActiveWeapon.Class != class'KFWeap_GrenadeLauncher_M79'
+            && ActiveWeapon.Class != class'KFWeap_Shotgun_DoubleBarrel'
+            && ActiveWeapon.Class != class'KFWeap_Shotgun_ElephantGun')
+        || ActiveProfile < 0 || ActiveProfile >= WeaponProfiles.Length
+        || PresentedItem == None || !PresentedItem.IsCurrent() || PresentedItem.Item != ActiveWeapon
+        || RootBridge == None || RootBridge.HandInventory == None
+        || RootBridge.HandInventory.Input == None || RootBridge.HandInventory.Input.Reloads == None) return;
+    Action = RootBridge.HandInventory.Input.Reloads.BreakAction;
+    if (Action == None || Action.Gun != ActiveWeapon || Action.Runtime != PresentedItem || Action.bPath) return;
+    if (!ActiveWeapon.MySkelMesh.GetSocketWorldLocationAndRotation(
+        WeaponProfiles[ActiveProfile].MuzzleSocket, At, Aim))
+    { HideWeaponLaser(); return; }
+    if (WeaponProfiles[ActiveProfile].SecondaryMuzzleSocket != '')
+    {
+        if (!ActiveWeapon.MySkelMesh.GetSocketWorldLocationAndRotation(
+            WeaponProfiles[ActiveProfile].SecondaryMuzzleSocket, Second))
+        { HideWeaponLaser(); return; }
+        At = (At + Second) * 0.5;
+    }
+    LaserMuzzleLocation = At;
+    LaserMuzzleRotation = Aim;
+    UpdateWeaponLaser(ActiveWeapon);
 }
 
 // A stowed item comes back through Activate, not ConfigureWeapon: that base
@@ -655,6 +986,7 @@ simulated function PlaceWeapon()
 // path: stow, detach, a released role and a lost or dead hand alike.
 simulated function Suspend()
 {
+    bCarryVisualReady = false;
     NativeWeaponReady = 0;
     bReadyPoseSettling = true;
     bSprintPoseSettling = false;

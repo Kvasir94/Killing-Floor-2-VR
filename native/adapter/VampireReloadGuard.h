@@ -47,7 +47,12 @@ inline bool RouteVampireReloadGuard(GameScript& script, void* object, void* func
     void* controller=nullptr;
     if (capability) controller=script.Read<void*>(object,L"Controller");
     else {
-        if (!ExactVampireClass(script,object,L"KFWeap_HRG_Vampire") ||
+        const bool supported=ExactVampireClass(script,object,L"KFWeap_HRG_Vampire") ||
+            ExactVampireClass(script,object,L"KFWeap_HRG_BlastBrawlers") ||
+            ExactVampireClass(script,object,L"KFWeap_HRG_BallisticBouncer") ||
+            ExactVampireClass(script,object,L"KFWeap_Mine_Reconstructor") ||
+            ExactVampireClass(script,object,L"KFWeap_AssaultRifle_Doshinegun");
+        if (!supported ||
             script.Read<unsigned char>(object,L"Role")!=3) return false;
         controller=script.Read<void*>(script.Read<void*>(object,L"Instigator"),L"Controller");
     }

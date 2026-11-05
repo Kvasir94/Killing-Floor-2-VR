@@ -15,6 +15,7 @@ struct TestJob
 var transient string SessionID, LastTestReceipt, CompletedActionID, CompletedReceipt;
 var transient int NativeTestEnabled;
 var transient int NativeTestPolls;
+var transient int NativeTestWorldClosed;
 var bool bCapacityBypass, bClosed, bJobActive;
 var VRLocalTestRegistry Registry;
 var TestJob Job;
@@ -96,9 +97,22 @@ function KFPlayerController LocalPlayerByID(int PlayerID)
     local KFPlayerController Candidate;
     foreach WorldInfo.AllControllers(class'KFPlayerController', Candidate)
         if (!Candidate.bDeleteMe && Candidate.IsLocalController() && LocalPlayer(Candidate.Player) != None
+            && LocalPlayer(Candidate.Player).Actor == Candidate && Candidate.WorldInfo == WorldInfo
             && Candidate.PlayerReplicationInfo != None && Candidate.PlayerReplicationInfo.PlayerID == PlayerID)
             return Candidate;
     return None;
+}
+
+// Resolve afresh for each action; never search for an arbitrary living pawn.
+function KFPawn_Human LivingTestPawn(KFPlayerController PC)
+{
+    local KFPawn_Human Human;
+    if (PC == None) return None;
+    Human = KFPawn_Human(PC.Pawn);
+    if (Human == None || Human.bDeleteMe || Human.Health <= 0 || Human.Controller != PC
+        || Human.WorldInfo != WorldInfo || KFPawn_Customization(Human) != None
+        || Human.InvManager == None || Human.InvManager.bDeleteMe || Human.InvManager.Owner != Human) return None;
+    return Human;
 }
 
 function int ActualWeight(KFInventoryManager Manager)
@@ -137,7 +151,8 @@ function string Status()
     local string Result;
     local int Count;
     Result = "ok" $ Chr(9) $ "test_unranked=1" $ Chr(9) $ "enabled=" $ NativeTestEnabled
-        $ Chr(9) $ "capacity_bypass=" $ int(bCapacityBypass) $ Chr(9) $ "cheats=unchanged"
+        $ Chr(9) $ "map=" $ WorldInfo.GetPackageName() $ Chr(9) $ "netmode=" $ WorldInfo.NetMode
+        $ Chr(9) $ "capacity_bypass=" $ int(bCapacityBypass) $ Chr(9) $ "console_available=1"
         $ Chr(9) $ "job_active=" $ int(bJobActive) $ Chr(9) $ "live_test_zeds=" $ PruneTestZeds();
     Result $= Chr(9) $ "native_polls=" $ NativeTestPolls
         $ Chr(9) $ "diagnostic_object=" $ int(Diagnostic != None)
@@ -147,7 +162,8 @@ function string Status()
         $ Chr(9) $ "registry_missing=" $ Registry.Missing.Length;
     foreach WorldInfo.AllControllers(class'KFPlayerController', PC)
     {
-        if (!PC.IsLocalController() || LocalPlayer(PC.Player) == None || PC.PlayerReplicationInfo == None) continue;
+        if (PC.bDeleteMe || !PC.IsLocalController() || LocalPlayer(PC.Player) == None
+            || LocalPlayer(PC.Player).Actor != PC || PC.WorldInfo != WorldInfo || PC.PlayerReplicationInfo == None) continue;
         Human = KFPawn_Human(PC.Pawn);
         Manager = Human != None ? KFInventoryManager(Human.InvManager) : None;
         Result $= Chr(10) $ "player" $ Chr(9) $ PC.PlayerReplicationInfo.PlayerID
@@ -175,9 +191,36 @@ function Remember(string ID, string Wire, string Receipt)
     ActionIDs.AddItem(ID); ActionWires.AddItem(Wire); ActionReceipts.AddItem(Receipt);
 }
 
-// No exec strings, arbitrary classes, target locations, god mode, ammo refill,
-// wave reset, or destructive clear operations. Results are reflected by native
-// code; output strings are allocated/owned by UnrealScript, never native code.
+function bool ValidConsoleText(string Command)
+{
+    local int I, Code;
+    local bool bNonSpace;
+    if (Len(Command) < 1 || Len(Command) > 384) return false;
+    for (I = 0; I < Len(Command); ++I)
+    {
+        Code = Asc(Mid(Command, I, 1));
+        if (Code < 32 || Code > 126) return false;
+        if (Code != 32) bNonSpace = true;
+    }
+    return bNonSpace;
+}
+
+// Keep engine output readable through the ASCII receipt channel.
+function string ConsoleOutput(string Output)
+{
+    local int I, Code;
+    local string Result;
+    for (I = 0; I < Min(Len(Output), 8192); ++I)
+    {
+        Code = Asc(Mid(Output, I, 1));
+        if (Code == 13) continue;
+        if (Code == 9 || Code == 10 || (Code >= 32 && Code <= 126)) Result $= Chr(Code);
+        else Result $= "?";
+    }
+    return Result;
+}
+
+// Results are allocated/owned by UnrealScript, never native code.
 function SubmitTestAction(string Wire)
 {
     local array<string> Fields;
@@ -185,6 +228,7 @@ function SubmitTestAction(string Wire)
     local KFPawn_Human Human;
     local class<KFWeapon> W;
     local int ExistingID, I;
+    local string Output;
     LastTestReceipt = "error" $ Chr(9) $ "invalid_request";
     if (Len(Wire) > 512) return;
     ParseStringIntoArray(Wire, Fields, Chr(9), false);
@@ -215,6 +259,26 @@ function SubmitTestAction(string Wire)
     if (Fields[2] == "status" && Fields[4] == "-" && Fields[5] == "0") LastTestReceipt = Status();
     else if (Fields[2] == "catalog" && Fields[5] == "0" && Registry.ValidPerk(Fields[4]))
         LastTestReceipt = Registry.Catalog(Fields[4]);
+    else if (Fields[2] == "console" && Fields[5] == "0" && ValidConsoleText(Fields[4]))
+    {
+        PC = LocalPlayerByID(int(Fields[3]));
+        if (PC == None) LastTestReceipt = "error" $ Chr(9) $ "local_player_not_found";
+        else if (bJobActive || (Diagnostic != None && Diagnostic.bBusy)) LastTestReceipt = "error" $ Chr(9) $ "job_busy";
+        else
+        {
+            // Reserve before executing: travel/quit or reentrant commands must
+            // never cause the same action to execute twice.
+            LastTestReceipt = "error" $ Chr(9) $ "indeterminate_do_not_retry";
+            I = ActionIDs.Length;
+            Remember(Fields[1], Wire, LastTestReceipt);
+            if (PC.CheatManager == None) PC.EnableCheats();
+            Output = PC.ConsoleCommand(Fields[4], false);
+            LastTestReceipt = "ok" $ Chr(9) $ "console_dispatched=1" $ Chr(9)
+                $ "output_truncated=" $ int(Len(Output) > 8192) $ Chr(10) $ ConsoleOutput(Output);
+            ActionReceipts[I] = LastTestReceipt;
+            return;
+        }
+    }
     else if (Fields[2] == "diagnostic" && Fields[5] == "0")
     {
         if (Diagnostic == None)
@@ -229,9 +293,9 @@ function SubmitTestAction(string Wire)
     else if (Fields[2] == "give-all" || Fields[2] == "give-one" || Fields[2] == "spawn-zeds")
     {
         PC = LocalPlayerByID(int(Fields[3]));
-        Human = PC != None ? KFPawn_Human(PC.Pawn) : None;
+        Human = LivingTestPawn(PC);
         if (PC == None) LastTestReceipt = "error" $ Chr(9) $ "local_player_not_found";
-        else if (Human == None || Human.Health <= 0 || KFPawn_Customization(Human) != None || Human.InvManager == None)
+        else if (Human == None)
             LastTestReceipt = "error" $ Chr(9) $ "living_test_pawn_required";
         else if (bJobActive || (Diagnostic != None && Diagnostic.bBusy)) LastTestReceipt = "error" $ Chr(9) $ "job_busy";
         else
@@ -380,8 +444,6 @@ function AdvanceLocalTest()
     local KFPlayerController PC;
     local KFPawn_Human Human;
     if (!Authorized()) { ClearTimer('AdvanceLocalTest'); return; }
-    if (WorldInfo.RealTimeSeconds - BeganAt >= 1800)
-    { DisableLocalTest("lifetime_limit"); NativeLocalTestPoll(); ClearTimer('AdvanceLocalTest'); return; }
     if (Diagnostic != None && WorldInfo.RealTimeSeconds - BeganAt >= 300)
     { DisableLocalTest("diagnostic_lifetime_limit"); NativeLocalTestPoll(); ClearTimer('AdvanceLocalTest'); return; }
     // Keep the test-only byte counter saturated after drops/pickups too.
@@ -394,7 +456,7 @@ function AdvanceLocalTest()
     if (bJobActive)
     {
         if (Job.PC != LocalPlayerByID(Job.PlayerID) || Job.PC == None || Job.PC.Pawn != Job.Human
-            || Job.Human == None || Job.Human.bDeleteMe || Job.Human.Health <= 0)
+            || Job.Human == None || LivingTestPawn(Job.PC) != Job.Human)
             FinishJob("test_pawn_changed");
         else
         {
@@ -410,17 +472,26 @@ function AdvanceLocalTest()
 simulated event Tick(float DeltaTime)
 {
     Super.Tick(DeltaTime);
-    if (Diagnostic != None)
-    {
-        Diagnostic.Advance();
-        // Refresh the bounded native input snapshot each simulation tick;
-        // file requests retain their existing 500 ms channel poll limit.
-        NativeLocalTestPoll();
-    }
+    if (Diagnostic != None) Diagnostic.Advance();
+    // Console pause must not prevent the matching unpause request. Native
+    // file polling remains throttled even though this callback ticks paused.
+    NativeLocalTestPoll();
+}
+
+function PrepareLocalTestTravel(optional string Reason)
+{
+    if (NativeTestWorldClosed != 0 || !Authorized()) return;
+    // Cancel world-owned jobs before surrendering the actor. Native keeps the
+    // launch ledger/session identity only for a still-enabled ordinary test session;
+    // disabled and diagnostic sessions stay closed across travel.
+    FinishJob("cancelled_world_closed");
+    NativeTestWorldClosed = 1;
+    NativeLocalTestPoll();
 }
 
 event Destroyed()
 {
+    PrepareLocalTestTravel();
     DisableLocalTest("world_closed");
     Super.Destroyed();
 }
@@ -428,4 +499,5 @@ event Destroyed()
 defaultproperties
 {
     RemoteRole=ROLE_None
+    bAlwaysTick=true
 }

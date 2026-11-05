@@ -57,6 +57,18 @@ void PerkScope::Enter(void* provider, const PerkCall& call) {
     provider_=provider;
 }
 
+void RecordPerkProjectile(GameScript& script, void* provider, void* pawn,
+                          void* weapon, void* projectile) {
+    if (!provider || !script.IsClass(pawn,L"KFPawn_Human") || !PawnHasAuthority(script,pawn) ||
+        !script.IsClass(weapon,L"KFWeapon") || !script.IsClass(projectile,L"KFProjectile") ||
+        script.Read<void*>(weapon,L"Instigator")!=pawn ||
+        script.Read<void*>(projectile,L"Instigator")!=pawn ||
+        script.Read<void*>(projectile,L"Owner")!=weapon) return;
+    auto* function=script.FindFunction(provider,L"NativePerkProjectile");
+    struct Parameters { void* projectile; } parameters{projectile};
+    if (ObjectParameter(script,function,L"P")) script.Invoke(provider,function,&parameters);
+}
+
 void EnterLocalPerk(GameScript& script, PerkScope& scope, void* bridge, void* pawn,
                     void* object, void* function, const void* locals) {
     if (!bridge || !pawn) return;

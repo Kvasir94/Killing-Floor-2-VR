@@ -1,6 +1,6 @@
 // Canonical references for one pawn lifetime. No inventory grants, stock
 // selection changes, item cloning, networking or presentation work occurs here.
-class VRHeldInventory extends Object;
+class VRHeldInventory extends Object dependsOn(VRWeaponDropState);
 
 var KFPlayerController PC;
 var KFPawn_Human Human;
@@ -21,6 +21,143 @@ var KFWeapon NativeRecoilItem;
 // Synchronous native query ingress; the caller saves/restores these for nesting.
 var KFWeapon NativeQueryWeapon;
 var VRWeaponRuntime NativeQueryRuntime;
+// Each hand may await a different cross-owner catch before stock registration.
+// Named fields keep the native reflection boundary explicit and size checked.
+var private int ExpectedTransferSerial0, ReceivedTransferSerial0;
+var private int ExpectedTransferSerial1, ReceivedTransferSerial1;
+var private KFWeapon ExpectedTransferWeapon0, ReceivedTransferWeapon0;
+var private KFWeapon ExpectedTransferWeapon1, ReceivedTransferWeapon1;
+struct RemovedHandling
+{
+    var KFWeapon Weapon;
+    var name ExactName;
+    var VRWeaponDropState.HandlingState Snapshot;
+    var float Expires;
+};
+var private array<RemovedHandling> RemovedHandlingCache;
+delegate OnItemRemoved(KFWeapon W) {}
+delegate OnCycleAbandoned(int Serial) {}
+
+function NotifyRemoved(KFWeapon W)
+{
+    local int I;
+    local VRWeaponRuntime R;
+    if (W != None && (W == ExpectedTransferWeapon0 || W == ReceivedTransferWeapon0))
+        ForgetTransferReceipt(ExpectedTransferSerial0);
+    if (W != None && (W == ExpectedTransferWeapon1 || W == ReceivedTransferWeapon1))
+        ForgetTransferReceipt(ExpectedTransferSerial1);
+    for (I = Items.Length - 1; I >= 0; --I)
+    {
+        R = Items[I];
+        if (R == None || R.Item != W) continue;
+        RememberRemovedHandling(R);
+        OnItemRemoved(W);
+        RetireRuntime(R);
+        return;
+    }
+}
+
+// Stock replacement can retire the old actor before the owner-channel result
+// arrives. Retain only stable availability, never ammunition or an input role.
+private function RememberRemovedHandling(VRWeaponRuntime R)
+{
+    local RemovedHandling Entry;
+    local int I;
+    if (Human == None || R == None || R.Item == None) return;
+    for (I = 0; I < RemovedHandlingCache.Length; ++I)
+        if (RemovedHandlingCache[I].ExactName == R.Item.Name
+            && RemovedHandlingCache[I].Expires > Human.WorldInfo.RealTimeSeconds) return;
+    if (!class'VRWeaponDropState'.static.Capture(R, Entry.Snapshot)
+        && !class'VRWeaponDropState'.static.CaptureForReplacement(R, Entry.Snapshot)) return;
+    Entry.Weapon = R.Item; Entry.ExactName = R.Item.Name;
+    Entry.Expires = Human.WorldInfo.RealTimeSeconds + 5.0;
+    for (I = RemovedHandlingCache.Length - 1; I >= 0; --I)
+        if (RemovedHandlingCache[I].Expires <= Human.WorldInfo.RealTimeSeconds
+            || RemovedHandlingCache[I].ExactName == Entry.ExactName) RemovedHandlingCache.Remove(I, 1);
+    if (RemovedHandlingCache.Length >= 8) RemovedHandlingCache.Remove(0, 1);
+    RemovedHandlingCache.AddItem(Entry);
+}
+
+function bool TakeRemovedHandling(KFWeapon OldWeapon, out VRWeaponDropState.HandlingState Snapshot,
+    optional name ExactOldName)
+{
+    local int I;
+    local VRWeaponDropState.HandlingState Empty;
+    Snapshot = Empty;
+    if (Human == None) return false;
+    for (I = RemovedHandlingCache.Length - 1; I >= 0; --I)
+    {
+        if (RemovedHandlingCache[I].Expires <= Human.WorldInfo.RealTimeSeconds)
+        { RemovedHandlingCache.Remove(I, 1); continue; }
+        if ((OldWeapon != None && RemovedHandlingCache[I].Weapon == OldWeapon)
+            || (ExactOldName != '' && RemovedHandlingCache[I].ExactName == ExactOldName))
+        {
+            Snapshot = RemovedHandlingCache[I].Snapshot;
+            RemovedHandlingCache.Remove(I, 1);
+            return true;
+        }
+    }
+    return false;
+}
+
+function bool ExpectTransferReceipt(int Serial, optional KFWeapon KnownWeapon)
+{
+    if (!bInitialized || Human == None || Human.bDeleteMe || Human.Health <= 0
+        || PC == None || PC.Pawn != Human || Human.Controller != PC
+        || Serial <= 0 || Serial == MaxInt
+        || Serial == ExpectedTransferSerial0 || Serial == ExpectedTransferSerial1
+        || (ExpectedTransferSerial0 != 0 && ExpectedTransferSerial1 != 0)
+        || (KnownWeapon != None && (KnownWeapon == ExpectedTransferWeapon0 || KnownWeapon == ReceivedTransferWeapon0
+            || KnownWeapon == ExpectedTransferWeapon1 || KnownWeapon == ReceivedTransferWeapon1))
+        || (KnownWeapon != None && (KnownWeapon.bDeleteMe || KnownWeapon.WorldInfo != Human.WorldInfo))) return false;
+    if (ExpectedTransferSerial0 == 0)
+    {
+        ExpectedTransferSerial0 = Serial; ExpectedTransferWeapon0 = KnownWeapon;
+        ReceivedTransferSerial0 = 0; ReceivedTransferWeapon0 = None;
+    }
+    else
+    {
+        ExpectedTransferSerial1 = Serial; ExpectedTransferWeapon1 = KnownWeapon;
+        ReceivedTransferSerial1 = 0; ReceivedTransferWeapon1 = None;
+    }
+    return true;
+}
+
+function bool TransferReceiptReady(KFWeapon W, int Serial)
+{
+    if (Serial <= 0 || Serial == MaxInt || W == None || W.Owner != Human || !IsOwned(W)) return false;
+    return (Serial == ExpectedTransferSerial0 && Serial == ReceivedTransferSerial0 && W == ReceivedTransferWeapon0
+            && (ExpectedTransferWeapon0 == None || ExpectedTransferWeapon0 == W))
+        || (Serial == ExpectedTransferSerial1 && Serial == ReceivedTransferSerial1 && W == ReceivedTransferWeapon1
+            && (ExpectedTransferWeapon1 == None || ExpectedTransferWeapon1 == W));
+}
+
+function ForgetTransferReceipt(int Serial)
+{
+    if (Serial <= 0) return;
+    if (Serial == ExpectedTransferSerial0)
+    {
+        ExpectedTransferSerial0 = 0; ReceivedTransferSerial0 = 0;
+        ExpectedTransferWeapon0 = None; ReceivedTransferWeapon0 = None;
+    }
+    if (Serial == ExpectedTransferSerial1)
+    {
+        ExpectedTransferSerial1 = 0; ReceivedTransferSerial1 = 0;
+        ExpectedTransferWeapon1 = None; ReceivedTransferWeapon1 = None;
+    }
+}
+
+function RetireRuntime(VRWeaponRuntime R)
+{
+    if (R == None || R.Inventory != self) return;
+    RememberRemovedHandling(R);
+    if (R.CycleEjectRequest > 0) OnCycleAbandoned(R.CycleEjectRequest);
+    R.CycleEjectRequest = 0; R.MechanismPending = 0; R.CycleEjectOpen = 0;
+    Revoke(R);
+    if (R.Presenter != None) { R.Presenter.Abandon(); R.Presenter.Destroy(); R.Presenter = None; }
+    if (R.EffectsAttachment != None) { R.EffectsAttachment.Destroy(); R.EffectsAttachment = None; }
+    Items.RemoveItem(R);
+}
 
 // bAllowNetwork is the caller's assertion that a local VR context already
 // exists for this pawn. Only VRHandsBridge.IsLocalVRContext, which the network
@@ -74,11 +211,15 @@ function VRWeaponRuntime RegisterItem(KFWeapon W)
     R.Item = W;
     R.ItemId = NextItemId++;
     R.PendingFireCount = Count;
+    // Initialize once for this owned actor. Re-equipping preserves the player's
+    // later AUTO choice; Incision inherits Rail Gun but needs its healing mode.
+    if (W.Class == class'KFWeap_Rifle_RailGun') W.bUseAltFireMode = true;
     // Only the stock selected item can inherit the old shared trigger state.
     if (Human.Weapon == W)
         for (I = 0; I < Count; ++I)
             if (W.PendingFire(I)) R.PendingFireMask = R.PendingFireMask | (1 << I);
     R.NativeReady = 1;
+    R.CarryPrimaryHand = -1;
     Items.AddItem(R);
     return R;
 }
@@ -104,6 +245,10 @@ function VRWeaponRuntime GetSupport(int Hand)
 
 function bool IsDefensiveItem(VRWeaponRuntime R)
 {
+    if (R!=None && R.Item!=None && R.Item.Class==class'KFWeap_SMG_G18')
+        return R.Inventory==self && R.IsCurrent() && R.SupportHand>=0 && GetSupport(R.SupportHand)==R
+            && R.NativeShieldReady==1 && R.ShieldPoseSequence==PoseSequence
+            && R.ShieldPoseRevision==R.OwnershipRevision && R.Item.bUsingSights;
     return R != None && R.Inventory == self && R.IsCurrent()
         && R.PrimaryHand >= 0 && R.PrimaryHand < 2 && GetPrimary(R.PrimaryHand) == R
         && R.Item.IsA('KFWeap_MeleeBase') && R.Item.IsInState('MeleeBlocking')
@@ -126,6 +271,10 @@ function KFWeapon ResolveDefensiveItem()
     R = GetPrimary(0);
     if (IsDefensiveItem(R)) return R.Item;
     R = GetPrimary(1);
+    if (IsDefensiveItem(R)) return R.Item;
+    R = GetSupport(0);
+    if (IsDefensiveItem(R)) return R.Item;
+    R = GetSupport(1);
     if (IsDefensiveItem(R)) return R.Item;
     return None;
 }
@@ -209,13 +358,51 @@ function bool ReleasePrimary(VRWeaponRuntime R, int Hand, int ExpectedItemRevisi
     return true;
 }
 
+// Authoritative reconciliation can restore an exact foregrip carry directly,
+// without inventing a temporary firing primary in the other occupied hand.
+function bool BindCarry(VRWeaponRuntime R, int Hand)
+{
+    if (Hand < 0 || Hand > 1 || R == None || !R.IsCurrent() || R.Inventory != self
+        || R.PrimaryHand != -1 || R.SupportHand != -1 || GetPrimary(Hand) != None || GetSupport(Hand) != None
+        || R.PendingFireMask != 0 || R.OwnershipRevision == MaxInt || HandRevision[Hand] == MaxInt) return false;
+    R.InvalidatePose(); R.SupportHand = Hand; R.CarryPrimaryHand = 1-Hand;
+    ++R.OwnershipRevision; ++HandRevision[Hand];
+    if (Hand == 0) LeftSupport = R;
+    else RightSupport = R;
+    return true;
+}
+
+// Both exact actors become primary in one ledger operation. Readiness and
+// stock activation belong to the caller; no partial pair is published.
+function bool BindPairPrimaries(VRWeaponRuntime A, VRWeaponRuntime B, int Hand,
+    int ARevision, int BRevision, int LeftRevision, int RightRevision)
+{
+    if (A == None || B == None || A == B || Hand < 0 || Hand > 1
+        || A.Inventory != self || B.Inventory != self || !A.IsCurrent() || !B.IsCurrent()
+        || A.PrimaryHand != -1 || B.PrimaryHand != -1 || A.SupportHand != -1 || B.SupportHand != -1
+        || A.PendingFireMask != 0 || B.PendingFireMask != 0
+        || GetPrimary(0) != None || GetPrimary(1) != None || GetSupport(0) != None || GetSupport(1) != None
+        || A.OwnershipRevision != ARevision || B.OwnershipRevision != BRevision
+        || HandRevision[0] != LeftRevision || HandRevision[1] != RightRevision
+        || ARevision == MaxInt || BRevision == MaxInt || LeftRevision == MaxInt || RightRevision == MaxInt)
+        return false;
+    A.InvalidatePose(); B.InvalidatePose();
+    A.PrimaryHand = Hand; B.PrimaryHand = 1 - Hand;
+    ++A.OwnershipRevision; ++B.OwnershipRevision;
+    ++HandRevision[0]; ++HandRevision[1];
+    LeftItem = Hand == 0 ? A : B;
+    RightItem = Hand == 1 ? A : B;
+    return true;
+}
+
 function bool ReplacePrimary(VRWeaponRuntime Old, VRWeaponRuntime R, int Hand,
     int OldRevision, int NewRevision, int ExpectedHandRevision)
 {
     if (Hand < 0 || Hand > 1 || Old == None || R == None || Old == R
         || !Old.IsCurrent() || !R.IsCurrent() || Old.Inventory != self || R.Inventory != self
         || GetPrimary(Hand) != Old || Old.PrimaryHand != Hand || GetSupport(Hand) != None
-        || R.PrimaryHand != -1 || R.SupportHand != -1 || Old.PendingFireMask != 0 || R.PendingFireMask != 0
+        || R.PrimaryHand != -1 || (R.SupportHand != -1 && !(R.Item.Class==class'KFWeap_SMG_G18'
+            && R.SupportHand==1-Hand && GetSupport(1-Hand)==R)) || Old.PendingFireMask != 0 || R.PendingFireMask != 0
         || Old.OwnershipRevision != OldRevision || R.OwnershipRevision != NewRevision
         || HandRevision[Hand] != ExpectedHandRevision || OldRevision == MaxInt
         || NewRevision == MaxInt || ExpectedHandRevision == MaxInt) return false;
@@ -305,6 +492,7 @@ function bool TransferPrimary(VRWeaponRuntime R, int FromHand, int ExpectedItemR
     int ExpectedFromRevision, int ExpectedToRevision)
 {
     local int ToHand;
+    if (R!=None && R.Item.Class==class'KFWeap_SMG_G18' && R.SupportHand>=0) return false;
     if (FromHand < 0 || FromHand > 1) return false;
     ToHand = 1 - FromHand;
     if (R == None || R.Inventory != self || !R.IsCurrent() || GetPrimary(FromHand) != R
@@ -341,6 +529,7 @@ function int BeginPoseFrame()
 // Explicit support-only promotion is a command, never a release side effect.
 function bool PromoteSupport(VRWeaponRuntime R, int Hand, int ItemRevision, int ExpectedHandRevision)
 {
+    if (R!=None && R.Item.Class==class'KFWeap_SMG_G18') return false;
     if (Hand < 0 || Hand > 1 || R == None || !R.IsCurrent() || R.Inventory != self
         || R.PrimaryHand != -1 || R.SupportHand != Hand || GetSupport(Hand) != R
         || GetPrimary(Hand) != None || R.PendingFireMask != 0
@@ -359,6 +548,9 @@ function bool PromoteSupport(VRWeaponRuntime R, int Hand, int ItemRevision, int 
 function Shutdown()
 {
     local int I;
+    ForgetTransferReceipt(ExpectedTransferSerial0);
+    ForgetTransferReceipt(ExpectedTransferSerial1);
+    RemovedHandlingCache.Length = 0;
     // Ownership/actions must be released before production teardown. The
     // feasibility probe changes pending bits synchronously and restores them.
     NativeRoutingEnabled = 0;
@@ -372,6 +564,8 @@ function Shutdown()
     for (I = 0; I < Items.Length; ++I)
     {
         if (Items[I] == None) continue;
+        if (Items[I].CycleEjectRequest > 0) OnCycleAbandoned(Items[I].CycleEjectRequest);
+        Items[I].CycleEjectRequest = 0; Items[I].MechanismPending = 0; Items[I].CycleEjectOpen = 0;
         Items[I].NativeReady = 0;
         Items[I].InvalidatePose();
         Items[I].PrimaryHand = -1;

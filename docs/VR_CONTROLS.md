@@ -2,6 +2,46 @@
 
 Use the build ID shown by your launcher when reporting issues.
 Existing saved settings can override launcher defaults.
+World-weapon throwing/pickup/sharing, gun gravity pull and world recall use the
+shared Solo/online ownership path when world drops are enabled. Owner pickup
+permissions and recall settings still apply. Local component toss/catch keeps
+the same owned inventory actor.
+Zed/body grab and release-to-throw work in Solo and online for hosts and joining
+VR players through **Settings > Weapons & Interactions > Advanced > Zed Grab / Throw**,
+default ON. Online servers allow grabs by default and can explicitly disable them.
+Squeeze an empty hand near an eligible Zed/body; release grip to throw. Standing
+holds and other experimental interactions are not required. Detached local gibs
+remain local physics rather than replicated shared objects.
+Explicit saved ON or OFF choices remain in effect, including older profiles.
+Standing holds remain parked. Blade & Sorcery-style melee is the separate
+**B&S2 Melee** setting, default OFF; off restores the plain melee behavior.
+Normal grip controls, stock weapon pickups/drops, existing melee guards,
+inventory stowing and ammunition recovery remain available. In continuous-held
+mode (TRANSFER / BRACE GRIP: HELD), deliberately release a held weapon to toss it.
+An ordinary draw requires grip to stay held. Quick swapping back to a weapon
+is the exception: it stays equipped until the first grip squeeze, after which
+release works normally. Invalid tracking never counts as a release.
+Squeeze a free hand near the airborne weapon to catch, including the other hand.
+Valid support and pump zones can catch into support carry; the trigger grip
+catches into the normal firing hold. Regrip the trigger to use a support catch.
+A fresh open-then-squeeze is required; an occupied/reloading hand cannot catch.
+Misses return after the existing delay (five seconds when unset). Ownership,
+magazine/chamber ammunition and attachments stay on the same item. Local tosses
+cannot damage, impale, become shared pickups or create death loot.
+The airborne copy preserves the weapon's current mechanism pose. Tossing still
+interrupts unpaid reload work; catching keeps paid ammunition and outstanding
+action debt on the original weapon.
+
+Each gun has its own authored mass, balance and rotational inertia for local
+tosses in solo and multiplayer. Compact pistols flip readily; long or heavy guns
+resist end-over-end flicks and rotate around their balance point. All use the
+same gravity. Catches attach firmly to the hand immediately, with stronger
+haptic impacts for heavier guns or faster motion relative to the catching hand.
+Moving with the gun softens the catch. Release, catch and ground contact reuse
+the gun's original handling sounds where available, with shared stock rattles as
+fallbacks and material sounds on ground impacts. There are no air sounds or
+catch settling animations. These are physical handling estimates, not inventory
+carry-weight values or exact manufacturer specifications.
 
 ## Player guide and tips
 
@@ -9,30 +49,29 @@ Start the extracted ZIP with **Start KF2-VR**. Pick **VR headset** or
 **Desktop - no headset**, then **Play solo**, **Host a game** or **Join a friend**.
 Solo/Host have a **Start** button after their options; Join uses **Paste code**
 then **Join**. In the lobby choose a perk and Ready. Keep the launcher open for
-cleanup when the game exits. Start ordinary KF2 from your store once before first setup,
+cleanup when the game exits. Start ordinary Steam KF2 once before first setup,
 and activate your headset software's OpenXR runtime for VR. The package must
-match the exact installed Steam or Epic KF2 executable. Epic is experimental
-Solo VR only, using session Launch Options pasted into the official Epic launcher.
-Host/Join/Desktop and recording are unavailable for Epic; see READ ME FIRST.
+match the installed Steam KF2 executable; Epic is unsupported.
 
 Button names below refer to physical controllers, not keyboard keys. Touch has
 X/Y on the left and A/B on the right: X/A are the lower action buttons, Y/B the
 upper inventory buttons. Index uses A/B on each hand for those same actions;
-use the centred two-stick-click chord for the VR menu because its system button
-is reserved. The OpenXR binding suggestions also include Vive trackpad and WMR
+hold its right trackpad press for 0.6 s with the right trigger released to open
+the VR menu, or use the centred two-stick-click chord. Its system button is
+reserved. The OpenXR binding suggestions also include Vive trackpad and WMR
 stick/grip/menu actions, but do not supply their lower/upper face-button actions.
 Do not assume complete wheel/reload support on those controllers or a simple
 select-only controller. Validate the available runtime bindings before claiming
 support. Changing movement/dominant hand does not swap physical X/Y/A/B labels.
 
 For a fresh profile: left stick moves relative to the head, right stick turns,
-30-degree snap turn is ON, click-to-sprint is used, and down-stick crouch is ON.
-The weapon hand defaults right; menu pointer defaults right. Performance / 100%
-render scale is the launcher starting point. Button reloads, latched transfer/
-brace grip, held support grip and support-hand gun aiming are defaults. Physical reloads/manual pump,
-body holsters, threaded rendering, Portal/Breacher content and host inventory
-slowdown start OFF. Solo Zed grabs start ON; experimental multiplayer grabs
-start OFF and follow the host. Saved preferences override starting defaults.
+30-degree snap turn is ON, click-to-sprint is used, and down-stick crouch is OFF.
+The weapon hand defaults right; menu pointer defaults right. The Quality preset /
+100% render scale is the launcher starting point. Button reloads, latched transfer/
+brace grip, held support grip and support-hand gun aiming are defaults. Physical
+reloads/manual pump and host inventory slowdown start OFF; single-pass stereo and
+the separate render thread are always on, not options. Zed grabs default ON in Solo and online when no valid choice is saved,
+and world weapon drops are ON. Other saved preferences override starting defaults.
 
 **Fast equipment reminders**
 
@@ -44,8 +83,10 @@ start OFF and follow the host. Saved preferences override starting defaults.
   available with the movement-hand wheel open; teleport is blocked while open.
 - Single-tap Y/B recalls that hand's previous item, or opens it if no distinct
   previous item exists. Double-tap stows an occupied hand. Double-tap an already
-  empty hand to draw the syringe; alternatively choose it on the wheel. There
-  is no active wrist/forearm syringe pouch and no automatic grip-release return.
+  empty hand to draw the syringe; alternatively choose it on the wheel.
+  **Quick heal:** tap Y/B, then press it again and hold: the syringe draws into
+  that hand from any state, and a single tap afterwards returns the previous
+  item. There is no active wrist/forearm syringe pouch.
 - With the syringe equipped, bring that hand near the upper chest below the
   head and pull trigger for self-healing. The automatic self-heal zone is within
   32 UU of a point 35 UU below the head. Outside that zone trigger uses the
@@ -56,25 +97,27 @@ start OFF and follow the host. Saved preferences override starting defaults.
   grip to throw. Trigger does not throw it. A release at rest drops it; a
   very short grab or invalid tracking can cancel without spending ammunition.
 - For two-hand support, squeeze at the gun's support contact. The default is
-  hold-to-support; release grip to detach. Acquired firearm support stays held
-  across distance drift while grip and tracking remain valid. Weapons stay equipped
-  when fingers relax. To transfer primary ownership, use a support-only carry
-  after the old primary is stowed, move to the primary grip and pull trigger;
-  that pull claims the item and a fresh pull fires. It is not an unconditional
-  swap while the other hand remains primary.
-- Optional holsters: **VR SETTINGS > INTERACTION > BODY HOLSTERS**. Two shoulder
-  positions hold long guns, two hip positions hold compatible one-hand items.
-  Arrive at a compatible slot and freshly squeeze grip to stow; an empty hand
-  squeezes a filled slot to draw. Release support and settle before stowing.
-  Syringe and welder are excluded. **HOLSTER FIT** calibrates the hip slots.
-- Dosh remains the stock toss action, not a hip-wallet grab: keyboard **B** on
-  the default desktop layout. VR controller B still controls right-hand inventory.
+  hold-to-support; release grip to detach. Primary holding stays latched by
+  default. With **ALLOW SUPPORT-HAND CARRY** enabled, squeeze and release the
+  primary grip while the other hand remains braced. The foregrip then carries
+  the gun without firing. The original hand can work its action or squeeze at
+  the primary contact to regrip; firing requires a fresh trigger pull. Releasing
+  the final support grip safely stows the gun in inventory.
+- Body holsters and HOLSTER FIT are withdrawn. Saved holster settings and
+  offsets are retained but inactive; use the weapon wheel to equip and stow.
+- Dosh: open a wheel, choose **DROP**, then **DROP DOSH**. Each click tosses one
+  stock wad from that hand forward along its aim; the wheel stays open for more.
 - Y/B beside that controller's temple toggles the flashlight instead of swapping.
+  A fresh grip squeeze there also toggles it when that hand is empty and free;
+  release the grip before toggling again. Body items and occupied hands keep
+  their existing actions.
   The non-movement-stick click closes an open movement-hand wheel. If neither
   wheel is open, it offers the welder near a closed/broken door; elsewhere it
-  opens the movement-hand wheel. The welder always equips the right hand.
-  Trigger welds, A plus trigger unwelds; click again near the door or walk away
-  to return the previous right-hand item. Point/move the wheel controller and
+  opens the movement-hand wheel. Near such a door a blue welder hologram also
+  floats in front of it: squeeze grip on it with a free hand to take the
+  welder, trigger welds, X/A plus trigger unwelds, and letting go of grip puts
+  it back. The stick-click welder goes to the right hand until clicked again or
+  walked away from. Point/move the wheel controller and
   release its trigger to select; stick tilt does not select a sector.
 
 **Comfort, menus and practice**
@@ -89,7 +132,9 @@ a valid destination. Click that stick to cancel without teleporting. Keep the
 turn stick for facing; arrival-facing is a separate optional preference.
 
 Menu button toggles the VR menu. Alternatively centre both sticks, release both
-triggers, and hold both stick clicks for 0.6 s with tracking valid. The current
+triggers, and hold both stick clicks for 0.6 s with tracking valid. Index also
+accepts a 0.6 s right trackpad press with its trigger released; a held control
+on entry or after tracking loss needs a release before it can toggle. The current
 menu pauses a living Solo match when it can acquire pause ownership; online
 matches continue. Use the pointer hand and trigger for menu targets. Press/release
 the same target for +/- changes. Calibration tile editors use hand movement and
@@ -101,35 +146,57 @@ leave controls, practice/tools and Quit.
 
 Use **CALIBRATION** directly from the root VR menu, or **VR SETTINGS > CALIBRATION**,
 for global weapon fit/profile reset, standing/
-seated baseline and chest-zone capture/reset. **MENU AND INTERFACE** sets pointer
+seated baseline and chest-zone capture/reset. Two aim options live there too.
+**GRENADE GRIP** defaults to the authored stock grip; select **TRACKED CURL**
+there to use live fingers instead. This applies to the nine stock grenades.
+Boss introductions use a fixed nearby viewpoint with a blink on entry and
+exit; the viewpoint does not move your pawn. Death and spectator views remain level.
+**AIM MODE** on CALIBRATION picks where shots go. **CONVERGE 20M**
+directs each firearm's shot from the muzzle onto its sight line at 20 m. **BORE**
+fires straight out of the barrel. **SIGHT POINT** (the default) traces the sight line and turns the shot, its tracer and
+any Zed Time projectile from the muzzle onto the traced target; the laser points
+there too. It traces up to 50 m and uses a minimum target
+distance of 1 m. Single bead/pin sights
+use a bore-parallel reference; the bow follows its current drawn arrow. Tools
+without an aiming sight keep their bore aim. **MENU AND INTERFACE** sets pointer
 hand, panel placement and recenter. **HUD AND READOUTS** adjusts ammo/top-HUD
-placement, watch/readouts, damage popups, laser pointer and reload hints. **GRAPHICS**
+placement, watch/readouts, damage popups, laser pointer and reload hints.
+**AIM ASSISTANCE** under **GUN HOLDING** offers **MOUSE & KEYBOARD** (shot
+correction Off), **GAMEPAD** (stock shot correction), and **CUSTOM** (adjustable
+correction and range). Gamepad is the default. This is separate from the
+calibrated sight/convergence aim mode.
+**LASER ORIGIN** under **HUD AND READOUTS** selects the **MODELED EMITTER**
+(default) or **BORE**. Weapons without an authored emitter use the bore fallback.
+Both settings are also available in the desktop launcher and persist across
+Solo and multiplayer. An open break-action barrel carries its laser with it.
+Pouch and ordinary rack reach use the donor's 18 UU and 16 UU distances.
+The MP7 also accepts a palm on its handle. Saved pouch fit and insertion
+distance stay available and unchanged respectively. **GRAPHICS**
 adjusts render scale and supported quality/lighting; locked VR effects are status
 rows. Capture your actual posture; recentering and seated play do not turn on
-teleport. **SEATED HEIGHT**, beside RECENTER, adjusts the seated view in 1 cm
-steps from -40 to +12 cm; head and hands move together. RESET HEIGHT restores
-zero, recapture preserves the adjustment, and standing capture ignores it.
-**CHEST ZONE HERE** uses the same scaled grenade center as its grab zone.
-**RESET PROFILE FIT** uses the selected Neutral/Relaxed-wrist/Legacy fit.
+teleport. **RESET PROFILE FIT** uses the selected Neutral/Relaxed-wrist/Legacy fit.
 
 **PRACTICE AND TOOLS** opens calibration, practice, its armory and healing patient.
 Solo armory can add/equip registered items; network armory equips owned items.
 Network practice requires sole-player/admin permission. Practice suspends waves,
 refills ammo and enables invulnerability; **END PRACTICE** ends it, while closing
 the panel alone does not. Practice/God Mode leaves that session unranked.
-The wheel's **+** submenu exposes Drop, God Mode and Back; Drop follows stock
-item restrictions. It does not grant an unowned weapon.
+The wheel's **DROP** sector opens Drop weapon, Drop dosh and Back; weapon drops
+follow stock item restrictions. It does not grant an unowned weapon.
 
 **Combat and special items**
 
 Aim/fire each hand independently. X/A short tap reloads on release; hold changes
 a persistent mode where supported, or combine it with a fresh same-hand trigger
 for secondary fire. Release a previously held trigger before requesting a secondary.
-Use **VR SETTINGS > INTERACTION > RELOAD MODE** to cycle **BUTTON > PHYSICAL >
+Use **VR SETTINGS > INTERACTION > RELOADS > RELOAD MODE** to cycle **BUTTON > PHYSICAL >
 PHYSICAL + PUMP**. Unsupported weapons retain their normal path. In physical
 reloads, follow the active ammo/action hint: off-hand trigger takes and carries
 ammo, seated contact credits it, and the action must be completed where required.
-X/A can release a supported locked slide after seating. Guidance and detailed
+X/A can release a supported locked slide after seating. **RELOADS > X / A EJECTS
+FULL MAG** optionally permits removal of a full magazine through the same
+physical ammo rules; it defaults OFF and requires physical reloads.
+Guidance and detailed
 per-family actions are below; coverage is not arsenal-wide headset acceptance.
 
 Empty clenched hands punch by swinging; grip plus held trigger charges that
@@ -141,9 +208,10 @@ heavy/secondary action uses X/A plus a fresh trigger where supported. Physical
 melee does not universally use trigger for an ordinary swing. Ion Thruster's
 quick X/A asks for its charged ultimate. Keep weapon-specific firing actions.
 
-An empty hand grips a nearby eligible Zed/body to hold it where allowed; keep
+With the solo grab option enabled, an empty hand grips a nearby eligible Zed/body; keep
 grip held, then release to drop/throw. That hand is occupied, the other can act.
-Multiplayer grabbing permission belongs to the host. Multiplayer empty hands
+The independent Zed Grab / Throw option also works online when the server allows
+it; multiplayer empty hands
 can fist-bump (clenched) or high-five (open) a teammate; gestures are always on,
 with participants' haptics and shared effects. These still need real-player
 acceptance and have no dedicated controller switch.
@@ -152,93 +220,12 @@ C4/Sentinel/Bombardier: equip, hold trigger, swing and release trigger to throw
 or place; X/A plus trigger invokes detonation. RAVEN-7: hold trigger to prepare,
 swing and release to throw; a fresh airborne trigger hold suspends it and
 release recalls, while a resting axe recalls on the new press. Fresh grip is
-a recall shortcut. Portal Gun, when offered in Solo: trigger places blue,
-X/A plus trigger places orange, quick X/A dismisses portals. Threaded rendering
-must be OFF for portal see-through views. Ported tools route their secondary
+a recall shortcut. Ported tools route their secondary
 intent through X/A plus trigger; their separate content guides describe special
-stock actions. Breacher is frozen and omitted from release 213005; leave its
-launcher checkbox OFF. Its optional controls remain documented for earlier packages.
-
-**Friends, desktop and recovery**
-
-Host/Join can each use VR or Desktop. First hosting downloads a separate server
-(about 32 GB). Allow KFServer through Windows Firewall and forward UDP 7777/27015
-for internet friends. Host **Copy code** generates a password-bearing `KF2VR1:`
-code; share it privately. Friends **Paste code > Join** with the same package;
-they need no server download or port forwarding. Use VAC-off sessions supplied
-by the launcher. Lobby Ready, real-WAN reachability and online voice must be
-checked with the partner; custom multiplayer does not promise normal progression.
-
-Desktop uses the player's stock KF2 bindings. With the installed game's default
-keyboard layout: WASD move, mouse aims, left mouse fires, right mouse toggles
-sights, middle mouse changes fire mode, R reloads, G throws grenade, Q quick-heals,
-V bashes, E/Enter interacts, F toggles flashlight, Shift sprints, Space jumps,
-C toggles crouch, wheel cycles weapons, 1-4 select groups, Backspace drops the
-weapon, B tosses dosh, Escape opens menus, Tab shows scores, T/Y open public/team
-chat, Z opens voice commands, Caps Lock is push-to-talk, F1/F2 vote, and X toggles
-friendly UI. Saved custom bindings take precedence. Desktop stock gamepad mapping
-also remains available: left stick walks, its click runs/crouches through stock
-GamepadSprint; right stick aims, its click bashes; A jumps/votes Yes, B interacts/
-votes No; X tap reloads and hold quick-heals; Y tap switches per the stock last/
-cycle preference and hold opens its selector. RT fires, LT sights, LB grenades,
-RB uses stock fire-mode/secondary behavior (or drops a permitted weapon with
-the stock selector open). Start opens the menu, Back holds scores. In ordinary
-play D-pad left opens voice commands, right tosses dosh, down toggles flashlight,
-up switches to/from healer; with the stock weapon menu open left/right/down/up
-choose groups 0/1/2/3. While spectating, left/right change player and down changes
-camera. Saved settings and game state can change stock behavior. The VR controller chord
-does not replace these desktop controls. There is no dedicated VR-controller push-to-talk binding
-in the current action set; do not confuse the inventory buttons with voice.
-
-Keep the launcher until cleanup completes. After interruption use **Fix a stuck
-session** before deleting that folder, changing releases or playing ordinary KF2.
-Extract updates into fresh folders; finish cleanup before reopening an older ZIP.
-Never combine release DLLs. **Save logs for a bug report** creates a ZIP beside
-Start KF2-VR; nothing uploads automatically. The launcher's collector anonymizes
-recognized paths, known usernames/player names, account IDs, network addresses
-and emails in report copies; passwords, recognized tokens and join codes are
-removed. Original logs stay unchanged; configs and crash dumps are excluded.
-Review any report
-ZIP for other personal details in free-form text, share sensitive reports privately,
-and include build ID (`app/release.json`), mode/map/weapon, headset/runtime/GPU,
-options, expected/actual result and repeat steps. Keep raw logs/configs/dumps private.
-
-Useful troubleshooting: release triggers after a menu/tracking interruption;
-re-centre the turn-hand wheel's stick before turning/jumping; empty both
-primary/support occupancy before taking a chest grenade; try ordinary Button reload mode if an optional
-physical mechanism blocks play; retain normal/elite, empty/tactical and handedness
-in a reload report. Do not bypass a game/package mismatch or assume a compiled
-candidate passed headset acceptance.
-
-Solo Zed grabbing remains ON by default (`bZedGrabEnabled`) with an ordinary
-ON/OFF preference under the game menus. Multiplayer grabbing is the host's
-launch setting (OFF by default) and applies to every player; **Experimental**
-shows it read-only. A one-player host is still multiplayer. Living Zeds, corpses,
-gibs and their hold/swing/smash/throw interactions follow the same mode policy.
-Loss of permission or context cancels owned holds without a throw. Fists,
-charged fists, bashing, utility gestures and weapon/support grips remain available.
-
-New profiles use neutral aim; Settings exposes **Relaxed-wrist fit (Arizona Sunshine 2,
--20.6 degrees)** and **Legacy Quest 2 fit (-8.6 degrees)**.
-Existing fit values survive. The Advanced Hand / Holster Calibration panel still
-owns detailed aim-fit adjustment. The portable ZIP contains a standalone quickstart.
-
-
-The multiplayer mod lets VR players hold two different owned
-supported weapons, with independent triggers and A/X reloads. An empty hand can
-support the other gun. Desktop players retain stock weapon handling. Supported
-stock pairs use shared solo/network conversion; live acceptance remains pending.
-Physical melee, punching and charged fists remain core in solo and multiplayer. Inventory Focus also has
-an experimental host-controlled online mode, Off by default (launcher option 7).
-When enabled, a latched open wheel requests shared slowdown; confirming or
-cancelling the wheel clears that request. Tap quick-swap stays at normal speed.
-
-Each primary weapon has a compact world-space magazine readout just beside its
-gun. It shows the current magazine and spare ammunition, with a small fill bar and an
-explicit reload or empty state when applicable. It is local-only, follows the
-actual held weapon, and hides when that hand or its tracking context is unavailable.
-A muted `AUTO`, `SEMI`, or `BURST` badge appears only when the selected fire
-mode is relevant, leaving the readout otherwise focused on ammunition.
+stock actions. Breacher is parked and omitted from this stable
+candidate. Its launcher controls and enable overrides are unavailable.
+Standing holds stay parked; impaling and contact blocking come only with B&S2 Melee on; the
+separate grab option only enables the existing eligible Zed/body route in Solo and online.
 
 ## Default Quest / Touch layout
 
@@ -254,37 +241,45 @@ slot to recall. Behavior, tuning and pending acceptance.
 | Movement stick (left by default) | Move; deflection alone does not start sprint |
 | Movement-stick click | Latch sprint while the movement stick is deflected in any direction; in teleport mode, cancel the arc. It lasts until the stick returns to centre or you crouch; firing, reloading and drawing only pause it, and it resumes about 0.35 s after both triggers are released and the weapons allow sprint. KF2 still sets the speed for each direction |
 | Non-movement stick left/right | Turn |
-| Non-movement stick up | Jump at the outer rim (magnitude ≥ 0.95), mostly upward; returns to centre before the next jump. While a stick crouch is latched, up stands instead of jumping |
+| Non-movement stick up | Jump at the outer rim (magnitude ≥ 0.95), within 40° of up; that whole upward arc excludes turning, including the push toward the rim. Returns to centre before the next jump. While a stick crouch is latched, up stands instead of jumping |
 | Non-movement stick down | Toggle crouch at the outer rim, for seated or mobility-limited play: stock crouch with the view lowered as on flat. Up or a sprint click stands. VR SETTINGS > LOCOMOTION AND COMFORT > STICK CROUCH turns it off (default on) |
 | Physical lowering | Stock crouch (bonuses, speed, capsule) after calibrated height threshold and dwell; the view is not lowered again, only the real head drop shows |
+| Y / B tap, then press again and hold 250 ms | Quick heal: draw the syringe into that hand from any state; a later single tap returns the previous item |
 | Y / B, single tap (240 ms double-tap window) | Quick-swap the left / right hand's exact previous weapon, or stow to an open hand when no distinct previous weapon exists; cancel while open |
 | Y / B, double tap | Stow/open only that controller's hand through the inventory ownership path; carried weapons and previous-item history remain available; empty hands still punch and charge fists. A hand that is already open draws the syringe instead (refused if the other hand holds it) |
 | Y / B pressed with that hand beside the head | Toggle the flashlight (head lamp), whatever either hand holds. The hand must be within 20 UU of the head and not in front of the face, so a raised pistol still quick-swaps; the press never opens the wheel |
+| Empty, free hand: fresh grip squeeze beside the head | Toggle the flashlight using the same temple zone. Release before another toggle; reloads, held items, transfers and body contacts keep their ownership |
 | Y / B, hold 250 ms then release | Open spatial inventory for that same hand; it stays open. The opening hand's stick is idle while it is open; the other stick keeps its locomotion role |
 | Point or move the opening controller toward an icon, then squeeze and release its trigger | Equip into that same hand on release and close the wheel automatically; stick tilt never highlights a sector |
 | Trigger with the hand back at the centre (nothing highlighted), or Y / B while the wheel is open | Cancel |
-| Wheel > + (DROP / GOD MODE) > DROP | Throw that hand's item as the stock pickup a teammate can collect. Stock rules apply: the knife, 9mm backup, welder and VR pair members cannot be dropped |
+| Wheel > DROP > DROP (weapon) | Throw that hand's item as the stock pickup a teammate can collect. Stock rules apply: the knife, 9mm backup, welder and VR pair members cannot be dropped |
+| Wheel > DROP > DROP DOSH | Toss one stock wad (stock amount and debit) from that hand's palm forward along its aim; the wheel stays open for repeated tosses |
 | >> sector + trigger click (only with more than eight carried items) | Cycle carried-weapon pages and keep the wheel open |
-| Grip | Hold support contact while squeezed by default; primary stays equipped. Emptying a primary uses OPEN HAND or double-tap Y/B. Body zones override a nearby Zed grab; a valid support contact wins before optional body-slot/chest-grenade arbitration. No active wrist syringe or hip wallet |
+| Grip | Hold support contact while squeezed by default; primary stays equipped. Emptying a primary uses OPEN HAND or double-tap Y/B. A valid support contact takes priority over a chest grenade; body holsters remain inactive. No active wrist syringe or hip wallet |
 | Draw syringe from wheel, or double-tap Y/B on an already empty hand | Syringe remains equipped until stowed/switched. Trigger with the hand near the upper chest (32 UU around a point 35 UU below the head) self-heals; outside that zone trigger uses teammate healing along its aim. X/A plus a fresh trigger invokes its secondary/self-heal action |
 | Empty hand: grip the visible chest grenade, swing, release grip | Hold-to-carry even with latched primary grip. Grip release throws/drops; trigger does not. Invalid/very short sampling can cancel without spending a grenade |
-| Empty hand: grip near a Zed, corpse or gib | Zed grab (`bZedGrabEnabled`, on by default in Solo): hold-only even under toggle grip. Release drops it; release while moving throws it. Bosses never; large Zeds only when eligible. Chest grenade and optional body zones take priority over nearby Zed grabs. The holding hand runs nothing else; multiplayer follows the host |
-| Support-only carry with no current primary, hand at the primary grip + trigger | Promote that hand to primary; the claiming pull does not fire. This is not a swap while the other hand remains primary |
+| Optional support-hand carry: squeeze/release primary grip while braced | Support carries the gun; it cannot fire. Original hand can operate the action or squeeze at the primary contact to regrip. Final support release leaves a local cosmetic drop with automatic return; toggle support uses its toggle-off squeeze |
 | X / A, tap and release | Reload left / right item immediately on release |
 | X / A, hold | Change one persistent firing mode, or prepare that hand's temporary secondary modifier; see Weapons |
 | X / A + that hand's fresh trigger pull | Secondary fire for a secondary-action weapon. Single-shot secondaries (e.g. the double-barrel shotguns) need a fresh pull per shot; continuous ones fire while held |
+| Free hand: grip the welder hologram at a closed/broken door | Take the welder into that hand; trigger welds, X/A + trigger unwelds, releasing grip puts it back |
 | Non-movement stick click | Close an open movement-hand wheel. Otherwise, with neither wheel open, draw/return the right-hand welder near a closed/broken door, or open the movement-hand wheel elsewhere. There is no stick bash; bash physically |
 | Trigger | Operate that hand's item; an open empty hand interacts. Syringe self-heal uses the upper-chest zone described above |
 | Empty hand: clenched grip + hold trigger | Charge that fist (red glow, rising haptics); punch while still holding to spend it. Replaces interact while clenched, including a partial analog squeeze |
-| Menu button, or both stick clicks held 0.6 s | Toggle and recentre the VR menu (stock UI floats inside). The chord needs both sticks centred, both triggers released and both hands tracked |
+| Menu button, both stick clicks held 0.6 s, or Index right trackpad press held 0.6 s | Toggle and recentre the VR menu (stock UI floats inside). The chord needs both sticks centred, both triggers released and both hands tracked; Index trackpad needs its right trigger released. Release before another toggle |
 
 During play, stock game-menu panels also show **RESUME GAME** in the lower-right corner. Select it with the pointer trigger to return to the match; popups must be finished or cancelled first.
 
-Weapons stay held after the fingers relax. The radial is anchored when opened,
+**TRANSFER / BRACE GRIP: TOGGLE** keeps weapons held after the fingers relax. In
+**HOLD** mode, the wheel acts as a pocket: point to a weapon, then press that hand's grip
+to draw it immediately; release that confirming grip to drop/toss. A grip held
+on wheel entry must first open before confirming. Other draw paths with an
+already open grip stay held until a deliberate squeeze then release.
+The radial is anchored when opened,
 80 UU ahead, 20 UU below eye level and 12 UU toward its own side (38 UU when
 both wheels are open, side by side). It follows player translation without
 following hand tremor or head turns. The wheel has at most ten equal sectors:
-OPEN HAND (top), up to eight carried items, then the + sector (DROP / GOD MODE / BACK). Only with nine
+OPEN HAND (top), up to eight carried items, then the DROP sector (DROP weapon / DROP DOSH / BACK). Only with nine
 or more carried items does it page: seven items per page plus a fixed
 `>> PAGE n/N` sector, and every page keeps all ten sectors so OPEN HAND, NEXT
 and + never move (a short last page leaves its spare sectors empty).
@@ -296,12 +291,16 @@ weapons, then the backup 9mm/knife (`bIsBackupWeapon`), then equipment such as
 the syringe. The forearm pouch is inactive. Within a group, acquisition
 order is kept, so new purchases append to their group. `SelectorFavorites`
 lead. Nothing is hidden or removed: every owned, supported item stays on the
-wheel. Converted pairs occupy one choice, ranked as the stock dual; drawing
-resolves the opening hand's existing member or an available member, retaining
-exact magazines. Unowned items disappear. Stock silhouettes stay prominent and
+wheel. A dual pistol purchase has two individual pistol sectors. Each converted
+sector selects that exact member and its magazine; an occupied member never
+silently selects the other pistol. Selecting an unsplit stock pair prepares the
+existing pair and draws only the chosen member. Choices freeze during a
+confirmation pull and ownership is rechecked before the draw. Unowned items disappear. Stock silhouettes stay prominent and
 shrink only as far as needed to keep ten apart; only the highlighted choice
 shows its name and exact ammunition, on a red spray slash. An item held by the
-other hand is dimmed and marked HELD.
+other hand is dimmed and marked HELD. The same label shows OUT for a loose or
+returning weapon and GROUND for a settled dropped weapon; it updates while the
+wheel remains open. The weapon held by this wheel's hand also shows HELD.
 
 Each gun has a spray-painted ammo bar: magazine plus reserve over the most it
 can carry (stock `GetTotalAmmoAmount` / `GetMaxAmmoAmount`), with a tick at one
@@ -326,17 +325,21 @@ keeps the choice. The cursor enters a sector beyond 7 UU and clears only back
 inside 4.5 UU. A highlighted sector holds until the cursor is a quarter sector
 (at most ten degrees) into its neighbour. The cursor is smoothed over 35 ms of
 real time, a red pip on the wheel shows its exact direction, and each change
-pulses lightly. Once the trigger passes 30% of its travel the cursor holds, so
-the pull cannot tip the choice; release confirms, with distinct confirmation
-haptics. A trigger held on entry cannot equip or fire. Trigger with nothing
+pulses lightly. In latched mode, trigger travel above 30% freezes the choice;
+trigger release confirms, as before. In continuous-held mode, grip travel above
+30% freezes it and a fresh 65% grip press confirms immediately. The confirming
+squeeze is consumed by the draw; it cannot also grab support or another item.
+A confirm control held on entry must first open. Confirming with nothing
 highlighted and Y/B cancel; page/settings navigation keeps the selector open.
 The turn-hand stick is captured while its wheel is open and must return to
 neutral before turning/jumping resumes. Smooth walking stays available with the
 movement-hand wheel open; teleport is blocked while it is open. (Stick-tilt
-selection is not supported.)
+selection, added in `f782843`, was removed after the 2026-09-26 headset
+playtest: two simultaneous methods made the wheel unpredictable.) Wheel labels
+are drawn in a single pass; see HUD for the text-alpha path.
 
 Single-tap Y/B waits 240 ms to distinguish a double tap without performing an
-intermediate swap. A second held press opens the wheel; it does not first empty
+intermediate swap. A second held press draws the syringe (quick heal); it does not first empty
 the hand. Tracking/menu loss clears pending gestures. Temple flashlight presses
 remain a separate consumed gesture. Settings still use their calibration editor;
 inventory selection never shows both hands in columns.
@@ -344,11 +347,16 @@ inventory selection never shows both hands in columns.
 ## Weapons
 
 For a physical gun stock, select **VR SETTINGS > INTERACTION > SUPPORT HAND
-AIMS GUN: OFF**. The primary controller owns firearm aim and placement while
-the support grip retains its usual braced spread/recoil benefits. This saves
-across Solo/multiplayer (`bDisableSupportHandAim=True`). ON remains the default.
-The support hand must still reach the authored contact. This option does not
-calibrate stock mount spacing or change two-hand melee. Headset feedback is pending.
+AIMS GUN: OFF**. The primary controller then owns firearm aim and placement;
+the support hand can still grip and supply the usual braced spread/recoil
+benefits. This works with either hand as primary and saves across Solo and
+multiplayer launches (`bDisableSupportHandAim=True`). ON preserves the existing
+two-hand alignment and is the default, including for older profiles. Toggling
+OFF clears the alignment blend immediately without releasing the support grip.
+Primary weapon-fit calibration, recoil and action animations still apply.
+Support must still reach and remain near the authored contact; this option
+does not calibrate stock mount spacing or bypass grip/tracking checks. Pistols
+already aim from the primary hand; two-hand melee alignment is unchanged.
 
 Pistols and revolvers can be braced with an empty hand: bring it to the firing
 hand at the grip and squeeze grip. The support hand uses the weapon's authored
@@ -357,9 +365,8 @@ borrow the stock 9mm support pose fitted to their firing wrist, since their own
 idle/ADS off-hand poses are for hammer fanning. The primary controller alone
 sets aim direction; moving the support hand never steers a pistol. Unbraced
 shots use stock hip-fire spread and recoil. Valid bracing uses stock ADS spread
-and recoil, without zoom or a sight animation. Release grip to detach;
-lost tracking removes the bonus immediately. Acquired firearm support is retained
-across distance drift while grip and tracking remain valid. Two separately held
+and recoil, without zoom or a sight animation. Release grip or move away to
+detach; lost tracking removes the bonus immediately. Two separately held
 pistols each use hip handling. These rules are shared by solo and multiplayer,
 including converted stock-pair members. The HX25 uses the same brace and handling
 policy, with its own authored receiver contact.
@@ -373,12 +380,12 @@ policy, with its own authored receiver contact.
 | MG3 Shredder | One persistent change: AUTO / SPREAD (stock toggle; spread shots cost 3 rounds) |
 | Seeker Six | One persistent change: SINGLE / LOCK-ON; in LOCK-ON, point the barrel at Zeds to lock them, then fire one rocket per lock |
 | HRG Tommy Boom | One persistent change: AUTO / SEMI |
-| HRG Blast Brawlers | Block/parry (button-driven melee); tap reloads shells; trigger attack fires the blast while loaded, reloads when empty |
+| HRG Blast Brawlers | Block/parry (button-driven melee); tap reloads shells in every mode. Either glove's trigger fires that glove's blast; squeezed during a punch it fires on impact. Empty trigger clicks |
 | Frost Fang | Temporary modifier: pull the trigger while held for the stock stab; tap reloads. Trigger fires the shotgun; swing the blade physically and brace with both hands across the chest to block |
 | VLAD-1000 | One persistent change: SPREAD / SINGLE nail |
 | Doomstick | Temporary secondary modifier: pull the trigger while held to fire every loaded barrel |
 | S12 Shockgun | Temporary secondary modifier for the shock attachment |
-| FAMAS Masterkey | Temporary secondary modifier: pull the trigger while held to fire the underslung shotgun; tap reloads the rifle, or the shotgun when the rifle is full |
+| FAMAS Masterkey | Temporary secondary modifier: pull the trigger while held to fire the underslung shotgun; tap reloads the rifle, or the shotgun when the rifle is full. The front charging handle (the pump) is a support grip: the hand stays on it, and pulling it back and forward cycles the shotgun only after a shotgun shot |
 | HRG Incendiary Rifle | Temporary secondary modifier: pull the trigger while held to fire the incendiary grenade |
 | HRG Dragonsblaze | Temporary secondary modifier: pull the trigger while held for the wide-spread shot |
 | Thermite Bore | Temporary secondary modifier: pull the trigger while held to detonate stuck rounds |
@@ -400,15 +407,14 @@ policy, with its own authored receiver contact.
 | HRG Locust | One persistent change: SINGLE / LOCK-ON; in LOCK-ON, point the barrel at Zeds to lock them |
 | Doshinegun | One persistent change: AUTO / SEMI |
 | C4, HRG Bombardier, Sentinel | Temporary secondary modifier: pull the trigger while held to detonate. The trigger alone throws physically; see Deployables |
-| Rail Gun | One persistent change: AUTO / MANUAL; AUTO counts as sighted, so it locks a Zed's weak spot and fires at the lock as in stock |
+| Rail Gun | Starts in MANUAL; the existing mode hold toggles AUTO / MANUAL. AUTO counts as sighted, locking a Zed's weak spot with stock lock-on timing and movement slowdown |
 | Mosin Nagant | Block/parry (stock); pull the trigger while held for the stock bayonet bash; the trigger alone fires |
 | HRG Head Hunter | Temporary secondary modifier: pull the trigger while held to fire the head-inflating dart |
-| Compound Bow | One persistent change: SHARP / CRYO arrows (stock toggle, with its cryo glow); hold the trigger to draw, release to loose |
+| Compound Bow | SHARP / CRYO arrows (stock toggle, with its cryo glow). Grip an arrow from the opposite belt pouch and nock it manually; pinch the string with the free-hand trigger, draw and release to fire. Short draws retain the same arrow for re-nocking. Native arrows, ammo and damage remain authoritative |
 | HRG Beluga Beat | Temporary secondary modifier: pull the trigger while held for the stock fully charged sonic blast |
 | Corrupter Carbine | Temporary secondary modifier: pull the trigger while held to fire the parasite seed |
 | Medic pistol, HMTech-101/201/301/401, Hemogoblin, HRG Incision, syringe | Temporary secondary modifier; pull the same hand's trigger while held |
 | Tracked Source / Engineer tools | Temporary held secondary intent through the existing tool interface |
-| Portal Gun (experimental solo) | Tap X/A to close both portals; trigger places blue, X/A plus fresh trigger places orange through the tracked-tool secondary route. Portals stay open when the gun is holstered |
 | Item with no secondary classification | No hold action; a quick tap still reloads when supported |
 
 Pressing X/A starts a pending gesture. A short release reloads immediately; it
@@ -422,8 +428,11 @@ hold actions, including refused ones, do not reload on release.
 
 Modes belong to the exact weapon and survive reload, stow and handoff. The HUD
 shows the selected mode. A hold does not repeat a mode change. Mode changes
-during firing, a held trigger, or stock non-active states are refused with a
-soft haptic pulse. Each lower button only controls its own hand.
+wait for stock shot/burst recovery to finish only while that same X/A hold and
+released trigger remain valid. Trigger use, invalid tracking/actions, menus,
+draw/role changes and calibration/reference changes cancel it; release and make
+a fresh hold to try again. Only an accepted change confirms with haptics. Each
+lower button controls its own hand.
 
 Button-driven non-physical melee is the explicit exception: trigger light
 attack, X/A hold block/parry, X/A plus a fresh trigger pull heavy attack.
@@ -440,9 +449,21 @@ wall checks and stock weapon damage/effects still apply. Legitimate explosive,
 firearm and secondary trigger actions remain. Hooks and uppercuts use the same
 closed-fist motion gates as straight punches, without a controller-forward test.
 Being grappled does not disable melee; holding a Zed occupies only that hand.
-The Blast Brawlers retain their trigger-operated, ammo-consuming shotgun
-sequence alongside untriggered physical punches. A quick X/A tap asks the Ion
+Each Blast Brawlers gauntlet fires its own blast (`VRBrawlerBlast`). Squeezing
+with a still fist fires at once from that glove's muzzle along the glove.
+Squeezing during a punch, or keeping the trigger held as a punch starts, loads
+that punch: the blast goes off at its first contact, from the wrist into the
+struck point, or at full extension if it touches nothing. Stock economy holds:
+one shell pays for a pair of blasts from either gloves, so four shells are
+eight blasts. Punches stay physical; the stock trigger attack and its X/A plus
+trigger heavy attack are not used (a fast punch is heavy). A quick X/A tap asks the Ion
 Thruster for its stock charged ultimate; the stock charge gate remains authoritative.
+
+Blast Brawlers use the holding hand's X/A reload tap in every reload mode,
+including with physical reloads enabled. The stock timed reload refills the shared
+pool through weapon authority; no wrist flex, second glove or free hand is needed.
+Empty triggers click even with EMPTY TRIGGER RELOADS on. Static Strikers and
+practice boxing gloves have no ammunition reload.
 
 Static Strikers and Blast Brawlers register each moving gauntlet independently.
 Opening the opposite hand with its B/Y double tap or OPEN HAND sector removes
@@ -462,8 +483,12 @@ driven; trigger remains for profile-specific firearm/explosive actions. Two-hand
 one-handed weapons (knives, tomahawks, the Bone Crusher, the Static Strikers
 and HRG Blast Brawlers) keep the X/A button block. Melee guns (Mosin,
 Eviscerator, Frost Fang, Bladed Pistol) keep the trigger for the gun, and their
-blade contacts use the stock bash damage (the Eviscerator's heavy swing is its
-chainsaw; the Bladed Pistol's is its forward blade's dismembering slash).
+blade contacts use the stock bash damage. The Eviscerator's powered saw uses
+its trigger action and spends fuel; a fast physical swing remains a bash.
+The Bladed Pistol's bash is its forward blade's dismembering slash.
+Holding the Pulverizer trigger during an eligible enemy impact requests one
+explosive cartridge per swing, subject to ammunition, reload completion and
+the stock firing interval. This works in solo and multiplayer.
 
 ## Melee block and parry
 
@@ -484,6 +509,14 @@ is actually blocking, in either hand. As a network client, the server keeps
 stock parry timing and grab checks; the feedback pulses still arrive.
 
 ## Physical punches and gun bashes
+
+Tracked bashes, melee strikes, punches and the player's own grab interaction
+remain eligible while restrained by any stock Zed grab family, including DAR,
+disabling grabs, Hans/Patriarch/tentacles and Bloat King gorge. This does not
+force an escape from stronger grabs: stock damage, immunity and release rules
+still apply. Death, incapacitation, unrelated interaction locks, invalid hand
+ownership and lost tracking cancel interaction. Existing target restrictions
+remain: bosses are not grabbable and large living Zeds must already be down.
 
 A clenched empty hand punches and a held firearm bashes when swung hard enough;
 every enemy the stroke passes through is struck once, and only world geometry stops
@@ -513,9 +546,9 @@ stops at what it struck for 80 ms and eases back onto the tracked hand over 100
 ms; contacts always use the tracked hand. An upward punch lifts its knockback and
 a killing blow's ragdoll launch, and fist kills throw bodies harder than before.
 
-Helpless Zeds take more: a punch into a Zed held by either hand does 1.5x (the
-holding hand feels the blow), and a hammer fist driven down into a Zed that is
-held, knocked down or ragdolled does 2x, capped at 100 bare-handed.
+Knocked-down or ragdolled Zeds retain the established downward hammer-fist
+bonus, capped at 100 bare-handed. Held-body bonuses are unavailable while the
+experimental grab systems are parked.
 
 Parry: a punch that lands on a Zed mid-swing or reaching to grab parries it the
 stock way (stumble, or the Berserker knockdown) when strong enough: a light
@@ -528,9 +561,8 @@ the window; lower and raise it again (0.35 s re-arm). The guard parries only; it
 does not block damage. Parries crack with `Play_Parry_Wood` and a strong pulse in
 both hands. Tuning lives in `VRFistGuard` defaultproperties.
 
-Hit-stop: a Zed struck by a fist, a held body or a thrown body briefly plays
-its animation at 5% (about 60-110 ms for punches by speed, 150 ms charged, 70 ms
-for body impacts), so it sticks on the blow. Only the victim's animation slows;
+Hit-stop: a Zed struck by a fist briefly plays its animation at 5% (about
+60-110 ms for punches by speed, 150 ms charged), so it sticks on the blow. Only the victim's animation slows;
 its movement and AI, the player, camera and world keep real time, and every
 player in a co-op game sees the same thing. Turn it off with `bMeleeHitStop=False` under
 `[KF2VR.VRHandsBridge]` in KFGame.ini; durations live in `VRHitStop`
@@ -566,25 +598,51 @@ powers).
 ## Door welding
 
 The welder is not on the wheel. Within about 190 UU of a closed or broken door,
-facing it, a small world-space prompt appears in front of the door offering
-the welder on the non-movement stick click. The welder goes into the right hand; the
-trigger welds (or repairs a broken door) and A + trigger unwelds. Click again to
-put it away; walking away from every door for 2 s with the trigger released
-also returns the right hand's previous weapon. While you weld, and whenever you
-look straight at a welded door within about 480 UU, the prompt shows the door's
-integrity as a bar and percentage. The welder is held like a one-handed pistol
+facing it, a blue 3D welder hologram, drawn like the reload hints, floats at
+chest height in front of it, turning slowly. A free hand entering its 14 UU grab radius gets a pulse
+and the hologram brightens; a fresh grip takes the welder into that hand. The
+trigger welds (or repairs a broken door), X/A + trigger unwelds, and releasing
+grip (once the trigger is released) puts it back. The non-movement stick click
+remains a fallback: it loans the welder to the right hand; click again to put
+it away, or walk away from every door for 2 s with the trigger released to
+return the right hand's previous weapon. While you weld, and whenever you
+look straight at a welded door within about 480 UU, a status panel above the
+tool shows the door's integrity as a bar and percentage. Unwelded doors offer
+the tool without a panel, and a missing hologram never leaves an invisible
+grab target. The welder is held like a one-handed pistol
 grip from its own authored idle pose, with the controller aim correction and
 the pointing beam of a sidearm; the weld is traced along the tool's aim. Its
 charge shows on the per-hand readout. Tuning lives in `VRDoorWelding`
-defaultproperties (`OfferRange`, `LookRange`, `ReturnDelay`).
+defaultproperties (`OfferRange`, `LookRange`, `ReturnDelay`, `HologramRadius`);
+the hologram mesh comes from `tools/generate_tool_holograms.py`.
 
 ## Dosh
 
-The physical hip wallet is inactive; its preserved class is not instantiated.
-Use KF2's stock TossMoney action (keyboard B in the installed default desktop
-layout, or your customized binding). VR controller B is inventory, not a money
-gesture. Do not look for a hip wad or assume its old flick/stagger mechanics
-are live.
+Open either wheel, choose **DROP**, then **DROP DOSH**. Each trigger click
+tosses one stock wad (the stock amount, debit and pickup) from that hand's palm
+forward along the controller's aim, through the same server-validated toss as
+the old wallet; the wheel stays open for repeated tosses. Desktop keeps stock
+TossMoney (keyboard B). The physical hip wallet stays inactive.
+
+## Gravity pull
+
+Point an **open, empty** hand at a reload magazine on the floor (with dropped-magazine ammo
+recovery on), dosh, an ammo box or a non-weapon map item spawn up to about 10 m away: the
+hand opens toward it, a violet ring appears under it (the always-on pickup rings
+stay blue), and you hear a soft tick. Full armor or ammo, or a gun you cannot
+carry, shows a dim red ring instead; squeezing it gives a red flash and a double
+tick. Squeeze grip while it is ringed violet to lock it (the hand closes into a
+claw, a brighter ring, a beam to the palm, a soft buzz); the lock holds while the hand stays within 60 degrees of it and
+for 0.25 s after letting go. Flick the hand, or draw it back toward you, to pull
+the item; keep grip held and it lands in the palm (a pulse just before). A
+magazine is held ready for the pouch or a
+magwell. A toss already flying toward you within about 6 m is pulled by the
+squeeze alone, no flick; one already within catching reach is simply caught. A brief red ring and a double tick mean the
+server refused it (ammo full, already carried, too heavy, someone else's pull,
+out of reach). A hand that is already a fist never highlights, a Zed in reach
+takes the squeeze first, and body zones (pouch, wallet, chest grenade) keep
+theirs. **GRAVITY PULL** in the interaction settings turns it off for you; the
+host can turn it off for everyone with `VRGravityPull=0` on the server URL.
 
 ## Trader
 
@@ -604,6 +662,7 @@ forces independent hands for live XR.
 bIndependentHands=True
 bToggleGrip=True
 bHoldSupportGrip=True
+bSupportHandCarry=False
 bAutoSprint=False
 MovementHand=0
 PreferredWeaponHand=1
@@ -625,9 +684,28 @@ the welder always draws into the right hand. `PreferredWeaponHand` is labelled
 without remapping Y/B. The inactive syringe pocket/dosh wallet do not provide
 current gestures. The legacy `bAutoSprint`
 value has no runtime consumer and is no longer offered in the menu. Head-relative movement
-is the default; controller-relative movement is optional. bToggleGrip governs primary holding, while bHoldSupportGrip
-independently selects continuous support grip. Moving outside the support
-contact range still detaches it without stowing the primary.
+is the default; controller-relative movement is optional. bToggleGrip governs transfer/brace contacts, while bHoldSupportGrip
+independently selects continuous support grip. An acquired firearm support grip
+stays attached across controller distance drift while the grip remains held
+and tracking is valid; releasing support does not stow the primary.
+
+In Hold mode, guns equipped automatically at spawn remain in hand until the
+first squeeze and release. Explicit quick swaps have the same first-squeeze
+exception. Normal draws and catches require continuous grip.
+
+`bSupportHandCarry` is the separate default-on **ALLOW SUPPORT-HAND CARRY**
+option under VR SETTINGS > INTERACTION. It applies to supported two-handed
+firearms. While braced, observe a released primary grip, then squeeze and
+release it deliberately to unlatch. Only the original primary hand can regrip;
+the carrier never becomes a firing hand. Final HOLD support release leaves a
+local cosmetic drop, followed by automatic return to inventory after the existing
+delay. The original item and all ammunition remain owned. A fresh squeeze of a
+free hand can catch the local visual; redrawing removes it immediately;
+TOGGLE support uses a fresh toggle-off squeeze. Tracking loss disarms release
+gestures, so recovered open input cannot stow the gun. Entering carry or regripping interrupts
+unfinished physical reload work without paying unseated ammo or refunding paid
+ammo; unrelated stock reloads keep their native state. Matching multiplayer
+client/server packages and the native carry guard are required.
 
 The optional `SelectorFavorites` config array contains weapon class names in
 preferred order. Owned matching actors always lead the wheel in that order,
@@ -635,44 +713,110 @@ ahead of the inventory-group order. The array does not grant weapons.
 
 ## Interactive reloads
 
-Optional, off by default: VR SETTINGS > INTERACTION > **RELOAD MODE** cycles
-**BUTTON > PHYSICAL > PHYSICAL + PUMP**. The underlying preferences remain
-`bInteractiveReloads` and `bManualPump`; selecting Button keeps the stored pump
-choice, while selecting Physical explicitly uses automatic pumping.
-Under **HUD AND READOUTS**, **RELOAD HINTS** controls the guidance rings and
+VR SETTINGS > INTERACTION > RELOADS offers **CLASSIC**, **INTERACTIVE**,
+**ADVANCED** and **CUSTOM** presets. PHYSICAL RELOADS, REQUIRED PUMP / BOLT CYCLES,
+CYCLE READY WEAPONS and the individual ammunition rules can also be selected
+independently. Classic is the default. Ready-weapon cycling/live-round ejection
+never unlocks an already-ready shotgun pump: SG500 and Trench pumps operate for
+an owed shot cycle or an empty/loading action. Changing ammo-loss rules does not
+change that admission. Winchester/SPX levers also operate only for an owed
+cycle or an empty-reload action: hold the fore-end and swing the trigger hand
+through opening and closure. Ordinary two-hand aiming keeps control until
+that deliberate motion. Supported bolt/slide ready cycling remains available.
+**KEEP CHAMBERED ROUND / +1** controls magazine-gun chamber retention and
+extra-round capacity. **CYCLE READY WEAPONS** permits supported bolt/slide/lever
+inspection and live-round ejection; shotgun pumps and Winchester/SPX levers are excluded. A live round
+racked out of a loaded gun is always lost, whatever the settings say.
+**LOSE DROPPED / EJECTED AMMO** decides whether rounds left in a magazine you
+drop or pull out, and live rounds ejected from a cylinder, are spent. These choices are independent rather than a single
+realistic-ammo switch. All three advanced ammo options start Off. Switching
+physical reloads or reload presets preserves them. PERK INSERTION ASSISTANCE
+also starts Off.
+**SPRINT WHILE RELOADING** (physical reloads, default ON) keeps a sprint running
+through every physical reload, two-handed or at the hip, in Solo and online. Off
+pauses the sprint for the reload, as the stock game does, and it resumes after.
+Either way a pouch grab, hip loader or X/A starts a reload while sprinting.
+**EMPTY TRIGGER RELOADS** (physical reloads) decides what an empty trigger does on
+every physical gun: on, it starts the reload exactly as X/A would; off, it clicks
+and X/A or the pouch reloads. It starts Off; changing physical reloads or presets
+preserves an explicit player choice. Button reloads use stock empty-trigger behavior. Each hand's
+X/A reloads only that hand's gun. With the other hand busy, X/A still drops the
+magazine; the new one is taken once a hand is free. X/A releases only a slide
+locked back; a closed slide or a bolt without hold-open needs a hand rack.
+With free-hand physical reloads, the .500, Buckshot and Rhino open without
+automatically emptying. Tilt backward to eject; no extractor-stem tap or target
+circle is required. Stock animation timers stay paused through physical phases.
+**LOSE DROPPED / EJECTED AMMO** spends every live round ejected this way; Off
+retains the stock count. Seat a speedloader only after extraction, then
+close with the existing sideways flick or hand push. Contact pulses the pushing
+hand; the final latch pulses only the hand holding the gun. Full cylinders and
+guns without reserve can still be inspected and closed without adding ammo.
+After extraction, closure waits for seated rounds while reserve is available;
+with no reserve it may close empty. Before extraction it may close normally.
+On the RELOADS page or under **HUD AND READOUTS**, **RELOAD HINTS** controls the guidance rings and
 insertion ghost, defaults ON, and remembers your choice across Solo/Join. It
-becomes adjustable while interactive reloads are enabled. Turning hints off
+can be adjusted in any mode; guidance appears for the relevant active physical
+interaction. Hints and PERK INSERTION ASSISTANCE keep their saved choices across
+preset changes and do not change the preset label. Turning hints off
 keeps the physical pouch, ammunition, hand motion, assistance and haptics.
+Pouch miniatures remain visible with a held weapon. Blue means acquire/place
+ammunition; orange means operate the current mechanism. Required steps pulse
+after 0.75 seconds or repeated dry fire. Belt ammunition glows only when it is
+needed; optional top-ups remain available without a glow, including on hover.
+An accepting receiver shows the carried load's blue alignment ghost immediately,
+even when its fitted well already glows, and fades it during insertion.
+Gripped mechanisms and automatic reloads stop asking for manual action. Red is
+brief refusal feedback on a deliberate failed pouch grab or gravity pull; zero
+reserve alone does not paint the receiver red. Dropped ammunition and guns use
+quiet blue discovery rings that brighten in actual pickup reach. The plate and
+pouch follow the weapon when it is carried by its support grip. See the
+per-gun clue changes.
 Coverage extends beyond the initial pistol/shotgun/AK-12/SA80 set through the
 current reload catalog. Supported mechanisms vary by exact weapon; unsupported
-items retain their stock button path. Per-family mechanisms are described below. No hidden unlock is required;
-Button reloads remain available when a physical mechanism blocks play.
+items retain their stock button path. Use physical reloads
+for the per-family catalog and current open work for acceptance. The normal-launcher
+1858/9mm smoke is prepared only.
+The old hidden unlock is no longer required. This build targets the magazine
+guns for headset testing; both settings default OFF and await headset acceptance.
+physical reloads describes optional per-family mechanisms.
 For magazine guns and the MB500, missing assets or unusable stock reload motion keep the
 ordinary reload before any magazine is hidden or timer is paused.
 
-- X/A (or an empty auto-reload) starts the stock reload and the magazine drops
-  out. So does pinching the off-hand trigger at the ammo pouch while the gun
+- X/A (or an enabled empty-trigger reload) starts the reload and the magazine drops
+  out. So does squeezing the off-hand grip at the ammo pouch while the gun
   can reload: the old magazine drops and the new one (or a shell) is already in
   the hand. The gun stays where you hold it for the whole reload; the stock
   animation no longer turns it.
 - The stock animation plays up to the moment it would insert the new magazine
   or shell and holds there; no replacement shows in the gun. The gun's own
   magazine, or a shell, waits in the ammo pouch at the front of the off-side
-  hip inside a blue ring. Hold the off-hand trigger there to take it: the hand
-  grips it the way the stock reload's hand does. A blue ring marks the magazine
-  well or the shotgun's loading port. As you approach, the ammunition and posed
+  hip. Hold the off-hand grip there to take it: the hand
+  grips it the way the stock reload's hand does. A blue fitted glow or fallback
+  ring marks the receiving well/port; a blue ghost shows its entry angle. As you approach, the ammunition and posed
   hand ease into the stock insertion position and angle, then moving closer
   advances the ammunition and original KF2 wrist/finger motion along the stock
   path into the gun. The hand blends into the acquired grip and returns to
   tracking after release without keeping the input grab alive. Pulling back
   reverses that motion until it seats; moving away fades the alignment out.
   Approach from the entry side with the prop roughly aligned. After alignment
-  and at least 25% insertion, releasing the trigger lets the prop settle home;
-  earlier release drops it. A ghost shows the entry angle, and each next-action
-  ring has a fresh 0.75 s delay unless the hand is already nearby.
-  The shotgun takes one shell per step.
-- A reload that started empty pauses once more at an amber ring: pinch the
-  slide or bolt with the off-hand trigger (or grab it), pull it fully back and let go,
+  before pushing along the guide. Shells with release-to-seat support can settle
+  after sufficient insertion; magazines retain their required seating stroke.
+  Early release drops the load. Alignment ghosts are immediate; required-action
+  teaching has a fresh 0.75 s delay unless the hand is already nearby.
+  Tube-fed shotguns take one shell per step. Break shotguns carry only the
+  shells owed, in the groups and poses of their stock reload. Return unused
+  ammo to either pouch while still holding its carry control, or release it
+  inside the pouch. Leave the pouch once after drawing before a held return
+  can register. This covers fresh magazines, clips, loaders, boxes, loose
+  rounds and secondary loads. Dropping away from the pouch loses the carried
+  rounds when **LOSE DROPPED / EJECTED AMMO** is on; Dosh notes spend currency.
+  Tracking/menu cancellation and infinite ammo do not charge a drop. Supported
+  detachable magazines, including FAMAS secondary magazines, can be picked up
+  again with **RECOVER DROPPED-MAG AMMO** enabled. Carrying one does not finish
+  a reload: seat it in the open well, then operate any owed slide, latch or
+  finishing handle just as with a magazine from the pouch.
+- An empty reload that owes chambering shows an orange part or fallback ring:
+  grip the slide or bolt, pull it fully back and let go,
   or pump the fore-end back and forward with the hand gripping it. The pump
   requires a nearly full rearward pull followed by a nearly full forward return
   while held, both after shots and during loading. The fore-end follows the hand
@@ -695,21 +839,30 @@ ordinary reload before any magazine is hidden or timer is paused.
   bash), the gun keeps the locked slide and will not fire until X/A or a
   free-hand pull-and-release frees it. Once the steps are done the gun fires
   at once.
-- Guidance is contextual, as in Arizona Sunshine 2: on the magazine guns the
-  part to use next (magazine, grip/magwell or slide) glows amber only if you
-  pause on it for 0.75 s, and stops as soon as you do it; the shotguns keep
-  rings. Pulling the trigger twice on a gun
-  that cannot fire shows the current step immediately.
-- Letting go of the trigger away from the gun drops what the hand held; take
+- Guidance follows the available step: blue supply/receiver, orange mechanism,
+  and a blue carried-load alignment ghost. Fitted parts and fallback rings
+  share the 0.75 s teaching delay; contact/alignment is immediate. Pulling the
+  trigger twice on a gun that cannot fire shows the current step immediately.
+  Acquiring/completing that mechanism clears its attention pulse.
+- Letting go of the carry control away from the gun drops what the hand held; take
   another. Firing still interrupts a shotgun reload, as in stock.
-- ON + MANUAL PUMP: after every shot the pump shotgun will not fire until you
-  pump the fore-end back and forward. The support hand on the fore-end just
-  moves; a free off hand can pinch (trigger) or grab (grip) it. The fore-end
-  and bolt move with the hand, and a trigger press before the pump gives a
-  faint click and no shot. An empty gun still dry-fires into the auto-reload,
-  and a completed reload rack chambers a round. Swapping/stowing the gun or
-  interrupting a reload keeps the pending stroke; a held-open pump also blocks
-  fire. Tracking or input loss cancels the gesture and requires a fresh release.
+- With REQUIRED PUMP / BOLT CYCLES enabled, an SG500 or Trench Gun needs a
+  rearward and forward stroke after a shot. The action stays at the position
+  where the support hand lets go; release never springs it forward or chambers
+  a shell. Regrip resumes there. Ready-weapon cycling and ammo-ejection settings
+  leave a ready pump locked forward. HZ12 retains its stock two-shot cadence.
+  With PHYSICAL RELOADS enabled, pulling an empty pump to the rear stop starts
+  loading without a reload-button press. It stays open while the first port
+  shell is carried, inserted and paid. The player then pushes the fore-end
+  forward to chamber it; remaining shells use the existing tube-loading route.
+  Stock ammo/reserve accounting and reload interruption remain authoritative.
+  With SUPPORT HAND CARRY enabled, the same SG500/Trench action works through
+  deliberate axial carrier-hand motion at any barrel angle. Braking can stop
+  the receiver without reversing it; move the hand the other way to reverse.
+  The fore-end stays planted, mechanical stops retain their sound/haptic cues,
+  and carrying still cannot fire. Teammates see actual receiver/pump travel.
+  Tracking/menu changes cancel motion without completing or paying a stroke;
+  any required cycle or unpaid shell remains pending.
 
 Seating has a stronger click in the inserting hand and a softer one in the gun
 hand. Approach ticks resist boundary tremor; internal stock timer pauses do not
@@ -729,7 +882,8 @@ Full guns and guns without reserve can also be opened and closed for inspection.
 Opening a loaded gun for inspection does not spend or grant ammunition.
 
 The stock reload keeps its perk-scaled speed for every part it plays; faster
-reload skills also widen insertion assistance.
+reload skills also widen the magnet. Design and costs:
+physical reloads.
 
 ## Teleport locomotion
 
@@ -788,39 +942,25 @@ BlinkScale=1.0
 ```
 
 `BlinkScale=0` removes the fade entirely for players who prefer an instant cut.
+Design, numbers and open acceptance are in
+teleport locomotion.
 
+## Withdrawn body holsters
 
-## Optional body holsters
+Body holsters and HOLSTER FIT are inactive and absent from the VR menus.
+Saved `bBodySlotsEnabled`, `BodyHolsterOffsets` and legacy `BodySlotOffsets`
+remain compatible profile data; an enabled value does not activate body grab
+zones. The weapon wheel continues to equip/stow items. Ammo POUCH FIT and the
+chest grenade retain their shared body frame and calibration.
 
-`bBodySlotsEnabled=True` enables two long-gun and two sidearm positions.
-Their labels appear only while a hand approaches; no prototype cards remain
-visible during combat. A fresh grip stows the held compatible weapon or draws
-the exact slotted actor. Ownership still passes through `VRHandInventory`.
-The default leaves these optional holsters disabled. Syringe and welder are
-excluded; draw the syringe from the wheel or an already empty hand's double tap.
-
-Holsters and the chest grenade share one body frame, rebuilt
-every frame from the head pose with no deadzone or catch-up, so a slot is
-always where it was the last time you reached for it. It hangs from a neck
-point 15 UU below the eyes along the head's own up axis, so looking down does
-not slide anchors forward, and its facing holds when looking straight down.
-The placement follows Arizona Sunshine 2.
-
-Slots capture within 20 UU. An empty hand only answers to a filled slot, and a
-stow squeeze during a fast swing (over 200 UU/s) is refused. Where anchors
-overlap, the nearest usable one wins; a valid weapon support contact takes
-priority. `BodyHolsterOffsets` holds five body-frame vectors: indices 0–3 are
-shoulder and hip holsters, and index 4 is reserved. Defaults from the neck
-point are long guns `(0, +/-20, -2)` and sidearms `(9, +/-38, -55)`. A legacy
-`BodySlotOffsets` (head minus 42 UU) keeps its old level-head placement until
-HOLSTER FIT replaces it.
-
-Holsters do not create ammunition or change stock reload timings or inventory weight.
+The inactive prototype and the AS2 rig study
+remain available for future design work. Primary-hand latched holding remains
+the default; the other grip/drop modes have not received user headset acceptance.
 
 ## VR Calibration & Practice Mode (In-VR)
 
-Access the in-VR calibration interface from VR SETTINGS > CALIBRATION or
-PRACTICE AND TOOLS > CALIBRATION in the VR menu. HUD AND READOUTS
+Access the in-VR calibration interface from CALIBRATION on the root VR menu,
+VR SETTINGS > CALIBRATION, or PRACTICE AND TOOLS > CALIBRATION. HUD AND READOUTS
 also links directly to the readout and top-HUD editors. Console command
 `mutate VRCalibrate` remains available.
 No mutate commands are required during normal headset play.
@@ -842,19 +982,25 @@ No mutate commands are required during normal headset play.
      remembers the posture. Standing, on a runtime with a STAGE (floor) space,
      puts your real floor on the pawn's floor so the view stands at your real
      eye height (at most 12 cm above or 40 cm below the 1.54 m pawn eye).
-     Seated keeps the fixed 1.54 m pawn eye; crouch with the stick.
+     Seated starts at the fixed 1.54 m pawn eye; crouch with the stick.
+   - **SEATED HEIGHT** (beside RECENTER): after CAPTURE SEATED, lower or raise
+     the seated view in 1 cm steps, from 40 cm below to 12 cm above the pawn
+     eye. Head and hands move together. RESET HEIGHT restores zero; recapture
+     preserves the saved adjustment. Standing capture ignores it.
    - **RECENTER**: Requests immediate native view recentering.
    - **HAND FIT**: Opens wrist/controller fit; its subtitle reports current height
-     drop and baseline. **PAWN CROUCH: YES/NO** is the current status tile, not a
-     separate crouch-toggle binding. ALIGN MARKERS shows the debugging geometry.
+     drop and baseline. ALIGN MARKERS shows the debugging geometry.
    - **WRIST INSPECTION PREVIEW**: Closes the selector for eight seconds so the
      real native wrist reveal detector can run, then reopens with which wrists
      it detected. Lower the hand and turn the palm toward your gaze.
    - **CHEST ZONE HERE**: Moves the chest grenade to the current palm.
    - **ALIGN MARKERS**: Draws the OpenXR grip origin (yellow), the wrist the game uses with its aim axes (cyan, red forward, green up), the drawn wrist (magenta), reload targets and the grenade sphere. Touch the controllers together to judge the hand fit.
    - **HAND FIT** (the left tile of the drop row; its subtitle keeps the drop and base heights): nudges where the drawn wrist sits relative to the controller in 0.5 UU steps, back/forward, inward/outward and down/up, mirrored for the left hand, with the markers on while the page is open. RESET HAND FIT returns to the profile's measured offset.
-   - **HOLSTER FIT**: Closes the menu; rest both hands at your hips for half a
-     second (8-second window). Sets both sidearm holsters there, mirrored.
+   - **POUCH FIT**: Adjusts the ammunition pickup centre forward/back,
+     wider/narrower and up/down in 1 cm steps. Cyan markers show both mirrored
+     centres. The ammo prop, reserve readout and pickup point move together;
+     grab radius and insertion snap are unchanged. Changes save
+     automatically; **RESET POUCH FIT** restores the original placement.
 
 3. **Page 3: Spatial Menu Placement**
    - **DISTANCE / HEIGHT / SCALE**: Stepped adjustments (distance 0.6-3.0m, height
@@ -887,8 +1033,8 @@ No mutate commands are required during normal headset play.
 ### Practice Mode & Armory
 
 - **Startup**: PRACTICE AND TOOLS > OPEN / START VR PRACTICE starts/opens a range
-  during a normal Survival wave. The ordinary wheel's + submenu is Drop/God Mode/
-  Back, not a practice launcher. Practice
+  during a normal Survival wave. The ordinary wheel's DROP submenu is Drop weapon/
+  Drop dosh/Back, not a practice launcher. Practice
   suspends waves, enables invulnerability, refills ammunition and spawns targets.
   HEALING PATIENT creates the injured patient for syringe/medic darts.
 - **Range panel**: SPAWN DUMMY / SPAWN MIXED HORDE, HEALING PATIENT / RESET PATIENT,
@@ -907,20 +1053,9 @@ No mutate commands are required during normal headset play.
   disarms controller triggers for one tick to prevent accidental firing or interaction.
 
 
-## One-hand and paired hip reloads
-
-With Physical or Physical + Pump enabled, compatible one-hand guns can reload
-at the hip while the other hand holds a gun or object. Press that gun hand's
-reload button, then bring its gun to its hip loader. Revolvers accept their
-speedloader or round load; magazine guns accept the hip magazine. Each hand
-owns its own reload session. Independent guns show separate spare counts;
-actual paired guns show both icons above one shared reserve count. Ammunition
-is paid by the authority when seated. Headset and real online acceptance remain
-pending. The additional waist-triggered reload mode is planned only.
-
 ## Chest grenade
 
-The perk grenade rides the upper chest where Arizona Sunshine 2 hangs its chest
+The perk grenade's visible centre rides the upper chest where Arizona Sunshine 2 hangs its chest
 slot (the flashlight's): 11.6 cm forward, 4.4 cm right of centre and 15.7 cm
 below the neck pivot, in the shared body frame. With a hand empty and the
 selector closed, bring its palm to the grenade and squeeze; hold, then release
@@ -943,8 +1078,16 @@ grenade, no owned stock owner, or just outside) pulses weaker and longer than a
 grab. Losing a held grenade to tracking, a hitch, recenter or the selector
 pulses a distinct cancel cue.
 
+The chest model must be available for the slot to accept a grab or compete
+with another body contact. Unsupported or missing chest models leave no
+invisible grenade target in either solo or multiplayer.
+
 Calibration page 2 **CHEST ZONE HERE** moves the grenade to the current palm;
-the session menu's chest reset puts it back at the AS2 spot.
+the session menu's chest reset puts its visible centre back at the AS2 spot.
+New captures and resets keep that centre in the same place when changing perks,
+including grenades whose mesh pivot is away from their centre. Older saved chest
+zones keep their previous placement; use **RESET CHEST GRENADE ZONE** or capture
+the palm position again to adopt the centred placement.
 
 Every stock perk grenade template draws one mesh particle in local space at the
 component origin at StartSize 1. The cooked StaticMesh bounds give these
@@ -953,13 +1096,16 @@ Molotov 1.8; frag, HE, medic, freeze and flashbang are within 1 UU and treated
 as centred, as is any unknown grenade. The grab sphere is centred on the visible
 grenade, and the held body puts that same centre in the fist.
 
-Authored stock grenade grips are enabled by default; the Interaction page can
-select tracked curl instead. Saved grip preferences win.
-
 The held preview is the perk grenade's own `ProjFlightTemplate`, which carries the
 grenade body as a mesh emitter. It is absolute and driven from script, so it sets
 `bUpdateComponentInTick` and pushes its transform every tick; a stock flight effect
 instead rides its projectile's movement.
+
+In multiplayer, other players see the held grenade at the same authored size
+and placement, following the existing 120 Hz hand-tracking stream. Release or
+cancellation clears that cosmetic model; tracking expiry, death and leaving
+the match clear it too. It has no live fuse, collision or ammo transaction.
+Matching multiplayer packages are required for the grenade presentation stream.
 
 Both modes launch the current perk's gameplay projectile from the releasing hand
 with measured velocity, subtracting pawn displacement. Authority applies a smooth
@@ -1002,8 +1148,8 @@ came from; Back/Cancel do not write settings.
 
 | VR Settings page | Options |
 | --- | --- |
-| Locomotion and Comfort | Smooth/teleport, movement hand/direction, snap/smooth turning, +/- snap angle or smooth sensitivity, teleport blink |
-| Interaction | Dominant hand, primary/support grip, Solo grabbing, supported reload/manual pump switches, body holsters, melee hit-stop, experimental multiplayer grabbing and read-only host status |
+| Locomotion and Comfort | Smooth/teleport, movement hand/direction, snap/smooth turning, +/- snap angle or smooth sensitivity, teleport blink, clot grab turning |
+| Interaction | Dominant hand, primary/support grip, independent Solo/online Zed grabbing, supported reload/manual pump switches and melee hit-stop |
 | Menu and Interface | Pointer hand, panel placement, game-menu backdrop, recenter/current-height capture |
 | HUD and Readouts | Weapon readout visibility/fit, top HUD fit/follow, wristwatch HUD, damage popups, reload hints and wrist inspection preview |
 | Graphics | +/- render scale, applied per-eye dimensions, game quality, lighting and gamma; locked VR effects are status text |
@@ -1016,14 +1162,22 @@ input cleanup; a failed or timed-out handoff restores the shell.
 Fit edits affect all firearms. Standing and seated capture both recapture the
 current physical height; they do not select a separate locomotion mode. Recapture
 reports completion or tracking failure.
+Failed or cancelled height capture restores the previous standing/seated mode;
+tracking recovery does not perform a capture that has already timed out.
+
+**CLOT GRAB TURNING** under Locomotion and Comfort uses the stock profile's
+**No Auto Turn On Clot Grab** option: turning ON means the stock checkbox is OFF.
+Changes from either menu are reflected by the other; there is no separate VR
+saved override. OFF suppresses the grab-induced turn while preserving physical
+head tracking. ON permits the stock non-critical grab turn, including when
+enabled during a grab. Strong-grab forced camera turns remain suppressed in VR.
 
 For laser collision diagnosis, open **VR SETTINGS > CALIBRATION > HEIGHT /
 CHEST ZONE / WRIST HUD TEST** and switch **ALIGN MARKERS** on. While markers
 are enabled, each visible weapon laser records a `KF2VR_LASER_TRACE` sample
 in the game log at most once per second. Each sample names the hit actor/component and
 their owners, with ray start/end and contact coordinates. `phase=first` is
-the original hit; `phase=resolved` appears only after HUD filtering. Portal
-rays also record `segment=exit`. These diagnostics do not change collision.
+the original hit; `phase=resolved` appears only after HUD filtering. These diagnostics do not change collision.
 Switch **ALIGN MARKERS** off when finished, then use the launcher's **Save logs
 for a bug report** button and report the approximate time of the bad laser hit.
 
@@ -1043,14 +1197,12 @@ cover environment, characters, effects, textures/filtering, shadows, bloom,
 volumetric lighting and light shafts. Non-texture edits use narrow system-setting
 writes and native/script readback. Texture controls select stock grouped presets;
 filter changes refuse nonuniform texture LOD biases rather than flattening them.
-Blur, DOF, post-process AA, VSync, grain and lens flares remain off;
-variable frame rate stays on. HBAO+ and reflections are launcher-controlled,
-saved choices that start ON. Steam single-pass stereo starts ON; Epic stays
-OFF. The in-game rows display locked status rather than changing these choices.
-Quality changes report readback mismatches.
-Boss introductions use a fixed viewpoint with tracked head look; death/victory
-and spectator views keep level anchors instead of following stock camera motion.
-These views still need headset acceptance.
+Blur, DOF and VSync remain off; variable frame rate stays on. Optional AA
+and screen effects follow the active launch/profile policy. HBAO+ and reflections
+start On; saved choices win, including through texture/filter edits and pre-spawn
+menus. Single-pass stereo and threaded rendering are always on. The in-game rows show locked
+status rather than changing these launch choices. Quality changes report readback
+mismatches.
 The VR shell opens only at session entry or through its explicit menu control;
 death, boss-kill/end-of-game cinematics and other game camera takeovers do not
 open it. Stock game UI floats as a spatial panel within the grounded VR Studio
@@ -1059,6 +1211,16 @@ Solo and network launchers share tools/vr-defaults.json. The multiplayer launche
 persists approved preferences in %LOCALAPPDATA%/KF2VR/Profile/KFGame.ini.
 See [all launcher switches](../PLAY-MULTIPLAYER.md) for explicit scale overrides.
 Report headset readability, control feel and online issues with your build ID.
+
+### Wristwatch chat
+
+Incoming public/team chat from another player adds a ping, double haptic and
+pulsing blue watch light. Turn the watch toward your face to read the latest
+message for eight seconds in place of supplies/dosh; health, armor and priority
+messages remain. New messages replace old ones. Self/system messages do not
+notify. The watch hides its light and pending haptic during menus, tracking loss
+or watch-off; pawn/session teardown clears the notification. Stock chat remains
+available. Headset readability and real multiplayer acceptance remain open.
 
 ### Current settings controls
 
@@ -1071,7 +1233,7 @@ their normal reload path.
 
 Transfer / Brace Grip describes the existing grip preference, not automatic
 primary-weapon dropping. Weapons stay equipped until switched or dropped; Support
-Grip and optional Body Holsters remain separate. Scoreboard is unavailable before
+Grip settings remain separate from weapon selection. Scoreboard is unavailable before
 a valid in-match score widget exists. Damage Popups can be toggled live; hosted
 client per-hit delivery remains unverified. Bone Crusher reserves its shield hand:
 conflicting draws are refused with the existing feedback, never automatic drops.
@@ -1090,17 +1252,4 @@ Fast cylindrical-shell approaches may acquire when their valid tracked path cros
 the guide mouth, rather than requiring a frame exactly at the mouth. Tomahawk
 generic air whooshes are suppressed; contact and throw/recall cues remain.
 
-Acquired firearm support stays attached while the physical grip is held and
-tracking is valid, even if controller distance drifts. This applies to ordinary
-two-hand aiming and Physical-stock mode; release grip normally to detach.
-
-### Supported primary-hand lever cycling
-
-With interactive reloads and manual pump enabled, Winchester/SPX lever actions
-accept a fresh primary-hand grip squeeze near the lever while the other hand
-supports the same rifle. The support hand anchors the gun while the primary
-hand opens and closes the lever. During empty reloads, use the off hand to load
-the round, reattach support, then close with the primary hand. The off-hand
-lever route remains available. Tracking or support loss cancels the grip;
-release and squeeze again to resume the pending stage. Headset acceptance is
-pending, including both handedness choices and normal/elite reloads.
+An acquired firearm support grip stays attached across controller distance drift in ordinary aiming and physical-stock mode while the grip remains held and tracking is valid. Tracking loss suspends support accuracy. Release/stow, melee and pump/carry handling retain their existing rules.

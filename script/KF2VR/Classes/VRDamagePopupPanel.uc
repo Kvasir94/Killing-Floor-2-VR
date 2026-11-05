@@ -26,7 +26,9 @@ simulated function bool InitializePanel(VRDamagePopups NewOwner, int Index)
     ParentMaterial = Material(DynamicLoadObject(
         "ENV_Sanitarium_MAT.ENV_Sanitarium__Emmisive_Translucent_Decal",
         class'Material', true));
-    if (ParentMaterial == None || !ParentMaterial.GetTextureParameterValue('Texture_D', ExistingTexture))
+    if (ParentMaterial == None || ParentMaterial.LightingModel != MLM_Unlit
+        || ParentMaterial.BlendMode != BLEND_Translucent || ParentMaterial.bDisableDepthTest
+        || !ParentMaterial.GetTextureParameterValue('Texture_D', ExistingTexture))
         return false;
 
     Display = ScriptedTexture(class'ScriptedTexture'.static.Create(
@@ -43,7 +45,7 @@ simulated function bool InitializePanel(VRDamagePopups NewOwner, int Index)
 
     White = MakeLinearColor(1, 1, 1, 1);
     DisplayMaterial.SetVectorParameterValue('Vector_Glow_Color', White);
-    DisplayMaterial.SetScalarParameterValue('Scalar_Glow_Intensity', 0.12);
+    DisplayMaterial.SetScalarParameterValue('Scalar_Glow_Intensity', 0.24);
     DisplayMaterial.SetScalarParameterValue('Scalar_Opacity', 1.0);
 
     Surface = new(self) class'StaticMeshComponent';
@@ -54,6 +56,7 @@ simulated function bool InitializePanel(VRDamagePopups NewOwner, int Index)
     Surface.SetActorCollision(false, false, false);
     Surface.SetTraceBlocking(false, false);
     Surface.SetBlockRigidBody(false);
+    Surface.bUseAsOccluder = false;
     Surface.SetAbsolute(true, true, true);
     Surface.SetHidden(true);
     Surface.SetMaterial(0, DisplayMaterial);

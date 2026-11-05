@@ -9,7 +9,7 @@ void DlssUpscaler::Configure(DlssMode mode,std::wstring,std::wstring) {
 void DlssUpscaler::Fail(const std::string& why) { failure_=why;failed_.store(true,std::memory_order_release); }
 void DlssUpscaler::Reset() noexcept {}
 void DlssUpscaler::Shutdown() noexcept {}
-bool DlssUpscaler::Evaluate(ID3D11Device*,ID3D11DeviceContext*,unsigned,ID3D11Texture2D*,ID3D11Texture2D*,ID3D11Texture2D*,const DlssEyeInput&,std::string& error) {
+bool DlssUpscaler::Evaluate(ID3D11Device*,ID3D11DeviceContext*,unsigned,ID3D11Texture2D*,ID3D11Texture2D*,ID3D11Texture2D*,ID3D11Texture2D*,const DlssEyeInput&,std::string& error) {
     error="DLSS support not compiled";return false;
 }
 }

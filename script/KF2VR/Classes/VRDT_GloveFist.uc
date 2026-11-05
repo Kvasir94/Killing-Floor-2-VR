@@ -5,6 +5,7 @@ class VRDT_GloveFist extends KFDT_Bludgeon abstract;
 defaultproperties
 {
     ModifierPerkList(0)=class'KFPerk_Berserker'
+    WeaponDef=class'VRWeapDef_BareHands'
     KDamageImpulse=1800
     KDeathVel=900
     KDeathUpKick=300

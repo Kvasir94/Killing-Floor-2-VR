@@ -9,8 +9,12 @@
 #include <MinHook.h>
 #include "GameScript.h"
 #include "VampireReloadGuard.h"
+#include "BowReleaseDispatch.h"
 #include "ScriptField.h"
 #include "WeaponIsolation.h"
+#include "WorldDropGuard.h"
+#include "WeaponBlockDispatch.h"
+#include "ShieldDefenseScope.h"
 #include "PerkContext.h"
 #include "CorpseDamageObserver.h"
 #include "ConsumedPieceQuery.h"
@@ -27,6 +31,26 @@ std::atomic<DWORD> authorityThread{0};
 FILE* logFile=nullptr;
 kf2vr::adapter::promo::Log promoLog;
 constexpr auto serverHash="2ea16bb5e37d2330a30f82f6d4cf50919c008ac8c96a8917b3b9ba010dfbce71";
+
+// GenZmeY/KF2-Ranked-Patch's two native entry points, verified against the
+// complete upstream Windows patterns in the hash-pinned dedicated server.
+// Applied only in memory; Steam's installed executable remains unchanged.
+// See third_party/KF2-Ranked-Patch-LICENSE.txt. VAC configuration is independent.
+constexpr std::uintptr_t setGameUnrankedRva=0xbf4490;
+constexpr std::uintptr_t validateForXpRva=0xc12560;
+void KeepGameRanked() {}
+int AllowContentXp() { return 1; } // UE3 UBOOL, including custom damage types/Zeds.
+
+bool RankedEntriesMatch(std::uintptr_t base) {
+    constexpr std::array<unsigned char,14> unranked{
+        0x48,0x83,0xec,0x28,0x81,0x89,0xe0,0x04,0x00,0x00,0x00,0x00,0x00,0x08};
+    constexpr std::array<unsigned char,17> validate{
+        0x48,0x8b,0xc4,0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0x68,0xa1,0x48,0x81,0xec,0x90,0x00};
+    return GameScript::Accessible(reinterpret_cast<void*>(base+setGameUnrankedRva),unranked.size()) &&
+        GameScript::Accessible(reinterpret_cast<void*>(base+validateForXpRva),validate.size()) &&
+        std::memcmp(reinterpret_cast<void*>(base+setGameUnrankedRva),unranked.data(),unranked.size())==0 &&
+        std::memcmp(reinterpret_cast<void*>(base+validateForXpRva),validate.data(),validate.size())==0;
+}
 
 bool HashFile(const wchar_t* path,std::string& result) {
     HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
@@ -74,12 +98,39 @@ void* LedgerForPawn(void* pawn) {
         script->Read<void*>(inventory,L"PC")==pc ? inventory : nullptr;
 }
 
+bool CarrySuppresses(void* object,void* function,const void* locals) {
+    const auto name=GameScript::ObjectName(function);
+    static thread_local const auto names=std::array{script->Intern(L"FireAmmunition"),script->Intern(L"FireAmmo"),
+        script->Intern(L"StartFire"),script->Intern(L"ServerStartFire"),script->Intern(L"BeginFire"),
+        script->Intern(L"SendToFiringState"),script->Intern(L"ServerSyncWeaponFiring")};
+    const bool fire=name==names[0] || name==names[1];
+    const bool reloadIngress=name==script->Intern(L"ServerSendToReload");
+    bool ingress=false;
+    for(std::size_t i=2;i<names.size();++i) ingress=ingress || name==names[i];
+    if ((!fire && !ingress && !reloadIngress) || !script->IsClass(object,L"KFWeapon")) return false;
+    // Reload is still stock-owned while the weapon is carried. Do not turn
+    // missing offensive mode metadata into a permissive firing fallback.
+    unsigned char mode=255;
+    const bool reload=reloadIngress || (ingress &&
+        kf2vr::adapter::ReadScriptLocal(function,locals,script->Intern(L"FireModeNum"),mode) && mode==2);
+    if (reload && !script->IsClass(object,L"KFWeap_SMG_G18"))
+        return false;
+    auto* ledger=LedgerForPawn(script->Read<void*>(object,L"Instigator"));
+    if (!ledger) return false;
+    void* runtime=nullptr;
+    if (!kf2vr::adapter::ResolveInventoryItem(*script,ledger,object,runtime)) return true;
+    if (!runtime) return false;
+    if (script->Read<void*>(runtime,L"Inventory")!=ledger || script->Read<void*>(runtime,L"Item")!=object ||
+        script->Read<int>(runtime,L"NativeReady")!=1) return true;
+    return script->Read<int>(runtime,L"CarryOnly")==1;
+}
+
 void HookProcess(void* object,void* stack,void* result) {
     auto* function=GameScript::At<void*>(stack,0x14);
     const auto name=GameScript::ObjectName(function);
     // Interned names and reflection caches are game-thread data. Before that
     // thread is established, only a separate thread-local lookup is touched.
-    static thread_local GameScript lookup(reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr)),{0xc3b70,0xc8f40});
+    static thread_local GameScript lookup(reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr)),{0xc3b70,0xc8f40,0x210,0x7b200});
     if(name==lookup.Intern(L"NativeAuthorityUpdate") && lookup.IsClass(object,L"KF2VRNetChannel") &&
        lookup.FindFunction(object,L"NativeAuthorityUpdate")==function) {
         DWORD unset=0;
@@ -90,7 +141,45 @@ void HookProcess(void* object,void* stack,void* result) {
             return;
         }
     }
-    if(authorityThread.load()!=GetCurrentThreadId()) { originalProcess(object,stack,result);return; }
+    if(authorityThread.load()!=GetCurrentThreadId()) {
+        // Swallow reserved payloads even during startup/teardown; only the
+        // established authority thread may record an ordering marker.
+        const auto* locals=GameScript::At<void*>(stack,0x2c);
+        if (kf2vr::adapter::ConsumeWeaponBarrier(lookup,nullptr,nullptr,object,function,locals) ||
+            kf2vr::adapter::ConsumeWeaponReceipt(lookup,nullptr,nullptr,object,function,locals)) return;
+        originalProcess(object,stack,result);return;
+    }
+    if (name==script->Intern(L"NativeSupportCarryUpdate") && DedicatedChannel(object) &&
+        script->FindFunction(object,L"NativeSupportCarryUpdate")==function) {
+        originalProcess(object,stack,result);
+        script->Write<int>(object,L"NativeCarryVersion",1);
+        return;
+    }
+    if (name==script->Intern(L"NativeWorldDropUpdate") && DedicatedChannel(object) &&
+        script->Read<int>(object,L"NativeAuthorityReady")==1 &&
+        script->FindFunction(object,L"NativeWorldDropUpdate")==function) {
+        originalProcess(object,stack,result);
+        script->Write<int>(object,L"NativeWorldDropVersion",9);
+        script->Write<int>(object,L"NativePouchAmmoVersion",3);
+        return;
+    }
+    if (name==script->Intern(L"HolderDied") || name==script->Intern(L"OwnerDied"))
+        kf2vr::adapter::PublishDeathWorldDrops(*script,object,function);
+    if (kf2vr::adapter::IsWorldDropAction(*script,name)) {
+        auto* dropPawn=script->Read<void*>(object,L"Instigator");
+        if (kf2vr::adapter::ConsumeWeaponBarrier(*script,LedgerForPawn(dropPawn),dropPawn,object,function,
+                GameScript::At<void*>(stack,0x2c))) return;
+        if (kf2vr::adapter::WorldDropSuppresses(*script,LedgerForPawn(dropPawn),dropPawn,object,function)) return;
+    }
+    if (CarrySuppresses(object,function,GameScript::At<void*>(stack,0x2c))) return;
+    kf2vr::adapter::ShieldDefenseScope shieldDefense(*script,
+        (name==script->Intern(L"AdjustDamage") || name==script->Intern(L"PlayTakeHitEffects"))
+            ? LedgerForPawn(object) : nullptr,object,function);
+    kf2vr::adapter::WeaponBlockScope weaponBlock(*script,object,function,GameScript::At<void*>(stack,0x2c));
+    if (weaponBlock.Suppressed()) return;
+    kf2vr::adapter::BowReleaseDispatchScope bowRelease(*script,object,function,
+        GameScript::At<void*>(stack,0x2c),result);
+    if (bowRelease.Suppressed()) return;
     if (kf2vr::adapter::RouteVampireReloadGuard(*script,object,function)) return;
     kf2vr::adapter::SwipeDispatchScope swipeDispatch(*script,object,function,GameScript::At<void*>(stack,0x2c));
     if (kf2vr::adapter::RouteHeldSwipeContact(*script,object,function,GameScript::At<void*>(stack,0x2c))) return;
@@ -129,6 +218,11 @@ void HookProcess(void* object,void* stack,void* result) {
     // Stock perks evaluate a shot, a Zed hit and movement speed against one
     // current, aimed weapon. The VR player's ledger brackets exactly those
     // calls with the acting item and its grip (KF2VRNetHeldInventory).
+    if (name==script->Intern(L"Init") && script->IsClass(object,L"KFProjectile")) {
+        auto* pawn=script->Read<void*>(object,L"Instigator");
+        kf2vr::adapter::RecordPerkProjectile(*script,LedgerForPawn(pawn),pawn,
+                                           script->Read<void*>(object,L"Owner"),object);
+    }
     kf2vr::adapter::PerkScope perkScope(*script);
     if(name==script->Intern(L"FireAmmunition") || name==script->Intern(L"TakeDamage") ||
        name==script->Intern(L"UpdateGroundSpeed")) {
@@ -136,7 +230,32 @@ void HookProcess(void* object,void* stack,void* result) {
         if(call.entry!=kf2vr::adapter::PerkEntry::None && kf2vr::adapter::PawnHasAuthority(*script,call.pawn))
             perkScope.Enter(LedgerForPawn(call.pawn),call);
     }
+    bowRelease.Forwarded();
+    kf2vr::adapter::ObserveAuthorityReloadStart(*script,object,function);
     originalProcess(object,stack,result);
+    if (name==script->Intern(L"SpawnProjectile") && result && script->IsClass(object,L"KFWeapon")) {
+        auto* pawn=script->Read<void*>(object,L"Instigator");
+        kf2vr::adapter::RecordPerkProjectile(*script,LedgerForPawn(pawn),pawn,
+                                           object,*static_cast<void**>(result));
+    }
+    // Stock calls this after an actual attack. Ammo deltas also include
+    // manual ejection/removal and must never manufacture observer gunfire.
+    if (name==script->Intern(L"NotifyWeaponFired") && script->IsClass(object,L"KFWeapon") &&
+        script->FindFunction(object,L"NotifyWeaponFired")==function) {
+        unsigned char mode=255;
+        auto* ledger=LedgerForPawn(script->Read<void*>(object,L"Instigator"));
+        if (ledger && kf2vr::adapter::ReadScriptLocal(function,GameScript::At<void*>(stack,0x2c),
+                script->Intern(L"FireMode"),mode) && mode<=1) {
+            struct Parameters { void* weapon; unsigned char mode; } args{object,mode};
+            auto* notify=script->FindFunction(ledger,L"NativeWeaponFired");
+            kf2vr::adapter::ScriptField weaponField{},modeField{};
+            if (kf2vr::adapter::FindScriptField(notify,script->Intern(L"W"),weaponField) &&
+                weaponField.offset==offsetof(Parameters,weapon) && weaponField.size==sizeof(args.weapon) &&
+                kf2vr::adapter::FindScriptField(notify,script->Intern(L"Mode"),modeField) &&
+                modeField.offset==offsetof(Parameters,mode) && modeField.size==sizeof(args.mode))
+                script->Invoke(ledger,notify,&args);
+        }
+    }
     if (name==script->Intern(L"ScoreDamage"))
         promoLog.Score(*script,object,function,GameScript::At<void*>(stack,0x2c));
 }
@@ -153,6 +272,7 @@ DWORD WINAPI AdapterMain(void*) {
     if(!HashFile(path,hash) || hash!=serverHash) { std::fprintf(logFile,"server_adapter hash_refused\n");return 2; }
     kf2vr::adapter::guardedScriptReads=wcsstr(GetCommandLineW(),L"-kf2vr-checked-reads")==nullptr;
     const auto base=reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+    if(!RankedEntriesMatch(base)) { std::fprintf(logFile,"server_adapter ranked_entries_refused\n");return 3; }
     const std::array<unsigned char,13> entry{0x40,0x53,0x55,0x56,0x57,0x41,0x56,0x48,0x81,0xec,0x90,0x00,0x00};
     if(!GameScript::Accessible(reinterpret_cast<void*>(base+0x7b590),entry.size()) ||
        std::memcmp(reinterpret_cast<void*>(base+0x7b590),entry.data(),entry.size())!=0) return 3;
@@ -163,17 +283,21 @@ DWORD WINAPI AdapterMain(void*) {
     if (!kf2vr::adapter::consumedQuery::Configure(base,true,[] {
             return GetCurrentThreadId()==authorityThread.load(std::memory_order_acquire);
         })) { std::fprintf(logFile,"server_adapter consumed_query_abi_refused\n");return 4; }
-    if(MH_Initialize()!=MH_OK || MH_CreateHook(reinterpret_cast<void*>(base+0x7b590),
+    if(MH_Initialize()!=MH_OK ||
+       MH_CreateHook(reinterpret_cast<void*>(base+setGameUnrankedRva),
+       reinterpret_cast<void*>(&KeepGameRanked),nullptr)!=MH_OK ||
+       MH_CreateHook(reinterpret_cast<void*>(base+validateForXpRva),
+       reinterpret_cast<void*>(&AllowContentXp),nullptr)!=MH_OK ||
+       MH_CreateHook(reinterpret_cast<void*>(base+0x7b590),
        reinterpret_cast<void*>(&HookProcess),reinterpret_cast<void**>(&originalProcess))!=MH_OK ||
        MH_CreateHook(reinterpret_cast<void*>(base+kf2vr::adapter::consumedQuery::matchRva),
        reinterpret_cast<void*>(&kf2vr::adapter::consumedQuery::Hook),
        reinterpret_cast<void**>(&kf2vr::adapter::consumedQuery::original))!=MH_OK ||
-       MH_EnableHook(reinterpret_cast<void*>(base+kf2vr::adapter::consumedQuery::matchRva))!=MH_OK ||
-       MH_EnableHook(reinterpret_cast<void*>(base+0x7b590))!=MH_OK) {
+       MH_EnableHook(MH_ALL_HOOKS)!=MH_OK) {
         MH_DisableHook(MH_ALL_HOOKS); MH_Uninitialize();
         std::fprintf(logFile,"server_adapter hook_refused\n");return 4;
     }
-    std::fprintf(logFile,"server_adapter ready=1 sha256=%s process_internal=7b590 guardedReads=%d\n",hash.c_str(),
+    std::fprintf(logFile,"server_adapter ready=1 ranked=1 content_xp=1 sha256=%s process_internal=7b590 guardedReads=%d\n",hash.c_str(),
         kf2vr::adapter::guardedScriptReads);
     return 0;
 }

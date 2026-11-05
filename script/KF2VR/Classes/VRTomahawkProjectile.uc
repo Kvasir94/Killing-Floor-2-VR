@@ -15,6 +15,17 @@ const MaximumShockRadius = 160;
 const MaximumRecallTug = 60;
 var config float SuspendedShockRadius, RecallTugDistance;
 var KFPawn_Monster RecallHost;
+// Recall from anything that is not a walking Zed (a corpse, a knocked-down
+// Zed, a gib, a physics prop) gives the struck body one small velocity change
+// toward the thrower (#91). The axe leaves at once either way.
+var float RecallImpulse;
+// The return sweep (#87): ReturnFraction of the outbound hit, once per Zed per
+// recall, as an EMP strike that stuns like the stock EMP.
+var float ReturnFraction;
+// A client's copy of the last replicated attachment. The recall clears the
+// replicated one in the same update, so the tug reads this copy instead.
+var Actor ClientStuck;
+var int ClientStuckBone;
 // Visual balance point, measured from the authored grip origin (the 46.8 cm
 // model; tools/raven7_model.py). The projectile's
 // ballistic root stays stable while the head/haft rotate about this point.
@@ -127,8 +138,19 @@ simulated function SyncAttachment()
     {
         StuckToLocation = Attachment.Position; StuckToRotation = Attachment.Rotation;
         StickHelper.ReplicatedStick(Attachment.Target, Attachment.Bone);
+        ClientStuck = Attachment.Target; ClientStuckBone = Attachment.Bone;
     }
-    else if (StuckToActor != None || Base != None) StickHelper.UnStick();
+    else
+    {
+        // Bodies a client simulates itself (torn-off corpses, local gibs, its
+        // own knockdown ragdolls) take the recall tug here; authority applies
+        // its own in BeginRecall and replicates rigid props.
+        if (Phase == 4 && Role != ROLE_Authority && ClientStuck != None
+            && (ClientStuck.Role == ROLE_Authority || Pawn(ClientStuck) != None))
+            ImpulseRecallBody(ClientStuck, ClientStuckBone);
+        ClientStuck = None;
+        if (StuckToActor != None || Base != None) StickHelper.UnStick();
+    }
     ApplyPhase();
 }
 
@@ -151,10 +173,13 @@ function BeginSuspend()
 
 function BeginRecall()
 {
+    local Actor Stuck;
+    local int StuckBone;
     if (Role != ROLE_Authority || Phase == 4) return;
     RecallHost = KFPawn_Monster(StuckToActor);
+    Stuck = StuckToActor; StuckBone = StuckToBoneIdx;
     StickHelper.UnStick(); Attachment.Target = None;
-    TugRecallHost();
+    if (!TugRecallHost()) ImpulseRecallBody(Stuck, StuckBone);
     // Embedded actors use a grip root; flight/return actors use a balance root.
     if (Phase == 3) SetLocation(Location + (SpinCenter >> Rotation));
     Phase = 4; RecallStarted = WorldInfo.RealTimeSeconds;
@@ -177,23 +202,64 @@ function float EffectiveRecallTug()
 // the returning axe. Collision movement can shorten/refuse it. Rigid-body
 // corpses and knocked-down Zeds are excluded: moving a pawn root cannot safely
 // translate all of its articulated physics bodies without stretching joints.
-function TugRecallHost()
+// Returns true when the host is a walking living Zed, which takes this tug
+// (possibly zero when already close) instead of a body impulse.
+function bool TugRecallHost()
 {
     local vector Toward;
     local float Distance, Travel, Radius, Height, OwnerRadius, OwnerHeight;
     if (RecallHost == None || RecallHost.bDeleteMe || RecallHost.Health <= 0
         || RecallHost.bPlayedDeath || RecallHost.Physics != PHYS_Walking
         || !RecallHost.bCollideWorld || !RecallHost.bCollideActors || Human == None
-        || RecallHost.GetTeamNum() == Human.GetTeamNum()) return;
+        || RecallHost.GetTeamNum() == Human.GetTeamNum()) return false;
     Toward = SourceWeapon.ReturnEndpoint() - RecallHost.Location;
     Toward.Z = 0;
     Distance = VSize(Toward);
     RecallHost.GetBoundingCylinder(Radius, Height);
     Human.GetBoundingCylinder(OwnerRadius, OwnerHeight);
     Travel = FMin(EffectiveRecallTug(), FMax(0, Distance - Radius - OwnerRadius));
-    if (!(Travel > 0)) return;
+    if (!(Travel > 0)) return true;
     RecallHost.Move(Normal(Toward) * Travel);
     RecallHost.bForceNetUpdate = true;
+    return true;
+}
+
+// One velocity change on the struck rigid body, at the blade, toward the
+// thrower and a little up. Bodies without rigid-body physics (a wall, a
+// walking pawn) ignore it, and a body a player holds is left alone.
+simulated function ImpulseRecallBody(Actor Target, int BoneIdx)
+{
+    local PrimitiveComponent Body;
+    local SkeletalMeshComponent Skeleton;
+    local name Bone;
+    local vector Toward;
+    if (Target == None || Target.bDeleteMe || Human == None || !(RecallImpulse > 0)
+        || Target == Human || HeldByPlayer(Target)) return;
+    if (Pawn(Target) != None)
+    {
+        if (Target.Physics != PHYS_RigidBody) return;
+        Body = Pawn(Target).Mesh;
+    }
+    else Body = Target.CollisionComponent;
+    if (Body == None) return;
+    Skeleton = SkeletalMeshComponent(Body);
+    if (Skeleton != None && BoneIdx != INDEX_NONE) Bone = Skeleton.GetBoneName(BoneIdx);
+    Toward = Human.Location - Location; Toward.Z = 0;
+    if (VSizeSq(Toward) < 1) return;
+    Body.AddImpulse((Normal(Toward) + vect(0,0,0.3)) * RecallImpulse, Location, Bone, true);
+}
+
+// Authority knows every player's hold through its grab receipts; a client
+// knows its own hands' holds.
+simulated function bool HeldByPlayer(Actor Target)
+{
+    local VRGrabOwnership Receipt;
+    local VRZedGrab Grab;
+    foreach DynamicActors(class'VRGrabOwnership', Receipt)
+        if (!Receipt.bDeleteMe && !Receipt.bTearOff && Receipt.Owner == Target) return true;
+    foreach DynamicActors(class'VRZedGrab', Grab)
+        if (Grab.HoldsActor(Target)) return true;
+    return false;
 }
 
 // A swept capsule against living monster cylinders deliberately ignores world
@@ -221,8 +287,8 @@ function SweepReturn(vector Start, vector End)
         HitInfo.BoneName = '';
         HitInfo.HitComponent = M.Mesh;
         if (M.Mesh != None) HitInfo.BoneName = M.Mesh.FindClosestBone(At, BoneLocation);
-        M.TakeDamage(int(Damage * 0.4), InstigatorController, At,
-            (M == RecallHost ? vect(0,0,0) : Normal(Segment) * 18000), class'VRDT_Tomahawk', HitInfo, self);
+        M.TakeDamage(Max(1, int(Damage * ReturnFraction)), InstigatorController, At,
+            (M == RecallHost ? vect(0,0,0) : Normal(Segment) * 6000), class'VRDT_TomahawkReturn', HitInfo, self);
     }
 }
 
@@ -437,6 +503,8 @@ defaultproperties
     BladeLocal=(X=12.75,Y=0,Z=18.75)
     ShockInterval=0.25
     ShockFraction=0.035
+    ReturnFraction=0.15
+    RecallImpulse=220
     SpinCenter=(X=1.5,Y=0,Z=10.5)
     Physics=PHYS_Falling
     LifeSpan=0

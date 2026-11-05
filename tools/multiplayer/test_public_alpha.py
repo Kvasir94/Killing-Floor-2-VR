@@ -16,6 +16,47 @@ from workshop_loadout import load_preferences, save_preferences
 
 
 class AlphaTests(unittest.TestCase):
+    def test_grab_preserves_saved_choice_without_revision(self):
+        bridge = "KF2VR.VRHandsBridge"
+        for revision in ("", "0", "invalid", "1"):
+            for source_section, choice in ((section, value) for section in (bridge, vr_config.ALIASES[bridge])
+                                           for value in ("True", "False")):
+                saved = (f"[{source_section}]\nbZedGrabEnabled={choice}\nbWorldWeaponDrops=True\n"
+                         "bExperimentalInteractions=True\nbExperimentalStandingHolds=True\n")
+                if revision:
+                    saved += f"ZedGrabSettingsRevision={revision}\n"
+                text = vr_config.apply_preferences("", saved)
+                for section in (bridge, vr_config.ALIASES[bridge]):
+                    prefs = vr_config.values(text, section)
+                    self.assertEqual(choice, prefs["bZedGrabEnabled"])
+                    self.assertEqual(revision if revision in ("0", "1") else "1", prefs["ZedGrabSettingsRevision"])
+                    self.assertEqual("True", prefs["bWorldWeaponDrops"])
+                    self.assertEqual("True", prefs["bExperimentalInteractions"])
+                    self.assertEqual("False", prefs["bExperimentalStandingHolds"])
+
+    def test_grab_missing_or_malformed_defaults_on_and_ini_choice_is_case_insensitive(self):
+        bridge = "KF2VR.VRHandsBridge"
+        for source_section in (bridge, vr_config.ALIASES[bridge]):
+            for body, expected in (("", "True"), ("bZedGrabEnabled=invalid\n", "True"),
+                                   ("bzedgrabenabled= false \n", "False"),
+                                   ("bZedGrabEnabled=True\nbZedGrabEnabled=False\n", "False"),
+                                   ("bZedGrabEnabled=True\nbZEDgRABeNABLED=False\n", "False")):
+                text = vr_config.apply_preferences("", f"[{source_section}]\n{body}")
+                for section in (bridge, vr_config.ALIASES[bridge]):
+                    prefs = vr_config.values(text, section)
+                    self.assertEqual(expected, prefs["bZedGrabEnabled"])
+                    self.assertEqual(["bZedGrabEnabled"], [k for k in prefs if k.lower() == "bzedgrabenabled"])
+
+    def test_full_magazine_eject_is_opt_in_and_shared_between_modes(self):
+        bridge = "KF2VR.VRHandsBridge"
+        alias = vr_config.ALIASES[bridge]
+        for saved, expected in (("", "False"),
+                                (f"[{bridge}]\nbAllowFullMagazineEject=True\n", "True"),
+                                (f"[{bridge}]\nbAllowFullMagazineEject=invalid\n", "False")):
+            imported = vr_config.apply_preferences("", saved)
+            for section in (bridge, alias):
+                self.assertEqual(expected, vr_config.values(imported, section)["bAllowFullMagazineEject"])
+
     def test_vr_preflight_accepts_runtime_without_system_vc_redistributable(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -39,7 +80,6 @@ class AlphaTests(unittest.TestCase):
                 prefs = vr_config.values(text, section)
                 self.assertEqual(expected, prefs["bReloadHints"])
                 self.assertEqual("False", prefs["bInteractiveReloads"])
-                self.assertEqual("False", prefs["bManualPump"])
 
     def test_reload_hint_choice_survives_mode_and_reload_changes(self):
         bridge = "KF2VR.VRHandsBridge"
@@ -52,7 +92,7 @@ class AlphaTests(unittest.TestCase):
             for network, edits, hints, reloads, pump in (
                     (False, {"bReloadHints": "False", "bInteractiveReloads": "True"}, "False", "True", "False"),
                     (True, {"bInteractiveReloads": "False"}, "False", "False", "False"),
-                    (False, {"bInteractiveReloads": "True", "bManualPump": "True"}, "False", "True", "True"),
+                    (False, {"bInteractiveReloads": "True", "bFreeWeaponCycling": "True"}, "False", "True", "True"),
                     (True, {"bReloadHints": "True"}, "True", "True", "True")):
                 active = vr_config.ALIASES[bridge] if network else bridge
                 text = set_ini(read_ini(config / "KFGame.ini"), active, edits)
@@ -65,7 +105,7 @@ class AlphaTests(unittest.TestCase):
                 for section in (bridge, vr_config.ALIASES[bridge]):
                     prefs = vr_config.values(read_ini(config / "KFGame.ini"), section)
                     self.assertEqual((hints, reloads, pump),
-                                     (prefs["bReloadHints"], prefs["bInteractiveReloads"], prefs["bManualPump"]))
+                                     (prefs["bReloadHints"], prefs["bInteractiveReloads"], prefs["bFreeWeaponCycling"]))
 
     def test_engine_saveconfig_dump_persists_choice_but_not_capture_switches(self):
         # The engine rewrites the session KFGame.ini as ANSI with every config
@@ -113,7 +153,7 @@ class AlphaTests(unittest.TestCase):
             profile = root / "profile"
             text = vr_config.apply_preferences("", "[KF2VR.VRHandsBridge]\nbZedGrabEnabled=False\nbMeleeHitStop=False")
             # Solo edits must win over the stale network alias.
-            text = set_ini(text, "KF2VR.VRHandsBridge", {"bZedGrabEnabled": "True"})
+            text = set_ini(text, "KF2VR.VRHandsBridge", {"bZedGrabEnabled": "True", "ZedGrabSettingsRevision": "1"})
             (config / "KFGame.ini").write_text(text, encoding="utf-16")
             vr_config.export_preferences(config, profile, network=False)
             vr_config.import_preferences(config, root=profile)
@@ -125,17 +165,15 @@ class AlphaTests(unittest.TestCase):
             prefs = vr_config.values(read_ini(profile / "KFGame.ini"), "KF2VR.VRHandsBridge")
             self.assertEqual(("True", "True"), (prefs["bZedGrabEnabled"], prefs["bMeleeHitStop"]))
 
-    def test_host_permission_defaults_off_and_saved_choice_survives(self):
+    def test_host_permission_is_parked_even_when_saved_or_requested(self):
         with tempfile.TemporaryDirectory() as tmp:
             args = friends.parse_options(["--host", "--vr"]); args.profile_root = Path(tmp)
             load_preferences(args)
-            self.assertFalse(args.multiplayer_grabs)
             self.assertEqual([], args.mods)
-            args.multiplayer_grabs = True
+            self.assertIn("?VRMultiplayerGrabs=1", friends.host_url(args))
             save_preferences(args)
             next_args = friends.parse_options(["--host", "--desktop"]); next_args.profile_root = Path(tmp)
             load_preferences(next_args)
-            self.assertTrue(next_args.multiplayer_grabs)
             self.assertFalse(next_args.vr)
 
     def deployment(self, root):

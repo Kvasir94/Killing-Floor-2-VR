@@ -28,8 +28,7 @@ FUNCTIONS = {
     "ResizeRhi": 0xd1ef30, "WeaponTraceStart": 0xd350a0,
     "PhysicalFireStartLoc": 0x47e3c0, "ProcessInternal": 0x7aed0,
     "ConstructName": 0xc4990, "FindFunction": 0xc9de0,
-    "PortalRender": 0x693430, "PortalClip": 0x68c850,
-    "InputGlobals": 0x4bd7b0, "PositionName": 0xd67810, "PortalProbeConstruct": 0x695880,
+    "InputGlobals": 0x4bd7b0, "PositionName": 0xd67810,
 }
 PINS = ["77AB9C2CF43AEAA3038274FFF3822064815A3EA02A1B3C81870CDC12A885C994",
         "80CE504F73DBC76C06E3888ABAA5B69DF6AE6E7C23C39ABB778D3C47B508DB9A"]

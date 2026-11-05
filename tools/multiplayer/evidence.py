@@ -6,14 +6,7 @@ import socket
 import struct
 import math
 
-
-def events(log: str, kind: str) -> list[dict[str, str]]:
-    result = []
-    for line in log.splitlines():
-        marker = f"KF2VRNet {kind} "
-        if marker in line:
-            result.append(dict(re.findall(r"(\w+)=([^\s]+)", line.split(marker, 1)[1])))
-    return result
+from launch_support import events, parse_info, query_server
 
 
 def is_true(value: str | None) -> bool:
@@ -753,28 +746,6 @@ def verify_damage(server: str, driver: str, observer: str | None = None) -> dict
             "damage_receipts": len(damage)}
 
 
-def parse_info(packet: bytes) -> dict:
-    """Parse the fixed A2S_INFO prefix through VAC. Reject malformed/split packets."""
-    if not packet.startswith(b"\xff\xff\xff\xffI") or len(packet) < 6:
-        raise ValueError("Not a complete uncompressed A2S_INFO response")
-    offset = 6
-    strings = []
-    for _ in range(4):
-        end = packet.find(b"\0", offset)
-        if end < 0:
-            raise ValueError("Truncated A2S string")
-        strings.append(packet[offset:end].decode("utf-8", errors="replace"))
-        offset = end + 1
-    if len(packet) < offset + 9:
-        raise ValueError("Truncated A2S status")
-    appid, players, maximum, bots, server_type, environment, visibility, vac = struct.unpack_from("<H7B", packet, offset)
-    if vac not in (0, 1) or visibility not in (0, 1):
-        raise ValueError("Invalid A2S security fields")
-    return dict(name=strings[0], map=strings[1], folder=strings[2], game=strings[3],
-                appid=appid, players=players, maximum=maximum, bots=bots,
-                server_type=chr(server_type), environment=chr(environment), password=bool(visibility), secure=bool(vac))
-
-
 def local_lan_readiness(log: str, port: int, expected_map: str) -> dict:
     """Observe stock LAN startup; this is not a Steam A2S/VAC query result."""
     advertised = dict(re.findall(r"Advertising: (\w+)=([^\r\n]*)", log))
@@ -796,16 +767,3 @@ def query_loopback(port: int, timeout: float = 1.0) -> dict:
     return query_server("127.0.0.1", port, timeout)
 
 
-def query_server(host: str, port: int, timeout: float = 1.0) -> dict:
-    request = b"\xff\xff\xff\xffTSource Engine Query\0"
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.settimeout(timeout)
-        sock.connect((host, port))
-        sock.send(request)
-        packet = sock.recv(65535)
-        if packet.startswith(b"\xff\xff\xff\xffA"):
-            if len(packet) != 9:
-                raise ValueError("Malformed A2S challenge")
-            sock.send(request + packet[5:9])
-            packet = sock.recv(65535)
-        return parse_info(packet)

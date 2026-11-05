@@ -1,0 +1,84 @@
+{
+  "schema": "kf2vr/retained-ammo-recovery-plan/1",
+  "status": "planned_unmeasured",
+  "scope": "Extend the existing native replay and real authority observer; no replacement harness, mock ammo, synthetic success flags or normal-user configuration changes",
+  "current_execution_limit": "Existing strict normal hold regression only; insertion/recovery needs a separately compiled observer handoff and measured pose waypoints before it can run",
+  "existing_hold_prefix": [
+    "Verify immutable package and source identity, native deployment hashes, actual selected pointer and saved configuration snapshots",
+    "Require Steam Client API initialized1 and the exact normal observer-ready marker; engine/world progress is diagnostic only",
+    "Observe clean real loaded/reserve baseline, one native-input shot, accepted exact paid removal and 12second hold",
+    "Require world-weapon/experimental gates false; keep dropped ammunition recovery enabled according to the declared preset"
+  ],
+  "required_observer_extension": {
+    "handoff": "Retain the strict existing hold prefix and its warnings, then hand off its test-only completion/quit behavior to a separately checked lifecycle observer; never let the hold analyzer silently accept ammo increases or identity changes",
+    "geometry": "Read-only samples of world/room wrist and palm poses, actual loose prop/ground position, grip edges, insertion entry/seat/contact frames and pouch positions; record source data rather than guess a generic magwell",
+    "identities": "Record full source weapon, pawn and registry paths plus world/pawn lifetime, ownership revision, exact paid token and receipt serial",
+    "accounting": "Read authoritative game loaded/reserve and every seen paid ledger token; reconcile props, carrier hand, native feed flags, confirmed shot costs, explicit grants and accepted live discard",
+    "completion": "Require observed claim, release, insertion or pouch receipts and settled snapshots for every requested phase. Missing events or runtime warnings fail; no text fixture constitutes game evidence"
+  },
+  "normal_9mm_partial_flow": [
+    {
+      "phase": "paid_removal",
+      "input": "Reuse existing normal tape through its real shot and magazine release",
+      "predicate": "Same exact owned 9mm actor; paid payload equals actual removed rounds; retained chamber remains loaded; prop rounds equal ledger remaining",
+      "previously_observed_example": {"loaded": 1, "reserve": 75, "escrow": 13, "shots": 1, "total": 90}
+    },
+    {
+      "phase": "hand_recovery",
+      "input": "Move the genuinely free hand to the measured prop/ground contact with a fresh open-to-squeeze edge",
+      "predicate": "Claim receipt leases that exact registry/token to that hand; loaded, reserve and paid remaining unchanged; repeated held grip cannot acquire another payload"
+    },
+    {
+      "phase": "release_reclaim",
+      "input": "Release away from both pouch and guide, then use a new fresh grip edge to reclaim",
+      "predicate": "Release clears only that carrier lease, preserves paid remaining and source identity, and creates no reserve credit; reclaim never registers another removal token"
+    },
+    {
+      "phase": "partial_reinsert",
+      "input": "Hold the recovered magazine and traverse the measured guide mouth to seat through the production insertion path",
+      "predicate": "Seat receipt consumes the complete paid payload exactly once; loaded becomes prior retained plus actual remaining, reserve unchanged; token retires, mag-out clears and the retained chamber stays available",
+      "illustrative_poststate_for_previous_example": {"loaded": 14, "reserve": 75, "escrow": 0, "shots": 1, "total": 90}
+    },
+    {
+      "phase": "duplicate_receipt_rejection",
+      "input": "Repeat grip/seat attempt using the now-retired payload; do not forge authority receipts",
+      "predicate": "No claim or seating acceptance and no ammo credit; old token cannot resurrect or be charged twice"
+    },
+    {
+      "phase": "pouch_deposit",
+      "input": "Remove again through ordinary reload input, recover the new paid token, carry to the measured pouch and release",
+      "predicate": "New removal serial differs from retired serial; accepted pouch credit equals actual capacity room bounded by paid remaining; full consumption retires, partial consumption retains exact excess and lease",
+      "illustrative_full_deposit_for_previous_example": {"loaded": 1, "reserve": 88, "escrow": 0, "shots": 1, "total": 90}
+    },
+    {
+      "phase": "fresh_tactical_magazine",
+      "input": "Take and seat a genuinely new magazine from the pouch through the production path",
+      "predicate": "Reserve pays actual fresh magazine contents once; audited closed-bolt 9mm may reach observed magazine capacity plus retained chamber; no paid partial magazine is silently refilled",
+      "illustrative_poststate_for_previous_example": {"loaded": 16, "reserve": 73, "escrow": 0, "shots": 1, "total": 90}
+    },
+    {
+      "phase": "empty_reload",
+      "input": "Fire the remaining loaded rounds using real input, then remove, obtain fresh ammunition, seat and release/rack the slide",
+      "predicate": "Empty removal cannot return live rounds; fresh load equals paid magazine contents without an invented extra chamber round; actual native empty/unracked and ready states must be observed"
+    }
+  ],
+  "additional_unmeasured_cases": [
+    {"case": "Alyx recovery", "predicate": "Gravity pull reserves a genuinely free hand, transfers the same paid token on actual catch, and never credits/refills in flight"},
+    {"case": "pouch full or partial room", "predicate": "Full reserve refuses loaded deposit without deleting budget; partial room credits only actual room, leaving exact excess leased"},
+    {"case": "zero reserve", "predicate": "No fresh magazine can be paid from nothing; previously paid compatible recovery/insertion retains its independent budget"},
+    {"case": "loss off", "predicate": "Observe actual removed gun rounds returning to reserve once; a zero-paid cosmetic prop cannot credit them again"},
+    {"case": "recovery off", "predicate": "Observe denied pickup separately from paid ledger lifetime; never infer destruction merely from an unavailable grab"},
+    {"case": "discard or disappearance", "predicate": "Track the accepted lifetime/discard event and explicit live-round debit; missing cosmetic prop alone cannot remove escrow from conservation"},
+    {"case": "opposite hand and dual hip reload", "predicate": "Count pair reserve once; independently held member/chamber and paid-token identities remain exact, with at most one carried payload per hand"},
+    {"case": "interruption before/after seat", "predicate": "Cancel unpaid replacement without charging; accepted removal/seat remains committed exactly once, with no later stock notify adding ammo"},
+    {"case": "switch or local toss/catch", "predicate": "Rebind the same exact owned actor; retained loaded/chamber and paid escrow budgets persist, while unpaid physical carry cancels through its owner"},
+    {"case": "death and respawn", "predicate": "Release old pawn's exact carrier leases and record paid-budget lifetime policy; distinguish new pawn/stock grants from old escrow rather than resetting the conservation baseline silently"},
+    {"case": "map transition", "predicate": "Record world teardown and new-world identities/explicit grants; reused actor names or token numbers in another registry cannot resurrect old budgets"},
+    {"case": "other mechanisms", "predicate": "Use the actual enumerated class/profile admission in ammo_plan.json; open bolts, tubes, pumps, bolts/levers, break actions, cylinders, launchers, bows and special resources retain their own supported accounting and cycling policies"}
+  ],
+  "steam_failure_stop": {
+    "trigger": "Steam Client API initialized0 followed by STEAM is required; zero observer samples",
+    "action": "Stop runtime retries and restore. User must finish/close their active VR session, exit SteamVR and Steam normally, reopen Steam and confirm signed-in/online, then reopen SteamVR. Do not restart or alter their session automatically"
+  },
+  "accepted": {"full_insertion": false, "hand_recovery": false, "alyx_recovery": false, "pouch": false, "lifecycle": false, "headset_feel": false}
+}

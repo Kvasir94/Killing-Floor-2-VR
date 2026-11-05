@@ -5,8 +5,8 @@
 This project integrates and adapts contributions from
 [OptimumBox's Killing-Floor-2-VR fork](https://github.com/optimumbox/Killing-Floor-2-VR).
 The current integration baseline is
-[v0.5.0-alpha.20261011](https://github.com/optimumbox/Killing-Floor-2-VR/releases/tag/v0.5.0-alpha.20261011),
-commit `e35ec355ae951dda72ee80b20cb1cef12345b9ac`.
+[v0.5.2-alpha.20261014](https://github.com/optimumbox/Killing-Floor-2-VR/releases/tag/v0.5.2-alpha.20261014),
+with distribution sources through `68932aef5ee76b2bcc834eed4d2f3275ea4d6995`.
 
 Credit covers his improvements across the mod, including:
 
@@ -18,7 +18,8 @@ Credit covers his improvements across the mod, including:
 | Interaction and controls | Firearm support retention, both-hand pouch behavior and pouch/rack reach, movement-wheel controls with walking and welder priority, authored grenade grips |
 | Cameras and diagnostics | Fixed boss-introduction viewpoint, level death/spectator views and blocked-trigger diagnostics |
 | Launcher | Player-window layout, wording, controls and fresh-profile defaults, including 100% render scale and blank-password public hosting |
-| Desktop companions | Steam/Proton Linux joining helper and manual Epic desktop package workflow |
+| Desktop companions | Steam/Proton Linux setup and joining helper, Epic desktop package installer and workflow |
+| Workshop and chat | Full-item staging, Steam Play chooser/setup, desktop subscription delivery and wristwatch chat |
 
 The earlier DLSS/physical-stock integration credits OptimumBox commit
 `e080bc0e1e1a56e3de61498634f40ca2c29692ed`; the single-pass contribution is also

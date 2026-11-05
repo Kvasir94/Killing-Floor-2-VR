@@ -1,5 +1,18 @@
 # Shared build/fixture fingerprint: adding, editing or deleting any package
 # source invalidates the compiled artifact, including optional demo classes.
+# KF2 game/editor/server processes that share the main install or SDK, skipping
+# replay fixture copies (tools/replay/fixture.py, D:\KF2-Fixtures\<lane>) and the
+# repository's dedicated-server copy: neither is a build input, so neither blocks a build.
+function Get-KF2VRSharedProcesses([string[]]$Name = @('KFGame','KFEditor','KFServer')) {
+    $fixtures = if ($env:KF2VR_FIXTURE_ROOT) { $env:KF2VR_FIXTURE_ROOT } else { 'D:\KF2-Fixtures' }
+    $fixtures = [IO.Path]::GetFullPath($fixtures).TrimEnd([char]92) + [char]92
+    # The repository's dedicated-server copy (MP replays) is no compiler input either.
+    $server = [IO.Path]::GetFullPath((Join-Path (Split-Path $PSScriptRoot -Parent) 'build\multiplayer\server')) + [char]92
+    @(Get-Process $Name -ErrorAction SilentlyContinue | Where-Object {
+        -not ($_.Path -and ($_.Path.StartsWith($fixtures, [StringComparison]::OrdinalIgnoreCase) -or
+            $_.Path.StartsWith($server, [StringComparison]::OrdinalIgnoreCase))) })
+}
+
 function Get-PackageSourceHashes([string]$Directory) {
     $hashes = [ordered]@{}
     foreach ($file in Get-ChildItem -LiteralPath $Directory -Filter '*.uc' -File -Recurse | Sort-Object FullName) {
@@ -50,16 +63,23 @@ function Get-HandAssetState([string]$ProjectRoot, [string]$GameRoot = '') {
         throw 'Floating-hand geometry is stale. Regenerate it with tools/generate_floating_hands.py before building.'
     }
     $textureHashes = [ordered]@{}
-    # Same set build-hand-assets.ps1 records: hand/watch, Tomahawk and Deadbolt textures.
+    # Same texture set as build-hand-assets.ps1, including optional authored weapons.
     $textureRoot = Join-Path $ProjectRoot 'build/hand-meshes'
     foreach ($texture in @(@(Get-ChildItem -LiteralPath $textureRoot -Filter 'VRHorzine*.tga') +
         @(Get-ChildItem -LiteralPath $textureRoot -Filter 'VRTomahawk*.tga') +
-        @(Get-ChildItem -LiteralPath $textureRoot -Filter 'VRDeadbolt*.tga' -ErrorAction SilentlyContinue)) | Sort-Object Name) {
+        @(Get-ChildItem -LiteralPath $textureRoot -Filter 'VRDeadbolt*.tga' -ErrorAction SilentlyContinue) +
+        @(Get-ChildItem -LiteralPath $textureRoot -Filter 'VRRipcord*.tga' -ErrorAction SilentlyContinue)) | Sort-Object Name) {
         $textureHashes[$texture.Name] = (Get-FileHash -LiteralPath $texture.FullName).Hash
     }
     $state = [ordered]@{
         package_sha256=(Get-FileHash -LiteralPath (Join-Path $ProjectRoot 'build/hand-assets/KF2VRHands.upk') -Algorithm SHA256).Hash
         input_sha256=$meshHash
+        source_psk_sha256=(Get-FileHash -LiteralPath ([IO.Path]::ChangeExtension($mesh, '.psk'))).Hash
+        hand_bounds_sha256=(Get-FileHash -LiteralPath (Join-Path $ProjectRoot 'build/hand-meshes/VRFloatingHandsBounds.json')).Hash
+        hand_bounds_generator_sha256=[ordered]@{
+            generator=(Get-FileHash -LiteralPath (Join-Path $ProjectRoot 'tools/generate_hand_bounds.py')).Hash
+            reader=(Get-FileHash -LiteralPath (Join-Path $ProjectRoot 'tools/generate_floating_hands.py')).Hash
+        }
         wristwatch_sha256=(Get-FileHash -LiteralPath (Join-Path $ProjectRoot 'build/hand-meshes/VRWristwatch.fbx')).Hash
         textures_sha256=$textureHashes
         generator_sha256=$generatorHash
@@ -74,6 +94,9 @@ function Get-HandAssetState([string]$ProjectRoot, [string]$GameRoot = '') {
         $assetBuild.success -isnot [bool] -or -not $assetBuild.success -or
         $assetBuild.package_sha256 -ne $state.package_sha256 -or
         $assetBuild.input_sha256 -ne $state.input_sha256 -or
+        $assetBuild.source_psk_sha256 -ne $state.source_psk_sha256 -or
+        $assetBuild.hand_bounds_sha256 -ne $state.hand_bounds_sha256 -or
+        ($assetBuild.hand_bounds_generator_sha256 | ConvertTo-Json -Compress) -cne ($state.hand_bounds_generator_sha256 | ConvertTo-Json -Compress) -or
         $assetBuild.wristwatch_sha256 -ne $state.wristwatch_sha256 -or
         ($assetBuild.textures_sha256 | ConvertTo-Json -Compress) -cne ($state.textures_sha256 | ConvertTo-Json -Compress) -or
         $assetBuild.builder_sha256 -ne $state.importer_sha256 -or

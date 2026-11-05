@@ -33,7 +33,7 @@ def gpu_ms(run):
 # inline today. xrBegin is excluded: it is where the runtime's pacing wait lands.
 GAME = ('otherMs', 'controllerMs', 'simulationMs', 'vmDispatchMs', 'vmBodyMs',
         'viewSetupMs', 'sceneSetupMs', 'viewportSetupMs')
-RENDER = ('worldMs', 'leftMs', 'rightMs', 'portalMs', 'xrSubmitMs', 'presentMs', 'eyeCopyMs')
+RENDER = ('worldMs', 'leftMs', 'rightMs', 'xrSubmitMs', 'presentMs', 'eyeCopyMs')
 
 
 def busy_ms(run, threaded=False):

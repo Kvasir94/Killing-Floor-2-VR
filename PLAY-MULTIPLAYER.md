@@ -1,159 +1,71 @@
 # Launch options and multiplayer
 
-The player window detects completed Steam and Epic installations and displays
-the available stores. Auto selects a sole installation or the last valid folder
-used in this extracted release; with multiple installations and no valid saved
-folder, choose Steam or Epic explicitly. A manually located exact build remains
-usable without a store manifest. Missing saved folders fall back to discovery;
-an explicit store choice never falls back to another store. Exact executable
-hashes are checked before any native deployment. Use `-Store Auto|Steam|Epic`
-and `-GameRoot` for the same selection on the command line.
+Players open **Start KF2-VR** in the extracted ZIP; from a source checkout,
+**Play-KF2VR.cmd** opens the selected package's player window. The window finds
+Steam and Epic installations, runs a short first-time setup, and offers **Quick
+start**, **Solo match**, **Host a game** and **Join a friend**, in VR or on the
+desktop. Steam supports Solo, Host and Join; Epic is experimental Solo VR only,
+started through Launch Options pasted into the official Epic launcher (see the
+[player guide](docs/PLAYER-GUIDE.md)).
 
-Epic offers experimental Solo VR through manually pasted session Launch Options
-in the official Epic launcher. Host, Join, Desktop, motion recording and highlight
-logging are unavailable. Steam offers Solo/Host/Join in VR or Desktop. Epic's
-current menu-first route still needs headset feedback; earlier partial gameplay
-checks do not establish overall acceptance.
+Solo needs no server download. The first Host downloads the free KF2 dedicated
+server (about 9 GB, 32 GB installed) into `KF2-VR Data` on the drive that holds
+KF2. A blank Host password makes the server open. Joiners need neither the
+server nor port forwarding; internet hosts forward UDP 7777 and 27015.
 
-From the repository root, double-click **Play-KF2VR.cmd** to open the selected
-package's player window. From an extracted playable ZIP, open **Start KF2-VR**.
-Choose your store and **VR headset** or **Desktop - no headset**, then **Play solo**,
-**Host a game** or **Join a friend**. Solo and Host offer map, difficulty and match
-length, plus a Headset section for VR graphics. Join accepts the host's code.
-Settings is on the home page. Connect your headset/controllers and activate the
-OpenXR runtime before VR play. Keep the window open until game exit and cleanup.
-
-Steam Solo is a standalone match without a server download. Host starts the free
-dedicated server and joins it; first hosting downloads about 32 GB. A blank Host
-password makes the server public. Joiners need neither the server download nor
-port forwarding. Epic offers experimental Solo VR only; follow the manual
-Launch Options steps in [READ ME FIRST](docs/public-alpha/READ-ME-FIRST.txt).
-
-In a headset session, **LOCAL MATCH** starts a standalone match. It cycles through
-installed Survival maps with MAP and PREVIOUS MAP. The same compiled playable
-feature set is used for solo and network play; host-controlled options apply to
-network sessions.
-
-The player window's artwork is read from the player's own installed game and
-local Steam library cache, with drawn fallbacks. No game artwork needs to be
-copied into the launcher folder.
-
-For the test map, double-click **[Play-KF2VR-TestMap.cmd](Play-KF2VR-TestMap.cmd)**.
-It preselects Remilly and accepts options such as `-Desktop` or
-`-EyeRenderPercent 75`. Explicit arguments launch directly; add `-Gui` to review
-those choices in the player window, or `-Menu` for the text menu. `-DevGui` opens
-the separate advanced PowerShell development window with Session, Headset, Mods
-and TEST CONTROL pages. Its **HOST ON THIS PC** / **TRUE SOLO** choices describe
-that development UI, rather than the normal player window.
-
-Ordinary launch selections are saved in **%LOCALAPPDATA%/KF2VR/Profile/launcher.json**;
-VR graphics and fit also use the shared VR profile. Solo preserves host-only
-loadout and server choices. **Render scale** on Solo/Host > Headset and
-Settings > Comfort and graphics edits the same setting as in-game
-VR Controls > Graphics. **Keep my last setting** uses the saved value; fresh
-profiles start at Performance / 100%. Local agent test control and recording
-are opt-ins for the current launch. The advanced development UI additionally
-remembers its Solo/Host choice in **%LOCALAPPDATA%/KF2VR/Profile/session-type.txt**.
-
-The repository launcher uses **build/multiplayer/current-release.json**. It
-verifies the selected manifest, package files and build/runtime source fingerprints.
-If source has changed, the player window asks **Play this older build?**
-before starting that launch. The text menu offers **Play this build anyway (allow stale)**;
-direct launches require `-AllowStale`. This permits source differences only and
-still checks package integrity. Portable release ZIPs have their own immutable
-manifest and do not depend on a repository selection. Old releases stay intact.
-Build current source with **tools/build-kf2vr.ps1**; compiling and offline checks
-do not establish headset acceptance.
-
-## Local agent test control (Solo VR, default OFF)
-
-In the portable **Start KF2-VR** window, choose **VR headset**, then **Play solo**
-and check **Local agent test control (Solo VR only; this launch)**. The checkbox
-starts OFF on every form and is disabled for Host and Desktop. It applies only
-to this launch and is never saved. The development launcher's **TEST CONTROL**
-page exposes the same option. The command-line equivalent is
-`Play-KF2VR.cmd -Solo -Vr -LocalTestControl`; `-LocalTestControl` is the explicit opt-in switch. Preparing does not enable control.
-Hosted LAN and joined-server control are not implemented in this version; the
-checkbox is disabled for those modes and the command line refuses them.
-
-The owned mod marks this explicit session **UNRANKED**, without enabling the
-cheat manager. Grants may exceed normal carry capacity; the full calculated
-weight is reported and the stock byte weight display saturates at 255. Existing
-weapons are no-ops and are never refilled. Give-all uses the installed authored
-VR profile registry, resolves full class paths, and reports missing classes as
-an error. Paired wrappers are recognized as existing inventory; their normal
-VR hand runtime creates them. Optional perk filters use the catalog's perk
-class names and do not change the player's perk.
-
-The session ID is in the prepared driver role's `local_test_control` metadata.
-Use the selected package's `tools/multiplayer/local_test_control.py` to request
-`status`, `catalog`, `give-all`, `give-one`, `spawn-zeds`, or `disable`:
-
-```powershell
-python tools/multiplayer/local_test_control.py --session <launch-session-id> --player 0 status
-python tools/multiplayer/local_test_control.py --session <launch-session-id> --player <reported-id> catalog
-python tools/multiplayer/local_test_control.py --session <launch-session-id> --player <reported-id> give-all
-python tools/multiplayer/local_test_control.py --session <launch-session-id> --player <reported-id> --argument scrake --count 2 spawn-zeds
-python tools/multiplayer/local_test_control.py --session <launch-session-id> --player <reported-id> disable
-```
-
-Every request has a unique action ID and a final result receipt. A timeout is
-indeterminate: inspect that ID's receipt and audit, and never resend it with a
-new ID. Reusing an ID for a different request is rejected. Commands use a local
-session folder under the game's temporary directory; there is no listener or
-general console execution. Limits are two accepted commands per second, one
-grant/spawn per game-thread timer callback, at most six zeds per request, twelve
-live test zeds, 256 actions, and a thirty-minute session. Spawned zeds attack and
-can damage the player. No god mode, wave reset, refill, or clear command is
-provided. Disable cancels queued work and retains granted inventory and zeds;
-the match stays unranked. Restart without the checkbox for ordinary play.
+Everything the window does is also available as `Play-KF2VR.cmd` switches,
+listed below. Choices made in the window or with switches are saved per PC in
+`%LOCALAPPDATA%\KF2VR\Profile`; explicit switches win for that launch.
 
 ## Main launcher switches
 
 All public switches for Play-KF2VR.cmd / tools/play-main.ps1 are listed here.
+docs/LAUNCHER_SWITCHES.md is the generated one-table-per-category
+reference from the settings registry (saved store, default and packaged flag for each).
 PowerShell's standard common parameters are also available.
+
+`-Help` prints a list generated from
+[tools/multiplayer/settings_registry.py](tools/multiplayer/settings_registry.py), the single
+definition of every launcher option, its shipped default and whether it is saved;
+the packaged `friends.py --help` comes from the same table.
 
 | Switch | Default | Purpose and constraints | Example |
 | --- | --- | --- | --- |
 | `-Gui` | On for a double-click/no-argument CMD launch; otherwise off | Graphical selections before launch, including the explicit consent when source is newer than the selected package. Also works with TestMap and PrepareOnly. | `./Play-KF2VR.cmd -Gui -Difficulty Hard` |
-| `-DevGui` | Off | Use the development PowerShell window rather than the selected package's portable player window. | `./Play-KF2VR.cmd -DevGui` |
+| `-RecordMotion` | Off; this launch only | On/Off. Live VR player motion, input and presentation clips; no synthetic playback, video or audio. | `./Play-KF2VR.cmd -Gui -Vr -RecordMotion On` |
+| `-HighlightEvents` | Off; this launch only | On/Off. Live VR highlight events and F9 video sync marks. `-PromoEvents` also enables it. | `./Play-KF2VR.cmd -Gui -Vr -HighlightEvents On` |
 | `-Vr` | Saved play mode; initially VR | Headset play for this session regardless of the saved mode. Rejects a combined Desktop request. | `./Play-KF2VR.cmd -Vr` |
 | `-Desktop` | Saved play mode; initially VR | Same selected package, stock desktop controls; works with Solo or Host. Rejects explicit VR quality/scale. | `./Play-KF2VR.cmd -Desktop` |
 | `-LocomotionPreview` | Off | Desktop inspection of the actual remote pawn; alternates roomscale and stick walking with idle pauses. No headset needed. Rejects Solo, Vr, Gui, Menu and TestMap. | `./Play-KF2VR.cmd -LocomotionPreview` |
-| `-Solo` | Off (host); the window remembers the last kind | Standalone match from the selected package; no dedicated server installation or network needed. Shares saved mode, graphics, eye scale and match options, menus, PrepareOnly and AllowStale with Host. Installed client maps only; rejects Remilly/Workshop maps, TestMap, explicit TestMapPlayers, InventoryFocus On and MultiplayerGrabs On. Ignores mods. | `./Play-KF2VR.cmd -Solo -Vr -Map KF-Outpost -Difficulty Hard` |
-| `-TestMap` | Off (Burning Paris) | Remilly's Workshop map with the normal VR game/controller. Downloads if needed. | `./Play-KF2VR.cmd -TestMap` |
+| `-Solo` | Off (host); the window remembers the last kind | Standalone match from the selected package; no dedicated server installation or network needed. Shares saved mode, graphics, eye scale and match options, menus, PrepareOnly and AllowStale with Host. Installed client maps, including downloaded Steam Workshop and user-cache maps, plus explicit Steam cached Remilly as described below. Installed custom content is mounted read-only for the session. Rejects explicit TestMapPlayers and InventoryFocus On. Ignores mods. | `./Play-KF2VR.cmd -Solo -Vr -Map KF-Outpost -Difficulty Hard` |
+| `-TestMap` | Off (Burning Paris) | Remilly's Workshop map. Host downloads if needed. Explicit `-Solo -Store Steam` uses only the verified existing cache, without download or map copy. | `./Play-KF2VR.cmd -Solo -Vr -Store Steam -TestMap` |
 | `-Menu` | Off | Text menu in the console instead of the window; same selections before launch, including play-anyway/quit when source is newer than the selected package. Also works with PrepareOnly. | `./Play-KF2VR.cmd -Menu -Difficulty Hard` |
-| `-Map` | Saved; initially KF-BurningParis | KF- map name. Host offers common installed maps, Remilly and managed Workshop maps; Solo offers installed client maps only. An unavailable saved hosted map falls back to the first installed Solo map; an explicit unsupported Solo map fails. No extension/path/URL options. Rejects a conflicting TestMap selection. | `./Play-KF2VR.cmd -Map KF-TF2_Upward` |
+| `-TestMode` | Off; never saved | UNRANKED. Perk changes take effect at any time, even mid-wave, from the stock perk menu; each switch strips the inventory (healer and welder stay) and grants every weapon of the new perk, and every spawn gets the full arsenal. Server-side, so it works in Solo, on the host and for players joining it. Combine with `-TestMap` or `-Map`. Play-KF2VR-TestMode.cmd opens the window with it on. | `./Play-KF2VR.cmd -TestMode -TestMap` |
+| `-Map` | Saved; initially KF-BurningParis | KF- map name. Host offers common installed maps, installed custom maps, Remilly and managed Workshop maps; Solo offers installed client, Workshop-cache and user-cache maps. Companion packages in a selected custom map’s content folder are mounted for both local client and host. An unavailable saved hosted map falls back to the first installed Solo map; an explicit unsupported Solo map fails. No extension/path/URL options. Rejects a conflicting TestMap selection. | `./Play-KF2VR.cmd -Map KF-TF2_Upward` |
 | `-Difficulty` | Saved; initially Normal | Normal, Hard, Suicidal, HellOnEarth. | `./Play-KF2VR.cmd -Difficulty Suicidal` |
-| `-GameLength` | Saved; initially Short | Short (4 waves), Medium (7), Long (10), then boss. | `./Play-KF2VR.cmd -Map KF-Outpost -Difficulty Hard -GameLength Long` |
+| `-GameLength` | Saved; initially Medium | Short (4 waves), Medium (7), Long (10), then boss. | `./Play-KF2VR.cmd -Map KF-Outpost -Difficulty Hard -GameLength Long` |
+| `-MaxZeds` | Saved per Host/Solo; initially 0 (stock) | Most zeds alive at once, 1-128; 0 keeps stock (10-32 by difficulty and living players). Turns on UKFP. See [Zed spawn overrides](#zed-spawn-overrides). | `./Play-KF2VR.cmd -MaxZeds 48` |
+| `-WaveZedsPercent` | Saved per Host/Solo; initially 100 (stock) | 10-500: zeds per normal wave as a percent of stock's own total, which already scales with wave, players and difficulty. | `./Play-KF2VR.cmd -WaveZedsPercent 150` |
+| `-SpawnRatePercent` | Saved per Host/Solo; initially 100 (stock) | 25-500: how often zed squads spawn; 200 is twice as often. | `./Play-KF2VR.cmd -MaxZeds 64 -SpawnRatePercent 200` |
 | `-Mods` | Saved VR selection; initially `none`. Use `legacy` for the UKFP preset. Desktop starts with none. | Comma-separated catalog keys, `none`, or `legacy`. Selecting a dependency feature also enables UKFP. Normal VR host launches/preparations save the selection across releases. | `./Play-KF2VR.cmd -Mods ukfp,yas` |
 | `-DamagePopups` | Saved Desktop preference; initially On | On/Off for Desktop with UKFP. In VR, native 3D world-space damage numbers (`VRDamagePopups`) are rendered over Zeds' heads with stereoscopic depth instead of UKFP's flat overlay. | `./Play-KF2VR.cmd -Desktop -Mods ukfp -DamagePopups On` |
+| `-ZedGrabs` | Saved Host choice; initially On | On/Off. Host only: lets VR players on this server grab and throw Zeds (`?VRMultiplayerGrabs=1`/`0`). Each player's own Zed grab setting still applies; rejected with `-Solo` (use the headset or launcher setting). | `./Play-KF2VR.cmd -ZedGrabs Off` |
+| `-GravityGrab` | Saved Host choice; initially On | On/Off. Host only: lets VR players on this server gravity-grab guns, magazines and pickups (`?VRGravityPull=1`/`0`). Rejected with `-Solo`. | `./Play-KF2VR.cmd -GravityGrab Off` |
 | `-TestMapPlayers` | Saved; initially 6 | Host only: 0 for actual players, 6 for UKFP faked-player scaling on Remilly only. Effective only with UKFP selected. | `./Play-KF2VR.cmd -TestMap -TestMapPlayers 6` |
-| `-InventoryFocus` | Saved; initially Off | On/Off. Experimental host-controlled shared slowdown while a VR wheel is open. Applies to all participants, yields to Zed Time, and is available to VR or Desktop hosts. | `./Play-KF2VR.cmd -InventoryFocus On` |
-| `-MultiplayerGrabs` | Saved; initially Off | On/Off. Experimental host setting followed by every VR player. Solo keeps its separate ordinary grabbing setting; On is incompatible with Solo. | `./Play-KF2VR.cmd -MultiplayerGrabs On` |
-| `-PortalGun` | Saved; initially Off | On/Off. Solo only: offers the experimental Portal Gun at the trader. Portals are local-only, so Host/Join never offer the gun and the switch is rejected there. See-through portals need the default one-thread renderer; with `-ThreadedRender` the portal shows its flat colour fill. | `./Play-KF2VR.cmd -Solo -Vr -PortalGun On` |
+| `-InventoryFocus` | Retired compatibility input | Multiplayer slowdown is unavailable. Solo slowdown is Comfort's **Weapon wheel slow-mo**. | Omit |
+| `-Dlss` | Saved; initially `auto` | `auto`, `off`, `dlaa`, `quality`, `balanced`, `performance`, `ultraperformance`. VR only. `auto` runs Quality where DLSS starts and ordinary rendering on other GPUs; an explicit mode needs a DLSS-enabled package and compatible NVIDIA runtime. Omit to retain the saved choice, or explicitly select `off` to restore ordinary rendering. | `./Play-KF2VR.cmd -Solo -Vr -Dlss quality` |
+| `-DlssSharpness` | Saved; initially 50 | Integer 0-100; VR only. Zero disables sharpening. Omit to retain the saved value. | `./Play-KF2VR.cmd -Solo -Vr -Dlss quality -DlssSharpness 0` |
+| `-Hbao` | Saved; initially On (Quality) | On/Off. VR screen-space ambient occlusion. | `./Play-KF2VR.cmd -Solo -Vr -Hbao On` |
+| `-Reflections` | Saved; initially On (Quality) | On/Off. VR screen-space reflections. | `./Play-KF2VR.cmd -Solo -Vr -Reflections On` |
+| `-Flex` | Retired compatibility input | Ignored. FleX stays disabled, including for old saved On choices. | Omit |
+| `-HideBloodLens` | Saved; initially On | On/Off. Suppress blood lens splatter in VR; independent of Bloat bile. | `./Play-KF2VR.cmd -Solo -Vr -HideBloodLens Off` |
 | `-EyeRenderPercent` | Saved value; initially 100 | Integer 50-100, per-eye width/height scale. Explicit value overrides saved scale. VR only. | `./Play-KF2VR.cmd -EyeRenderPercent 75` |
-| `-HeadsetPreset` | None | Provisional `quest2`, `quest3`, `quest3s`, `index`, `high-resolution` graphics/eye-scale bundle. Explicit quality/scale wins; resulting settings remembered. VR only. | `./Play-KF2VR.cmd -Vr -HeadsetPreset quest2` |
-| `-VrQuality` | Saved; initially `performance` | `quality`, `balanced`, `performance`. Session preset, separate from eye scale. VR only. | `./Play-KF2VR.cmd -VrQuality performance` |
-| `-ThreadedRender` | Saved; initially Off | On/Off. Experimental, VR only. Runs without `-onethread`: UE3's render thread draws one frame while the game ticks the next. The portal gun's see-through view works only one-threaded (Off); with On its portals keep their flat colour fill. A checkbox in Solo/Host > Headset, and on the advanced development window's Headset page. | `./Play-KF2VR.cmd -Vr -ThreadedRender On` |
-| `-SinglePass` | Saved; initially On for Steam VR | On/Off. Experimental Steam stereo, shared by Solo/Host/Join; Epic uses Off and rejects explicit On. Combined target width is capped at 8192 pixels. | `./Play-KF2VR.cmd -Solo -Vr -SinglePass Off` |
-| `-Dlss` | Saved; initially `off` | `off`, `dlaa`, `quality`, `balanced`, `performance`, `ultraperformance`. VR only; non-Off needs a DLSS-enabled package and compatible NVIDIA runtime. | `./Play-KF2VR.cmd -Solo -Vr -Dlss quality` |
-| `-DlssSharpness` | Saved; initially 0 | Integer 0-100, VR only. Zero disables sharpening. | `./Play-KF2VR.cmd -Solo -Vr -Dlss quality -DlssSharpness 0` |
-| `-Hbao` | Saved; initially On | On/Off, VR screen-space ambient occlusion. | `./Play-KF2VR.cmd -Solo -Vr -Hbao Off` |
-| `-Reflections` | Saved; initially On | On/Off, VR screen-space reflections. | `./Play-KF2VR.cmd -Solo -Vr -Reflections Off` |
-| `-HideBloodLens` | Saved; initially On | On/Off, suppress VR blood lens splatter independently of Bloat bile. | `./Play-KF2VR.cmd -Solo -Vr -HideBloodLens Off` |
-| `-Store` | `Auto` | Auto/Steam/Epic installation selection. Epic requires Solo VR and official-launcher options. | `./Play-KF2VR.cmd -Store Epic -Solo -Vr` |
-| `-Breacher` | Saved; initially Off | On/Off, requires a package containing matching optional content. The current combined candidate omits it. | `./Play-KF2VR.cmd -Breacher Off` |
-| `-BreacherLevel` | Not saved | Development level override, 1-25 for all players, implies Breacher On; requires optional content. | `./Play-KF2VR.cmd -Gui -Solo -Vr -BreacherLevel 25` |
-| `-BreacherSkills` | Not saved | Five digits of 1/2, one per skill tier; requires BreacherLevel. | `./Play-KF2VR.cmd -Solo -Vr -BreacherLevel 25 -BreacherSkills 12121` |
+| `-HeadsetPreset` | Retired compatibility input | No longer changes quality or render scale. Use independent Graphics controls. | Omit |
+| `-VrQuality` | Saved; initially `quality` | `quality`, `balanced`, `performance`. Session preset, separate from eye scale. VR only. | `./Play-KF2VR.cmd -VrQuality performance` |
 | `-PrepareOnly` | Off | Verify and prepare isolated configs; no game/server processes or DLL deployment. Remilly must be cached; other Workshop content can be imported from existing Steam downloads. Missing downloads fail before launch. | `./Play-KF2VR.cmd -PrepareOnly` |
 | `-AllowStale` | Off | Allow the selected package to differ from current repo source, with a visible warning. Still verifies the manifest and every packaged file; does not rebuild, select a different release, or permit damaged packages. Works with Menu, TestMap and PrepareOnly. | `./Play-KF2VR.cmd -AllowStale -Menu` |
-| `-GameRoot` | `D:\SteamLibrary\steamapps\common\killingfloor2` | Matching, fingerprinted KF2 installation. | `./Play-KF2VR.cmd -GameRoot 'E:\SteamLibrary\steamapps\common\killingfloor2'` |
-| `-FrameTimings` | Off | VR performance log in the session native.log; same as packaged `--frame-timings`. | `./Play-KF2VR.cmd -Vr -FrameTimings` |
-| `-RecordMotion` | Off, this launch only | On/Off, live VR motion/input clips; unavailable for Epic. | `./Play-KF2VR.cmd -Gui -Vr -RecordMotion On` |
-| `-HighlightEvents` | Off, this launch only | On/Off, authority hit/kill and F9 video-sync logs; unavailable for Epic. | `./Play-KF2VR.cmd -Gui -Vr -HighlightEvents On` |
-| `-PromoEvents` | Off | Enables highlight-event logging for this launch. | `./Play-KF2VR.cmd -Gui -Vr -PromoEvents` |
-| `-LocalTestControl` | Off, this launch only | Solo VR developer controls; makes the session unranked, never saved; rejects Host/Desktop. | `./Play-KF2VR.cmd -Solo -Vr -LocalTestControl` |
+| `-GameRoot` | Saved installation, then store detection | Matching, fingerprinted Steam/Epic KF2 installation; an explicit folder must match the chosen store. | `./Play-KF2VR.cmd -GameRoot 'E:\SteamLibrary\steamapps\common\killingfloor2'` |
+| `-Store` | `Auto` | `Auto`, `Steam`, `Epic`. Auto uses the sole installation or last valid folder. Epic requires Solo VR and official-launcher options; Host/Join/Desktop/recording/test control are unavailable. | `./Play-KF2VR.cmd -Store Epic -Solo -Vr` |
 | `-Help` | Off | Print usage without requiring an installed/selected build. | `./Play-KF2VR.cmd -Help` |
 
 Host server: **build/multiplayer/server** (install using tools/install-multiplayer-server.ps1).
@@ -172,80 +84,87 @@ stock KF2 takes precedence. VR sessions keep their fixed 1280x720 mirror window.
 Voice (Vivox) is always initialised for player clients, VR and desktop: KF2's
 Steam lobby code crashes at the menu without it.
 
-## In-headset settings
+## Zed spawn overrides
 
-Open the VR menu with the controller Menu button or the two-stick click chord.
-Choose **VR SETTINGS > GRAPHICS**. **RENDER SCALE -** and **RENDER SCALE +**
-change it by 5 points within 50-100; they stop at the limits. The applied percentage and
-per-eye dimensions appear below it. It applies during play and is saved for the
-next launch. Stock desktop screen percentage is separate.
+Three optional choices change the horde: **Max zeds alive**, **Zeds per wave**
+and **Spawn rate**, in the Host and Solo windows' Match section, under **Z** in the `-Menu`
+text menu, or with `-MaxZeds`, `-WaveZedsPercent` and `-SpawnRatePercent`
+(packaged CLI: `--max-zeds`, `--wave-zeds-percent`, `--spawn-rate-percent`).
+They need Host or Solo and are remembered separately for each. At the stock values
+(0, 100, 100) the launcher does not turn UKFP on, and Solo stays a stock ranked
+game with no mutator.
 
-**VR SETTINGS > LOCOMOTION AND COMFORT** contains movement hand/direction,
-**MOVEMENT: SMOOTH / TELEPORT**, snap/smooth turning, snap angle, smooth
-sensitivity and stick crouch. Movement-stick click requests sprint in Smooth mode.
-**INTERACTION** contains dominant hand, transfer/brace and support grip, reload mode
-and holsters. **MENU AND INTERFACE** sets pointer/panel placement and recenter;
-**CALIBRATION** sets weapon fit, captured height and chest zones.
-Initial values are **30-degree snap** and **50% smooth sensitivity**; old zero values
-are repaired. Solo/network defaults come from **tools/vr-defaults.json**.
-In-headset control and calibration preferences persist in
-**%LOCALAPPDATA%/KF2VR/Profile/KFGame.ini**, including ones with no shipped
-default, such as aim fit, hand calibration and selector favourites. Diagnostic,
-probe, replay and capture flags are deliberately not preferences and never cross
-into the profile or back out of it. Player changes are written to session copies and the VR sections are saved
-back into the profile after exit. The original stock KF2 config stays intact.
-Profiles carry `[KF2VR.Profile] Revision=2`. A profile written before that could
-never hold an in-game choice, so its stale `MovementHand=1` is reset once to the
-shipped left hand; a later right-hand choice is saved normally.
+- Stock KF2 has no setting for any of them. Host writes them to the server's
+  Unofficial KF2 Patch settings (`MaxMonsters`, `WaveCountMultiplier`,
+  `SpawnRateMultiplier` in its per-session `KFUnofficialPatch.ini`) and turns
+  UKFP on, as its dependent mods do. Players who join get UKFP like any hosted mod.
+- Solo with any override loads only UKFP (none of its dependent mods) and writes
+  the same settings into the game's own per-session `KFUnofficialPatch.ini`; the
+  match is then no longer a stock ranked one. Solo never downloads UKFP: it must be
+  subscribed in Steam or already in the launcher's Workshop cache (hosting once
+  caches it). Otherwise the launch stops with an error naming Workshop item 2875147606.
+- Epic Solo opens the stock menu, so these choices do not apply there.
+- Large hordes cost frame time in VR; raise them gradually.
 
-Changes to the nine in-game quality rows (environment, character, effects,
-texture quality/filtering, shadows, bloom, volumetric lighting and light shafts)
-are saved separately in **%LOCALAPPDATA%/KF2VR/Profile/vr-graphics.json** after
-the game exits. Solo, Host and Join use those same choices, including experimental
-Epic Solo, across extracted packages. Only supported quality values changed during
-play are saved; display dimensions, connection settings and comfort overrides
-are excluded. Leave **Graphics > Keep my last settings** selected to retain them.
-Choosing a quality preset, `-VrQuality` / `--vr-quality`, or a headset preset
-explicitly starts that preset without older custom quality edits; after playing,
-subsequent launches retain any new edits. `-PrepareOnly` changes no saved graphics
-profile. For example, `./Play-KF2VR.cmd -Solo -Vr` keeps the last settings;
-`./Play-KF2VR.cmd -Solo -Vr -VrQuality performance` starts Performance again.
-
-Session copies of KFEngine.ini set the client and server network rate caps to
-150000 bytes/s: `[IpDrv.TcpNetDriver] MaxClientRate` and
-`MaxInternetClientRate`, plus `[Engine.Player] ConfiguredInternetSpeed` and
-`ConfiguredLanSpeed`. Hosted server tick caps and VR pose sending are 120 Hz;
-remote poses use sender timing. These are configured limits, not a guarantee of
-live update rate or network performance. A remote server's own limits still apply;
-real online acceptance remains pending.
-
-All VR quality tiers disable desktop frame smoothing, VSync, blur/DoF, temporal
-and post-process AA, lens flares and grain. HBAO+ and screen-space reflections
-are separate saved choices, initially ON; use the Headset page or explicit
-`-Hbao Off` / `-Reflections Off` to disable them. Steam single-pass stereo
-starts ON; Epic single-pass remains OFF.
-`quality` keeps stock detail/shadows; `balanced` reduces draw distance and shadow
-filter work; `performance` also reduces mesh/particle detail and disables dynamic
-and light-environment shadows and static decals. VR comfort status indicators
-come from VRComfortEffects and the stereo renderer independently of those
-desktop effect switches. The opt-in headset bundles start Quest 2/3/3S at
-`performance` / 75%, Index at `balanced` / 100%, and higher-resolution PCVR
-(such as Reverb G2 or Vive Pro 2) at `performance` / 65%. These are provisional
-PC workload starting points, with no measured device guarantee. They change
-neither runtime refresh nor Quest streaming resolution/bitrate. The default
-remains saved graphics, initially `performance` / 100%; the bundle name is not
-remembered, so later in-headset changes are retained. Adjust these starting points to your headset and PC.
+How stock decides these numbers: docs/re/ZED_SPAWN_PIPELINE.md.
 
 ## Test map
 
 `-TestMap` selects **KF-Remilly_Test_Map**, Workshop item **1337395223**.
+The opt-in VR sandbox candidate adds **Practice and Tools > Remilly Sandbox /
+Unranked / No XP**. Once this candidate is built and packaged, the local route is
+`Play-KF2VR.cmd -Solo -Vr -Store Steam -TestMap` (add `-PrepareOnly` for isolated
+configuration preparation without starting the game). This explicit command
+uses the existing verified Workshop cache, with no server, credentials, map
+copy, download, or changes to the original map. Missing, corrupt or changed
+cache content fails. The accepted SHA-256 is
+`CC427E7689C9E60EAD3486F5320B210C021CCA82C2D778DD1B1B2408E390FE14`.
+This first route is command-line only; the Solo GUI map list is unchanged.
+
+Start a normal Survival wave, open the sandbox panel, then deliberately select
+**Start / Accept No XP**. Solo uses stock local cheat/unranked handling; startup
+does not enable cheats. The explicit test-map selection does not replace the
+saved ordinary map choice. Hosted sandbox actions still require authenticated
+server admin authority and are deferred for ordinary headset-only use. Until
+the candidate is packaged and selected, the current release keeps its existing
+Remilly behavior.
+
+The sandbox uses the original map unchanged, credited to **remi**, creator of
+[Test Map For Remilly](https://steamcommunity.com/sharedfiles/filedetails/?id=1337395223).
+No editable-source link or adaptation licence was found on its Workshop page;
+no map modification or redistribution is included. Its world buttons remain
+as supplied. Use the tracked VR panel for refilling money, opening the trader,
+granting an authored VR weapon, selecting an exact zed type/count, and clearing
+targets. Counts are 1–6, bosses one per press, with at most 12 live practice
+targets. Repeating a selected type/count after Clear gives a manual combat
+comparison; this is not a performance measurement or automated benchmark.
+
+Money refills while active. Trader access uses the existing inventory/preflight
+path while waves are suspended and world time/combat continue. The armory lists
+authored VR profiles, **not every installed weapon**: missing classes and optional
+test content can be refused. DLC
+availability and complete current-weapon coverage are not yet verified. The
+23-type zed selector omits Versus, Mixer, friendly-test, boss-subspawn and
+event-specific variants; boss behavior is untested. Clear removes sandbox
+targets and the practice patient, not arbitrary map-button spawns. End restores
+saved money, carry limit, trader flag and god mode, and removes directly granted
+actors; bought or map-granted inventory is not rolled back. The session remains
+unranked: disconnect and start a fresh normal session for normal play. No sandbox
+setting is written to the user profile. SDK compilation and headset validation
+are still required; the original map has not been recooked.
+
+At the September 19, 2026 lookup its **24,867 subscriptions** were the most among
+the established test maps compared: Remilly, SomeTestMap v2/v3 and TestingMapRedux.
 The map itself has no custom game/mutator requirement. The author's optional
 six-player HP command uses Controlled Difficulty Legacy and DamageDisplay.
 [Workshop source](https://steamcommunity.com/sharedfiles/filedetails/?id=1337395223).
 
-Hidden SteamCMD downloads
+The old SomeTestMap v3 URL selected STM.SomeTestMap and STM3.STM3, bypassing the
+VR game/controller. Existing maps/cache are preserved. Hidden SteamCMD downloads
 Remilly into the cache; the launcher checks its Unreal package header, supplies
 explicit client/server content paths, and hashes it into the session receipt.
+Download/preparation does not prove in-game loading; the smoke's test-map variant
+checks the server's advertised map at runtime.
 
 With UKFP selected, Remilly receives `?FakePlayers=6` by default, while ordinary
 maps receive `?FakePlayers=0`. UKFP fakes the player count for health and other
@@ -278,9 +197,11 @@ and sets `?LoadFHUDExt=0` to avoid replacing the selected FriendlyHUD loader.
 `bDisableDamagePopups` is set false. In VR, UKFP's flat screen-space overlay remains
 suppressed to prevent binocular splitting; instead, KF2-VR provides native 3D
 world-space damage numbers (`VRDamagePopups`) rendered as billboard quads in `SDPG_World`
-directly over Zeds' heads with full stereoscopic depth, binocular disparity, and natural
-parallax. VR damage numbers are enabled by default (`bDamagePopups=True`) and can be
-configured in the launcher GUI. Parameters are verified
+at the stock hit-effect point (above the Zed when unavailable), with stereoscopic
+depth and the patch's damage colors and two-second lifetime. VR damage numbers
+are enabled by default (`bDamagePopups=True`) and can be changed in
+**VR SETTINGS > HUD AND READOUTS > DAMAGE POPUPS**. The Desktop UKFP launcher
+preference remains separate. Parameters are verified
 against the author's [guide](https://github.com/ForrestMarkX/UKF2P/blob/main/UKFPGuide.txt)
 and [loader source](https://github.com/ForrestMarkX/UKF2P/blob/main/Src/UnofficialKFPatch_Proxy/Classes/UKFPMutator.uc).
 
@@ -331,6 +252,8 @@ From an extracted ZIP the release lives in `app/`; the player window runs:
 ```powershell
 ./app/runtime/python.exe app/tools/multiplayer/friends.py --host --vr
 ./app/runtime/python.exe app/tools/multiplayer/friends.py --vr --address 192.168.1.20 --password example
+./app/runtime/python.exe app/tools/multiplayer/friends.py --host --vr --server-name "Our KF2-VR game" --open-server
+./app/runtime/python.exe app/tools/multiplayer/friends.py --desktop --address 192.168.1.20 --password ""
 ./app/runtime/python.exe app/tools/multiplayer/friends.py --help
 ```
 
@@ -338,17 +261,12 @@ All public packaged CLI switches:
 
 | Switch | Default | Purpose and constraints |
 | --- | --- | --- |
-| `--solo` | Off | Standalone Survival with VR mutators; no server download. Rejects hosted/test-map/mod-only choices. |
-| `--multiplayer-grabs` / `--no-multiplayer-grabs` | Saved; initially Off | Host setting followed by all VR players; ordinary Solo retains its separate grab preference. |
-| `--breacher` / `--no-breacher` | Saved; initially Off | Requires a matching package that includes the optional Breacher content. |
-| `--local-test-control` | Off, this launch only | Solo VR developer controls; unranked, never saved; rejects Host/Desktop. |
 | `--host` | Off (join) | Start local dedicated server and join 127.0.0.1. |
 | `--menu` | Off | Interactive host menu; requires host and rejects replay/preview modes. |
 | `--map` | Saved; initially KF-BurningParis | Installed map name; requires host. KF-Remilly_Test_Map also selects the managed Workshop download. |
 | `--difficulty` | Saved; initially normal | normal, hard, suicidal, hellonearth; requires host. |
-| `--game-length` | Saved; initially short | short (4), medium (7), long (10 waves), then boss; requires host. |
+| `--game-length` | Saved; initially medium | short (4), medium (7), long (10 waves), then boss; requires host or solo. |
 | `--inventory-focus` / `--no-inventory-focus` | Saved; initially Off | Host-only experimental shared slowdown while a VR wheel is open. Applies to all participants and yields to Zed Time. Enable or disable explicitly; joins may omit it or use `--no-inventory-focus`. |
-| `--portal-gun` / `--no-portal-gun` | Saved; initially Off | Solo only: offer the experimental Portal Gun at the trader. Rejected with `--host` or a join; portals are local-only. |
 | `--vr` | Off (desktop) for a join; a host with neither flag uses the saved play mode, initially VR | Live headset adapter. |
 | `--desktop` | Off | Flat screen for this session, overriding the saved play mode. Rejects explicit VR quality/scale. |
 | `--mods` | Saved VR selection; initially none, optional legacy preset | Comma-separated catalog keys, `none`, or `legacy`. UKFP dependencies are installed automatically. Join selections preload content; the remote host controls mutators. |
@@ -356,17 +274,25 @@ All public packaged CLI switches:
 | `--test-map-players` | Saved, initially 6 | 0/6; requires host. Applied only to Remilly with UKFP. |
 | `--test-map` | Off | Remilly; requires host and rejects replay/preview modes. |
 | `--headset-preset` | None | Provisional quest2/quest3/quest3s/index/high-resolution bundle; explicit quality/scale wins. Resulting settings remembered; VR only. |
-| `--vr-quality` | Saved; initially performance | quality/balanced/performance; rejected with `--desktop`. |
+| `--vr-quality` | Saved; initially quality | quality/balanced/performance; rejected with `--desktop`. |
 | `--eye-render-percent` | Saved value, initially 100 | Integer 50-100; requires VR, overrides saved scale. |
+| `--hbao` / `--no-hbao` | Saved; initially On (Quality) | Enable or disable screen-space ambient occlusion in VR. |
+| `--reflections` / `--no-reflections` | Saved; initially On (Quality) | Enable or disable screen-space reflections in VR. |
+| `--flex {off,gibs,fluids}` | Saved; initially Off | Personal FleX gore for VR and Desktop, Solo/Host/Join. `fluids` means Gibs and Fluids. VR uses the experimental portable solver by default. |
+| `--hide-blood-lens` / `--no-hide-blood-lens` | Saved; initially On | Hide blood lens splatter in VR. Does not alter damage or bile suppression. |
 | `--frame-timings` | Off | VR only. Writes CPU stage and GPU frame times to the session's native.log every 5 s; low overhead. Without it the adapter still logs a lite `FramePacing` line every 5 s (present intervals: mean, p50/p95/p99, frames over 11.1 and 8.3 ms) from one clock read per frame, and the launcher records the game's peak working set; both feed the Save-logs summary. Packaged menu: Troubleshooting > Performance log. Main launcher: `-FrameTimings`. |
-| `--threaded-render` / `--no-threaded-render` | Saved; initially Off | Experimental, VR only. Replaces `-onethread` with UE3's render thread, so game and render work overlap. The portal gun's see-through view works only one-threaded; with threaded rendering its portals show a flat fill. With `--frame-timings`, the logged stages are the render thread's only: compare frame intervals, not busy ms. Main launcher: `-ThreadedRender On`. |
 | `--address` | Prompt for join code or saved address | Paste the complete `KF2VR1:` code to apply the host's address, password, game/query ports, map and mods, overriding local connection/content choices. Requires the same build. Also accepts hostname/IP without port or URL. Hosting uses 127.0.0.1. |
 | `--share-address` | Public IPv4 reported by the host server | Host only. Override the address in the join code for LAN/VPN/custom hostname; no port or URL. Example: `--host --share-address 192.168.1.20`. |
-| `--password` | CLI Host: saved/generated; Join: prompt | 0-64 letters, digits, underscore or hyphen. In the player window a blank Host password selects public hosting; anyone who reaches the server can join. CLI `--open-server` explicitly chooses no password. |
+| `--password` | Protected host: saved/generated; join: prompt | Up to 64 letters, digits, underscore or hyphen. An empty join password selects a passwordless server; use `--open-server` to host without a password. |
+| `--server-name` | Saved per extracted release; initially `KF2-VR Server` | Host only. Browser name, 1-48 letters, digits, spaces or `. , ' ! & ( ) + _ -`. |
+| `--open-server` / `--no-open-server` | Saved; initially Off | Host only. On hosts without a password; anyone who reaches the server can join. Off restores the saved password or generates one. An open session retains the protected password for later use. |
+| `--workshop-desktop` / `--no-workshop-desktop` | Saved; initially On | Host only, Steam. Offer core content from Workshop item 3817663661 to stock desktop players only when every published package exactly matches this release. On a mismatch or unreachable Workshop item, Host prints why and continues with Workshop delivery off for that session (the saved choice is kept); desktop players then need the matching ZIP. `--no-workshop-desktop` skips the check. Published scripts are never mounted over local scripts. |
+| `--zed-grabs` / `--no-zed-grabs` | Saved; initially On | Host only. Lets VR players on this server grab and throw Zeds; the Host URL carries `?VRMultiplayerGrabs=1` or `0`. Launcher: Host page, Extras, **Zed grabs**. |
+| `--gravity-grab` / `--no-gravity-grab` | Saved; initially On | Host only. Lets VR players on this server gravity-grab guns, magazines and pickups; the Host URL carries `?VRGravityPull=1` or `0`. Launcher: Host page, Extras, **Gravity grab**. |
 | `--game-root` | Saved install, Steam lookup, then prompt | Folder containing matching KFGame.exe. |
-| `--server-root` | Release parent / KF2VR-Server | Dedicated server; main launcher overrides with repo server. |
-| `--cache-root` | Release parent / KF2VR-Cache | Workshop cache; main launcher overrides with repo cache. |
-| `--port` | 7777 | Game UDP, 1024-65000; distinct from query/client ports. Client offsets +10 and replay +20. |
+| `--server-root` | `KF2-VR Data\KF2VR-Server` at the KF2 drive root (an existing one beside the release is kept) | Dedicated server; main launcher overrides with repo server. |
+| `--cache-root` | `KF2-VR Data\KF2VR-Cache` at the KF2 drive root (an existing one beside the release is kept) | Workshop cache; main launcher overrides with repo cache. |
+| `--port` | 7777 | Game UDP, 1-65535; distinct from query/client ports. Client offsets +10 and replay +20. |
 | `--query-port` | 27015 | Query UDP; same range and offset constraints. |
 | `--prepare-only` | Off | Prepare/check without game processes; selected test map must already be cached. |
 | `--duration` | Unlimited | Bounded developer session, 5–7200 seconds after startup; unattended launches hidden. |
@@ -386,11 +312,12 @@ without launching; this mode cannot be combined with Solo, VR, Gui, Menu or Test
 Examples: `--host --vr --test-map`, `--host --vr --eye-render-percent 75`,
 `--host --vr --inventory-focus`,
 `--host --replay-teammate --replay-match`, `--host --avatar-preview`.
-F8 toggles third-person inspection in normal VR play.
+F8 toggles third-person inspection in normal VR play. See
+avatar preview for its separate camera mode.
 
 LAN friends use the host's LAN address; WAN hosting may need existing port
 forwarding or a gaming VPN. The launcher does not change firewall/router rules.
-It verifies the expected password state and a VAC-off KF2 server before connecting. Local
+It verifies a VAC-off KF2 server with the requested password state before connecting. Local
 multi-instance tests do not validate a second Steam account or WAN conditions.
 
 ## Portable package and recovery
@@ -403,7 +330,7 @@ same ZIP. Share the code privately. Internet hosts forward UDP 7777/27015 and al
 KFServer through Windows Firewall; joiners need neither port forwarding nor a server.
 
 Keep the launcher open until cleanup completes. After interruption, quit KF2 and
-use **Fix a stuck session** before deleting the folder or changing releases. Recovery
+use **Help > Repair after a crash** before deleting the folder or changing releases. Recovery
 preserves unknown/changed files. Never mix DLLs or bypass package/game hash checks.
 **Save logs for a bug report** creates sanitized local copies; nothing uploads
 automatically. Review the ZIP before sharing and keep raw logs/configs/dumps private.
@@ -414,7 +341,7 @@ See [controls and troubleshooting](docs/VR_CONTROLS.md),
 
 Portable Solo/Host/Join options `--dlss {off,dlaa,quality,balanced,performance,ultraperformance}` (default Off) and `--dlss-sharpness 0..100` (default 0) save personal graphics preferences. Non-Off DLSS requires VR and an RTX-compatible driver/runtime. Example: `runtime\python.exe tools\multiplayer\friends.py --solo --vr --dlss quality --dlss-sharpness 0`. Use `--dlss off` to restore ordinary rendering. These are portable CLI options; the root launcher exposes them through its player window.
 
-VR hides Bloat bile lens splatter by default. `--no-hide-bile-lens` restores it; damage and poison gameplay remain. Steam and Epic Solo support these choices; Epic remains Solo-only. DLSS failure selects complete ordinary images for both eyes, then returns to ordinary sizing. DLSS remains experimental and needs headset/online acceptance.
+VR hides Bloat bile lens splatter by default. `--no-hide-bile-lens` restores it; damage and poison gameplay remain. Steam and Epic Solo support these choices; Epic remains Solo-only. DLSS failure withholds that pair, then returns to ordinary sizing; normal frames keep no backup images. DLSS remains experimental and needs headset/online acceptance.
 
 An acquired firearm support grip remains owned across distance drift while the
 physical grip is held and tracking is valid, in ordinary two-hand aiming and

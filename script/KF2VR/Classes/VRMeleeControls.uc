@@ -11,10 +11,7 @@ static simulated function Pulse(VRHandsBridge B, int Mask, float Strength, float
 {
     if (B == None || Mask == 0) return;
     if (B.RootBridge != None) B = B.RootBridge;
-    if (B.NativeHapticMask == 0) { B.NativeHapticStrength = 0; B.NativeHapticDuration = 0; }
-    B.NativeHapticMask = B.NativeHapticMask | Mask;
-    B.NativeHapticStrength = FMax(B.NativeHapticStrength, Strength);
-    B.NativeHapticDuration = FMax(B.NativeHapticDuration, Duration);
+    B.QueueHandHaptic(Mask, Strength, Duration);
 }
 
 // Call right after StartFire(BLOCK_FIREMODE). Returns whether a block began.

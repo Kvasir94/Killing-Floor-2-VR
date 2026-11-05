@@ -7,7 +7,7 @@ $workspace=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $runtimePaths=Get-Content (Join-Path $env:LOCALAPPDATA 'openvr/openvrpaths.vrpath') -Raw | ConvertFrom-Json
 $runtimeDll=Join-Path $runtimePaths.runtime[0] 'bin/win64/openvr_api.dll'
 $steamLogs=Join-Path (Split-Path (Split-Path (Split-Path $runtimePaths.runtime[0] -Parent) -Parent) -Parent) 'logs'
-$monitorExe=Join-Path $workspace 'build/portal-native/native/tools/vrmonitor/Release/kf2vr_runtime_monitor.exe'
+$monitorExe=Join-Path $workspace 'build/multiplayer/native/native/tools/vrmonitor/Release/kf2vr_runtime_monitor.exe'
 foreach ($file in @($runtimeDll,$monitorExe)) { if (-not (Test-Path -LiteralPath $file)) { throw "Missing collector dependency: $file" } }
 $root=Join-Path $workspace ('build/performance-runs/'+[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')+'-resolution-runtime')
 New-Item -ItemType Directory -Path $root | Out-Null
@@ -45,7 +45,7 @@ try {
     $record['monitor_pid']=$observer.Id
     foreach ($scale in $record.scales) {
         if ($observer.HasExited) { throw 'Runtime collector ended before the pair completed.' }
-        $output=@(& (Join-Path $PSScriptRoot 'test-portal.ps1') -PortalBuildRoot $CombinedBuildRoot `
+        $output=@(& (Join-Path $PSScriptRoot 'test-combined.ps1') -CombinedBuildRoot $CombinedBuildRoot `
             -PerformanceBenchmark -EyeRenderPercent $scale -RenderVariant Optimized -MetadataCache `
             -DepthPrepass Enabled -FrameDrilldown -BenchmarkWarmupSeconds 10 -BenchmarkMeasureSeconds 30)
         $receipt=@($output | Where-Object { $_ -is [string] -and $_ -match '^Gameplay replay passed: ' })

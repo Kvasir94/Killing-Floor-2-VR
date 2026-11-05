@@ -12,6 +12,10 @@ namespace kf2vr::adapter {
 // two-view scene. Each eye's first clear is its world clear and later clears
 // of that rectangle are foreground clears, also after one clear of both eyes.
 class ForegroundDepth {
+    // RHIClear uses either a draw quad or ClearDepthStencilView. The latter
+    // reaches both hooks; only the outer RHI call may advance this policy.
+    // Scope by thread, independent of copied per-scene policy snapshots.
+    inline static thread_local unsigned rhiClearDepth_=0;
     bool active_=false;
     // The preserved depth buffer: compared as a resource, since the engine
     // binds more than one view of it.
@@ -23,10 +27,23 @@ class ForegroundDepth {
         return a.TopLeftX==b.TopLeftX && a.TopLeftY==b.TopLeftY && a.Width==b.Width && a.Height==b.Height;
     }
 public:
+    class RhiClearScope {
+        bool active_;
+    public:
+        explicit RhiClearScope(bool active=true):active_(active) { if(active_) ++rhiClearDepth_; }
+        ~RhiClearScope() { if(active_) --rhiClearDepth_; }
+        RhiClearScope(const RhiClearScope&)=delete;
+        RhiClearScope& operator=(const RhiClearScope&)=delete;
+    };
+    bool FilterDeviceClear(ID3D11DeviceContext* context, ID3D11DepthStencilView* view,
+                           UINT& flags, float depth, UINT8 stencil) {
+        return rhiClearDepth_==0 && Filter(context,view,flags,depth,stencil);
+    }
     void Begin(bool active) { active_=active; worldDepth_=nullptr; savedViewport_={}; eyeCleared_[0]=eyeCleared_[1]=false; }
     void End() { active_=false; worldDepth_=nullptr; savedViewport_={}; eyeCleared_[0]=eyeCleared_[1]=false; }
     void SetEyes(const D3D11_VIEWPORT& left,const D3D11_VIEWPORT& right) { eyes_[0]=left; eyes_[1]=right; stereo_=true; }
     void ClearEyes() { stereo_=false; }
+    ID3D11Resource* WorldDepth() const { return active_ ? worldDepth_.Get() : nullptr; }
     bool Filter(ID3D11DeviceContext* context, ID3D11DepthStencilView* view,
                 UINT& flags, float depth, UINT8 stencil) {
         if (!active_ || !context || !view) return false;

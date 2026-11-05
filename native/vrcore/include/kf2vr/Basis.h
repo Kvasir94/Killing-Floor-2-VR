@@ -65,6 +65,10 @@ inline Quat BasisXrToUnreal(const Quat& q) {
     return (detail::XrToUnrealMat() * Mat3::FromQuat(q) * detail::UnrealToXrMat()).ToQuat();
 }
 
+inline Quat BasisUnrealToXr(const Quat& q) {
+    return (detail::UnrealToXrMat() * Mat3::FromQuat(q) * detail::XrToUnrealMat()).ToQuat();
+}
+
 // Re-express both the body's local convention and its tracking-space pose in
 // Unreal axes and units. Downstream body-local points (including asset sockets)
 // are already in Unreal units. Therefore the unit conversion affects position,

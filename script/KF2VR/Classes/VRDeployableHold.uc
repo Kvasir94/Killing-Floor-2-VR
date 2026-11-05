@@ -10,25 +10,32 @@ var VRDualHandInput InputOwner;
 var VRHandsBridge Bridge;
 var KFWeapon Held[2];
 var int Samples[2];
-var float LastTime[2], LastThrowTime[2];
+var int Calibration[2], RoomSpace[2];
+var float LastTime[2];
 var vector LastPosition[2], LastPawnPosition[2], ThrowVelocity[2];
-var float ThrowInterval;
+var VRThrowRelease Thrower;
 
 function Initialize(VRDualHandInput I)
 {
     InputOwner = I; Bridge = I.Bridge;
-    LastThrowTime[0] = -1000; LastThrowTime[1] = -1000;
 }
 
 function bool IsHeld(int Hand) { return Hand >= 0 && Hand < 2 && Held[Hand] != None; }
 
 function bool Ready(int Hand, KFWeapon W)
 {
-    return W != None && !W.bDeleteMe && W.AmmoCount[0] > 0
-        && Bridge.WorldInfo.TimeSeconds - LastThrowTime[Hand] >= ThrowInterval
-        && InputOwner.Inventory.Registry.GetPrimary(Hand) != None
-        && InputOwner.Inventory.Registry.GetPrimary(Hand).Item == W
-        && (Bridge.NativeValidMask & (1 << Hand)) != 0 && Bridge.NativeHeadTracked != 0
+    local VRWeaponRuntime R;
+    if (Hand < 0 || Hand > 1 || !InputOwner.ContextValid()) return false;
+    R = InputOwner.Inventory.Registry.GetPrimary(Hand);
+    return !Bridge.Human.bNoWeaponFiring
+        && !InputOwner.IsSelectorOpen(0) && !InputOwner.IsSelectorOpen(1)
+        && W != None && !W.bDeleteMe && W.AmmoCount[0] > 0
+        && R != None && R.Item == W && Bridge.WorldInfo.TimeSeconds >= R.DeployableReadyAt
+        && (Bridge.NativeValidMask & Bridge.NativeGripActiveMask
+            & Bridge.NativeTriggerActiveMask & (1 << Hand)) != 0
+        && Bridge.NativeHeadTracked != 0 && Bridge.NativeRecenterRequested == 0
+        && (!IsHeld(Hand) || (Calibration[Hand] == Bridge.NativeCalibrationEpoch
+            && RoomSpace[Hand] == Bridge.NativeRoomSpaceEpoch))
         && TurretReady(W);
 }
 
@@ -54,8 +61,11 @@ function Begin(int Hand, KFWeapon W)
     Cancel(Hand, true);
     if (!Ready(Hand, W)) { InputOwner.Grenade.PulseRefused(Hand); return; }
     Held[Hand] = W;
+    Calibration[Hand] = Bridge.NativeCalibrationEpoch;
+    RoomSpace[Hand] = Bridge.NativeRoomSpaceEpoch;
     LastPosition[Hand] = Bridge.PalmPosition(Hand); LastPawnPosition[Hand] = Bridge.Human.Location;
     LastTime[Hand] = Bridge.WorldInfo.RealTimeSeconds; Samples[Hand] = 0; ThrowVelocity[Hand] = vect(0,0,0);
+    if (Thrower == None) Thrower = new(self) class'VRThrowRelease'; Thrower.Reset(Hand);
     InputOwner.Grenade.Pulse(Hand, 0.10, 0.020);
 }
 
@@ -69,12 +79,16 @@ function Cancel(int Hand, optional bool bSilent)
 function Release(int Hand)
 {
     local KFWeapon W;
+    local VRWeaponRuntime R;
     local vector Position, HitLocation, HitNormal;
     local bool Thrown;
     if (!IsHeld(Hand)) return;
     W = Held[Hand];
     if (Samples[Hand] < 3 || !Ready(Hand, W)) { Cancel(Hand); return; }
+    R = InputOwner.Inventory.Registry.GetPrimary(Hand);
     Position = Bridge.PalmPosition(Hand);
+    // Alyx's release: drop the braking frames, average direction at peak speed.
+    if (Thrower != None) ThrowVelocity[Hand] = Thrower.Release(Hand, Bridge.WorldInfo.RealTimeSeconds, ThrowVelocity[Hand]);
     if (Bridge.Trace(HitLocation, HitNormal, Position, Bridge.HeadPosition, false) == None)
     {
         Thrown = Bridge.RequestNetworkDeployable(W, Hand, Position, ThrowVelocity[Hand]);
@@ -83,7 +97,7 @@ function Release(int Hand)
     }
     Held[Hand] = None; Samples[Hand] = 0;
     if (!Thrown) { InputOwner.Grenade.PulseRefused(Hand); return; }
-    LastThrowTime[Hand] = Bridge.WorldInfo.TimeSeconds;
+    R.DeployableReadyAt = Bridge.WorldInfo.TimeSeconds + class'VRDeployableThrow'.static.RearmDelay(W);
     InputOwner.Inventory.Pulse(Hand);
 }
 
@@ -106,6 +120,7 @@ function Update(float Delta)
         Velocity = (Position - LastPosition[Hand] - (Bridge.Human.Location - LastPawnPosition[Hand])) / Elapsed;
         if (VSize(Velocity) > 1800) { Cancel(Hand); continue; }
         ThrowVelocity[Hand] = Velocity * 0.65 + ThrowVelocity[Hand] * 0.35;
+        if (Thrower != None) Thrower.Add(Hand, Velocity, Now);
         LastPosition[Hand] = Position; LastPawnPosition[Hand] = Bridge.Human.Location;
         LastTime[Hand] = Now; ++Samples[Hand];
     }
@@ -117,8 +132,3 @@ function Shutdown()
     InputOwner = None; Bridge = None;
 }
 
-defaultproperties
-{
-    // Stock ConsumeSpareAmmoDelay: the next charge is in hand a second later.
-    ThrowInterval=1.0
-}

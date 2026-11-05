@@ -20,7 +20,7 @@ def verify_native(root: Path, script_receipt: dict, digest) -> dict:
     build = root / "build/multiplayer/native"
     receipt = json.loads((build / "build.json").read_text(encoding="utf-8-sig"))
     files = [root / "CMakeLists.txt", root / "third_party/xr-sdks.cmake"]
-    for directory in ("adapter", "vrcore", "xr", "portal"):
+    for directory in ("adapter", "vrcore", "xr"):
         files += [p for p in (root / "native" / directory).rglob("*")
                   if p.is_file() and (p.suffix in (".h", ".hpp", ".cpp", ".asm") or p.name == "CMakeLists.txt")]
     actual = {p.relative_to(root).as_posix(): digest(p) for p in files}

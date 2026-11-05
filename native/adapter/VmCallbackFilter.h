@@ -31,8 +31,8 @@ public:
         ViewShake, WeaponFired, WeaponStoppedFiring,
         ClientPlayBlockEffects, ClientPlayParryEffects, IsGrappleBlocked,
         TakeDamage, UpdateGroundSpeed, PlayWeaponAnimation,
-        CalcWeaponFire, NativePortalShotsUpdate, HitWall, NativeMagazineFeedEvent, ScoreDamage,
-        ClientSetRotation, ClientSetLocation, AddCameraLensEffect, SetPosition, Unrelated
+        NativeMagazineFeedEvent, ScoreDamage,
+        ClientSetRotation, ClientSetLocation, AddCameraLensEffect, Init, CalculateSpread, ProcessAimCorrection, SetPosition, Unrelated
     };
     static constexpr std::array<const wchar_t*,73> CallbackNames{
         L"AddSpread", L"AdjustDamage", L"ApplyAutoTarget", L"ApplyForceLookAtPawn",
@@ -52,8 +52,8 @@ public:
         L"ViewShake", L"WeaponFired", L"WeaponStoppedFiring",
         L"ClientPlayBlockEffects", L"ClientPlayParryEffects", L"IsGrappleBlocked",
         L"TakeDamage", L"UpdateGroundSpeed", L"PlayWeaponAnimation",
-        L"CalcWeaponFire", L"NativePortalShotsUpdate", L"HitWall", L"NativeMagazineFeedEvent", L"ScoreDamage",
-        L"ClientSetRotation", L"ClientSetLocation", L"AddCameraLensEffect"
+        L"NativeMagazineFeedEvent", L"ScoreDamage",
+        L"ClientSetRotation", L"ClientSetLocation", L"AddCameraLensEffect", L"Init", L"CalculateSpread", L"ProcessAimCorrection"
     };
     static_assert(CallbackNames.size()==static_cast<std::size_t>(Callback::SetPosition));
 
@@ -109,6 +109,7 @@ public:
         case Callback::ClearFlashLocation:
         case Callback::FlashLocationUpdated: return Effects;
         case Callback::GetBaseAimRotation:
+        case Callback::CalculateSpread:
         case Callback::GetWeaponStartTraceLocation:
         case Callback::GetMuzzleLoc: return FinishAim;
         default: return 0;

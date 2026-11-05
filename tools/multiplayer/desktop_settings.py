@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import shutil
 
-from session import read_ini
+from launch_support import read_ini
 from vr_config import profile_root
 
 PROFILE_FILE = "desktop-settings.json"

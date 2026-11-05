@@ -1,0 +1,66 @@
+--- a/tools/replay/script/KF2VRReplay/Classes/ReloadObserver.uc
++++ b/tools/replay/script/KF2VRReplay/Classes/ReloadObserver.uc
+@@ -3,6 +3,8 @@
+ class ReloadObserver extends KFMutator config(Game);
+ 
+ var config string Scenario;
++var config string SingleWeaponPath;
++var class<KFWeapon> SingleWeaponClass;
+ var config float HoldSeconds, ObservationSeconds;
+ var config bool bExitOnComplete;
+ var VRDemo Demo;
+@@ -32,6 +34,14 @@
+     return None;
+ }
+ 
++function class<KFWeapon> NormalWeaponClass()
++{
++    if (SingleWeaponPath == "") return class'KFWeap_Pistol_9mm';
++    if (SingleWeaponClass == None)
++        SingleWeaponClass = class<KFWeapon>(DynamicLoadObject(SingleWeaponPath, class'Class', true));
++    return SingleWeaponClass;
++}
++
+ function ConfigureInitialState()
+ {
+     if (WorldInfo.NetMode != NM_Standalone || Role != ROLE_Authority || B.NativeConnection != 2) return;
+@@ -64,14 +74,15 @@
+     local KFInventoryManager Manager;
+     local VRWeaponRuntime R;
+     local VRWeaponPair Pair;
+-    local int H;
++    local int H, PreviousLimit;
+     if (WorldInfo.NetMode != NM_Standalone || Role != ROLE_Authority || B.NativeConnection != 2) return false;
+     if (!bConfigured) ConfigureInitialState();
+     if (!bDrawRequested)
+     {
+         if (B.HandInventory.PendingPairConversion != None) return false;
+         if (Scenario == "dual") Desired = class'KFWeap_Pistol_Dual9mm';
+-        else Desired = class'KFWeap_Pistol_9mm';
++        else Desired = NormalWeaponClass();
++        if (Desired == None) { Complete(false, "initial-class-unavailable"); return false; }
+         W = FindWeapon(Desired);
+         // A previously converted initial dual is already the requested grant.
+         // Reuse its ordinary draw API rather than minting a second aggregate.
+@@ -92,8 +103,10 @@
+             bGrantAttempted = true;
+             Manager = KFInventoryManager(B.Human.InvManager);
+             if (Manager == None) return false;
++            PreviousLimit = Manager.MaxCarryBlocks;
++            Manager.MaxCarryBlocks = Max(PreviousLimit, Manager.CurrentCarryBlocks + Desired.static.GetDefaultModifiedWeightValue(0));
+             W = KFWeapon(Manager.CreateInventory(Desired, true));
+-            if (W == None) { Complete(false, "initial-grant-failed"); return false; }
++            if (W == None) { Manager.MaxCarryBlocks = PreviousLimit; Complete(false, "initial-grant-failed"); return false; }
+         }
+         if (W == None || !B.HandInventory.Input.ContextValid()) return false;
+         B.HandInventory.ReleaseHand(0); B.HandInventory.ReleaseHand(1);
+@@ -114,7 +127,8 @@
+         if (R == None || !R.IsCurrent() || R.PrimaryHand != H || R.Item == None || !R.Item.IsInState('Active')
+             || R.Item.MySkelMesh == None || R.Presenter == None || R.NativePoseReady != 1
+             || R.Item.AmmoCount[0] <= 0 || R.Item.GetSpareAmmoForHUD() <= 0) return false;
+-        if (Scenario == "normal" && R.Item.Class != class'KFWeap_Pistol_9mm') return false;
++        if (Scenario == "normal" && (R.Item.Class != NormalWeaponClass()
++            || !class'VRMagazineCarryRecipe'.static.Supports(R.Item))) return false;
+         if (Scenario == "dual")
+         {
+             if (R.Item.Class != class'VRWeap_Paired9mm') return false;

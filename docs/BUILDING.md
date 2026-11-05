@@ -10,18 +10,19 @@ The launcher can be audited and assembled independently of the game/VR assets.
 ## Audit and build the launcher
 
 The complete shipped launcher source is public. It uses Python's standard library,
-Tkinter and Windows APIs; its source and module inventory are included here. The PowerShell artwork is embedded in the GUI source.
+Qt for Python (PySide6, pinned wheels) and Windows APIs; its source and module inventory are included here. The sidebar art is composed at run time from the player's own game wallpaper and Steam library logo; no game art ships.
 
 | Files | Responsibility |
 | --- | --- |
-| `tools/multiplayer/launcher_gui.py`, `friends.py` | Player window, game discovery, Solo/Host/Join and session cleanup |
+| `tools/multiplayer/launcher_gui.py`, `launcher_ui_*.py`, `launcher_app.py`, `launcher_compat.py`, `friends.py` | Player window (Qt, OptimumBox flow), its state, repository argument adapter, game discovery, Solo/Host/Join and session cleanup |
 | `tools/multiplayer/package.py` (`LAUNCHER_MODULES`) | Exact shipped module inventory and portable entry-point checks |
 | `tools/multiplayer/session.py`, `native_fixture.py`, `release_state.py`, `recovery.py`, `watchdog.py` | Deployment validation, process ownership, recovery and release integrity |
 | `tools/multiplayer/diagnostics.py`, `vr_config.py`, `desktop_settings.py`, `workshop_loadout.py` | Local report sanitization and preference/content handling |
 | `tools/install-multiplayer-server.ps1`, `tools/multiplayer/dependencies.py`, `tools/dependency-pins.json` | Explicit server bootstrap and SHA-256-checked vendor downloads |
-| `tools/play-main.ps1`, `tools/play-gui.ps1`, `Play-KF2VR.cmd` | Development-checkout entry points; the portable ZIP uses the Python GUI |
+| `tools/play-main.ps1`, `Play-KF2VR.cmd` | Checkout entry points; `-Gui` and legacy `-DevGui` use the same selected Python window |
 
-On Windows x64, install Python with Tkinter for running source tests. From a clean
+On Windows x64, install Python 3.14 for running source tests; the portable
+entry-point test builds the embedded runtime with Qt from the pinned archives. From a clean
 public checkout, run:
 
 ```powershell
@@ -31,12 +32,14 @@ build/launcher-audit/app/runtime/python.exe -B build/launcher-audit/app/tools/mu
 ```
 
 Choose a new output folder for each build; existing folders are never overwritten.
-The builder downloads CPython 3.14.3's official Windows embeddable ZIP and its
-official Tcl/Tk MSI component from the exact URLs in `tools/dependency-pins.json`.
+The builder downloads CPython 3.14.3's official Windows embeddable ZIP and the
+PySide6-Essentials and shiboken6 6.12.0 wheels from the exact URLs in
+`tools/dependency-pins.json`.
 Both cached and downloaded archives must match their SHA-256 pins before extraction.
-Cache them under `build/multiplayer/` with the filenames in that JSON for an offline
-build. The MSI is extracted with `msiexec /a /qn` into a temporary directory; it is
-not installed. Python/Tk and their licenses remain local to the output folder.
+Cache them under `build/multiplayer/` (the wheels under `build/multiplayer/qt-wheels/`)
+with the filenames in that JSON for an offline build. Only the Qt modules and
+plugins the window uses are unpacked; nothing is installed. Python, Qt and their
+licenses (LGPL-3.0, GPL-3.0 and the Qt for Python notice) remain local to the output folder.
 This launcher audit route requires no game/SDK or Steam login.
 
 This produces **a launcher audit build**, with `Start KF2-VR.cmd`, declared launcher
@@ -67,6 +70,9 @@ CMake 3.24 or later, PowerShell and Python. Place the pinned OpenXR SDK under
 export includes the small pinned MinHook/HDE source snapshot with its licence
 under `third_party/minhook`. OpenVR is optional for xrprobe.
 Keep upstream licences. Do not substitute different dependency bytes silently.
+Playable adapters always include DLSS support. Review
+`third_party/NVIDIA-DLSS-LICENSE.txt` and run `tools/fetch-ngx.ps1` before
+building the adapter; the SDK and runtime must match `tools/ngx-pins.json`.
 
 From a Visual Studio x64 developer shell:
 
@@ -81,6 +87,12 @@ current RAVEN-7 generated material atlas is also included. No game-derived mesh/
 
 Without MinHook/OpenXR, CMake skips the adapter DLL and still builds eligible
 CPU tests. Passing those tests does not mean the adapter DLL was built.
+
+The weapon contact catalog (`native/adapter/WeaponBlockSurfaceCatalog.h`) is
+generated from stock weapon meshes and is not part of the public source. The
+adapter DLL needs it: generate it from your own game install with
+`tools/author_weapon_block_surfaces.py` before building the adapter. Without it,
+CMake skips that one CPU test.
 
 ## Scripts, assets and playable packaging
 
@@ -98,12 +110,11 @@ requires a compatibility update, not bypassing the check.
 
 Use `tools/build-from-source.ps1` in a fresh checkout for a separate playable
 candidate. It accepts installation/tool paths and never selects or replaces an
-existing release. Install Blender **5.2.1 LTS**, Python with Tkinter, Git, CMake
+existing release. Install Blender **5.2.1 LTS**, Python 3.14, Git, CMake
 and Visual Studio's C++ desktop tools/Windows SDK and MASM. Windows supplies the
-Arial/Bahnschrift/Consolas fonts used by the procedural watch artwork. You also
-need your own Portal 2 installation: the current VR script compile references
-Portal assets even when Portal gameplay is OFF. Source/Engineer assets belong
-to separate optional content builders and are not required by this default route.
+Arial/Bahnschrift/Consolas fonts used by the procedural watch artwork.
+Source/Engineer assets belong to separate optional content builders and are not
+required by this default route.
 
 Install NumPy and Pillow in the external Python used by `-Python`; the decal
 generator runs outside Blender. These dependencies are for asset generation;
@@ -122,14 +133,13 @@ from a Visual Studio x64 developer shell so the compiler/Windows SDK are availab
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/build-from-source.ps1 `
   -GameRoot 'C:\Games\KillingFloor2' `
-  -Portal2Root 'C:\Games\Portal 2' `
   -Blender 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe'
 ```
 
 Supply `-Python` and `-CMake` for nonstandard tool locations. Close KF2, its
 editor and dedicated servers before building. The builder validates game/SDK
 executable hashes, fetches pinned public dependencies, extracts only required
-KF2/Portal inputs, generates hand/watch/reload/RAVEN-7/Portal art, imports packages
+KF2 inputs, generates hand/watch/reload/RAVEN-7 art, imports packages
 through the SDK, builds native/scripts, runs the fast CPU/launcher gate and
 packages with `--no-select`. Logs and outputs stay under ignored `build/` and
 `extract/`; installed game content and user profiles remain untouched. Blender
@@ -201,7 +211,6 @@ automation as a routine build step; repository rules are in [AGENTS](../AGENTS.m
 | `build/hand-meshes/VRFloatingHands.psk`, `.fbx`, `VRFloatingHands.json`, wristwatch mesh, hand/watch textures | Above export plus `tools/generate_wristwatch.py`; receipts checked by `tools/script-sources.ps1` | Required by default hand build; generated output intentionally excluded |
 | Reload meshes/stock weapon extracts and `build/hand-meshes/` props | `tools/generate_reload_props.py` | Required by default hand build despite Physical reloads being OFF at runtime; the sound mapping source is already included |
 | `build/hand-assets/KF2VRHands.upk` and `build.json` | `tools/build-hand-assets.ps1` | Required for the current VR script compile/package; generated game-derived package |
-| `build/portal-assets/KF2VRPortal.upk` and `build.json` | `tools/extract_portal_assets.py`, `tools/build_portal_meshes.py`, `tools/prepare_portal_asset_config.py`, `tools/build-portal-assets.ps1` | Local Portal 2 and pinned SourceIO; current IncludeVRClient compile requires this package; Valve-derived inputs remain local |
 | Source/Engineer packages and receipts for separate optional content | `tools/extract_source_weapons.py`, `tools/build-source-assets.ps1`, `tools/extract_engineer_assets.py`, `tools/build-engineer-assets.ps1` | Separate optional content route, outside `build-from-source.ps1` and the default aggregate build |
 | RAVEN-7 meshes and textures | Included `assets/weapons/raven7/material-atlas-v2.png`; `tools/raven7_model.py`, `tools/raven7_rig.py`, `tools/raven7_grip.py`, `tools/generate_tomahawk.py` | Generators/atlas included; rig/grip generation still depends on the floating-hand skin above |
 
@@ -215,13 +224,12 @@ recreation of the first alpha's later hand-art revision remains outside this rou
 
 ### Closing the full-mod build gaps
 
-Future work is to remove the mandatory Portal 2 prerequisite by separating its
-optional compile-time content, and to provide reviewed authored inputs or a
+Future work is to provide reviewed authored inputs or a
 public procedural recipe for the first alpha's exact later hand-art revision.
 Headset and real online sessions remain the acceptance checks for source-built
 candidates.
 
-Experimental DLSS builds: review `third_party/NVIDIA-DLSS-LICENSE.txt`, run `tools/fetch-ngx.ps1`, then `tools/build-kf2vr.ps1 -NoSelect -NoBreacher -Dlss`. Without `-Dlss`, no NGX SDK/runtime is required. CPU DLSS math checks run in either build. See [DLSS](DLSS.md) for limitations and publication obligations.
+Every playable build includes experimental DLSS support: review `third_party/NVIDIA-DLSS-LICENSE.txt`, run `tools/fetch-ngx.ps1`, then `tools/build-kf2vr.ps1 -NoSelect -NoBreacher`. The legacy `-Dlss` switch is accepted but unnecessary; disabling support is rejected by the builders and packager. DLSS rendering remains Off by default in the launcher. CPU-only math checks can run without NGX when the adapter DLL is skipped. See [DLSS](DLSS.md) for limitations and publication obligations.
 
 Optional Deadbolt/Ripcord concept-comparison helpers are outside the supported
 base source-build route. `tools/deadbolt/make_judge_sheet.py` and

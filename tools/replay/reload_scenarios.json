@@ -1,0 +1,97 @@
+{
+  "schema": "kf2vr/reload-transition-scenarios/1",
+  "scope": "Existing native ReplayInput and ReloadObserver lifecycle collection; authored plans are not runtime evidence",
+  "accepted": false,
+  "scenarios": [
+    {
+      "id": "recovered-before-eject", "family": "detachable", "weapons": ["9mm", "deagle"],
+      "steps": ["Remove a paid partial magazine; seat a different fresh magazine", "Release recovered magazine to floor", "Pull and catch that exact paid token BEFORE ejecting installed magazine", "Eject installed magazine", "Seat recovered magazine", "Repeat seat attempt"],
+      "predicates": ["Same token and remaining budget across catch/eject/seat", "One removal and one seat credit", "No automatic stock reload animation or fallback", "Retained chamber remains valid"],
+      "missing_requirements": ["Measured floor prop, gravity catch and entry/seat native poses", "Initial paid-token and replacement setup through production inputs", "Ordered animation and seat receipt observations"]
+    },
+    {
+      "id": "mixed-hip", "family": "detachable", "weapons": ["9mm", "deagle"],
+      "steps": ["Draw Deagle and 9mm in opposite hands", "Shoot each once", "Take compatible ammo and start hip reload", "Move gun to measured hip guide", "Seat one then the other", "Reverse hands and completion order"],
+      "predicates": ["Ammo stays attached to correct hip guide", "Independent exact weapon identity and stock reserve", "No automatic fallback or duplicate completion"],
+      "missing_requirements": ["Mixed-family setup is unsupported by paired-9mm setup", "Measured hip guide poses for both hands", "Hip ownership and seat receipts"]
+    },
+    {
+      "id": "mosin-owed-grips", "family": "bolt", "weapons": ["mosin"],
+      "input": "tools/replay/shot-grip-prefix.input",
+      "steps": ["Fire once", "Release and regrip", "Acquire support hold then release trigger hand", "Grab highlighted bolt", "Partial stroke/release", "Regrab and finish full stroke", "Switch away/back while owed"],
+      "predicates": ["Owed cycle persists until real complete stroke", "Highlight agrees with grab admission", "One case eject and one chamber completion", "Support-only carrying preserves reachable action"],
+      "missing_requirements": ["Executable prefix fires and changes neutral grip inputs only; it does not acquire support or bolt contact", "Measured support, bolt and switch selection native poses", "Case and completion receipts"]
+    },
+    {
+      "id": "1858-manual-close", "family": "revolver", "weapons": ["1858"],
+      "steps": ["Shoot", "Open cylinder", "Acquire support grip then release it", "Insert cylinder ammo with fast approach", "Repeat with magnetic insertion", "Wait without lever closure", "Manually close and fire"],
+      "predicates": ["Support release leaves reload and cylinder position intact", "Both insert paths wait for manual lever closure", "One stock payment per accepted ammo insertion"],
+      "missing_requirements": ["Measured opening, support, insert and closing native poses", "Cylinder/lever state and payment receipts"]
+    },
+    {
+      "id": "hx25-invalid-order", "family": "break", "weapons": ["hx25"],
+      "steps": ["Fire once", "Open without completing spent-shell ejection", "Attempt fresh shell entry", "Finish ejection", "Insert again", "Close", "Repeat close and fire"],
+      "predicates": ["Fresh shell cannot seat before old shell ejects", "No overlapping paid shells", "One loaded shell after closure", "No unintended automatic reload"],
+      "missing_requirements": ["Measured HX25 open, partial-eject, shell entry and close poses", "Break ejection/close and paid insertion receipts", "Rendered overlap and breech alignment acceptance"]
+    },
+    {
+      "id": "reserve-zero-refill", "family": "detachable", "weapons": ["9mm", "deagle", "ar15"],
+      "steps": ["Spend reserve through real shots/reloads", "Fire empty and eject magazine with zero reserve", "Attempt closed empty rack", "Collect actual ammo pickup", "Take and seat replacement", "Rack", "Switch away/back and repeat"],
+      "predicates": ["No fresh ammo paid at zero reserve", "Empty removal remains committed", "Refill makes owed rack reachable", "Pickup grant explicitly enters conservation baseline"],
+      "missing_requirements": ["Reserve exhaustion and real pickup setup", "Measured pouch, magwell, rack and pickup poses", "Explicit authoritative grant and completion receipt observations"]
+    },
+    {
+      "id": "spx-owed-lever", "family": "lever", "weapons": ["spx"],
+      "input": "tools/replay/shot-grip-prefix.input",
+      "steps": ["Fire once", "Press reload face button", "Acquire support hold", "Work lever with hand at trigger regardless of primary/support label", "Release during partial stroke", "Finish full relative stroke while moving rifle", "Repeat stroke"],
+      "predicates": ["Owed action stays reachable", "Relative lever travel commits once", "Repeated or partial stroke cannot duplicate feed", "Pump-only inertia is absent from lever ownership"],
+      "missing_requirements": ["Executable prefix only fires and changes neutral grips; no lever contact is claimed", "Measured lever/support native poses and rifle-relative complete stroke", "Lever commit receipt"]
+    },
+    {
+      "id": "bow-retrieved-nock", "family": "bow", "weapons": ["bow"],
+      "steps": ["Retrieve real carried/recovered arrow", "Approach actual nock zone backwards", "Rotate to proper alignment", "Nock", "Release/regrip", "Draw/release", "Attempt duplicate nock"],
+      "predicates": ["Invalid entry rejected without losing paid arrow", "Nock target matches functional admission", "One arrow payment and one stock shot", "Ownership survives interruption"],
+      "missing_requirements": ["Recovered arrow source setup and measured nock/draw native poses", "Bow phase, authority request and stock release receipt observations", "Hologram alignment and hand fit in headset"]
+    },
+    {
+      "id": "secondary-double-tap", "family": "secondary", "weapons": ["m16"],
+      "input": "tools/replay/secondary-double-tap-prefix.input",
+      "steps": ["Fire primary", "Fire secondary through actual fire-mode input", "Double tap reload within 0.25 seconds", "Grab secondary ammo with trigger at pouch", "Attempt reversed entry then proper insertion", "Close secondary", "Finish primary in both orders"],
+      "predicates": ["Primary and secondary payment/ownership independent", "Double tap does not eject primary", "No loaded feed auto-reload", "Secondary reserve grant follows stock launcher rules"],
+      "missing_requirements": ["Executable prefix fires primary and double taps only; initial secondary is full and may correctly reject", "Measured fire-mode, pouch, secondary entry and closure native poses", "Secondary state/count and stock payment receipt observations"]
+    },
+    {
+      "id": "pump-partial-release", "family": "pump", "weapons": ["mb500"],
+      "input": "tools/replay/shot-grip-prefix.input",
+      "steps": ["Fire once", "Acquire fore-end", "Move partial rear stroke", "Release/regrip", "Finish rear stroke", "Return forward", "Attempt free ready cycle"],
+      "predicates": ["Partial action retained on release", "One eject/forward completion", "Ready loaded pump remains locked"],
+      "missing_requirements": ["Executable prefix has no fore-end contact", "Measured fore-end complete and partial native poses", "Pump state and endpoint receipts"]
+    },
+    {
+      "id": "hip-tactical-at-capacity", "family": "detachable", "weapons": ["9mm"],
+      "input": "tools/replay/dual-reload-press-prefix.input",
+      "steps": ["Use actual paired 9mm setup with total 15 = 14 magazine plus one retained chamber, reserve available and opposite pistol held", "Tap reload and reach the real hip loader", "Complete the physical seat", "Repeat when total 16 = full 15-round magazine plus chamber"],
+      "predicates": ["Stock-capacity total still admits the legitimate chamber-plus-one top-up", "True full magazine plus chamber rejects another top-up", "With lose-ammo OFF, old 14 return and new 15 debit for net reserve cost one", "With lose-ammo ON, conserve the exported 14-round paid payload and debit the fresh magazine rather than asserting net cost one"],
+      "missing_requirements": ["Authored prefix only presses both reload buttons; no hip approach or seat is claimed", "Actual initial feed/chamber ledger and policy setup must be observed", "Measured hip seat contacts, stock payment and exported payload receipts"]
+    },
+    {
+      "id": "recovered-insert-receipt-after-cancel", "family": "detachable", "weapons": ["9mm", "deagle"],
+      "steps": ["Remove a magazine from an empty exact owned weapon", "Seat a compatible paid recovered payload through the real guide", "Cancel presentation after request submission but before its accepted receipt drains", "Drain the real accepted receipt", "Repeat drain and test rejected receipts, cosmetic lease loss, same-pawn stow and replacement-pawn cases"],
+      "predicates": ["One authoritative payload retirement and ammo credit", "Accepted receipt clears magazine-out on its captured still-owned living-pawn runtime even without active presentation", "Retained chamber stays retained; an absent chamber still owes its action", "No automatic rack/reset, second credit or mutation of replacement actor/pawn"],
+      "missing_requirements": ["Measured recovered token setup, real entry and seat native poses", "Actual delayed production acceptance and cancellation boundary, not a synthetic ConfirmedInsert call", "Ordered authority receipt, pawn/runtime identity, feed state and payload ledger observations"]
+    },
+    {
+      "id": "paid-finish-action-switch", "family": "finish-action", "weapons": ["helios"],
+      "steps": ["Empty the real Helios and seat a new load through production input", "Observe one accepted stock payment and an owed charge-button action", "Switch away before pressing the button, then redraw", "Attempt primary fire before finishing", "Complete the actual button action", "Repeat interruption during a return-stroke finish profile and with physical reload preferences changed"],
+      "predicates": ["Paid finish debt stays on the exact weapon with its accepted profile and partial progress", "Redraw recovers only the action with no second stock payment", "Primary fire remains blocked until real completion while independent secondary feeds retain their own rules", "Unpaid rejection and stock clips omitting that control create no paid finish debt"],
+      "missing_requirements": ["Measured emptying, pouch/seat, wheel switch/redraw and actual finish-contact native poses", "Actual paid receipt before interruption plus finish completion/animation observations", "Additional measured out/return profile and independent-secondary cases"]
+    },
+    {
+      "id": "dual-removal-backend-busy", "family": "detachable", "weapons": ["9mm"],
+      "input": "tools/replay/dual-reload-press-prefix.input",
+      "steps": ["Prepare both actual paired pistols with eligible reloads and finite shared reserve", "Press both reload buttons in the same update", "Observe the first outstanding removal and the second deferred admission", "Drain the first real receipt and observe the second distinct removal request", "Complete both hip seats in both orders; repeat with cancellation/stow while the second waits"],
+      "predicates": ["Transient backend contention retains the second exact session without preflight or debit", "Each removal is submitted once with its own eventual receipt", "Waiting sessions cannot seat or complete before admission", "Cancellation drops intent and genuine rejection stays terminal; no delayed refill or duplicate removal"],
+      "missing_requirements": ["Authored prefix only requests admission; no physical hip seat is performed", "Real same-update channel contention and distinct authoritative removal receipt observations", "Measured hip contacts, cancellation input, both completion orders and mixed Deagle/9mm setup (unsupported by automatic paired-9mm setup)"]
+    }
+  ]
+}

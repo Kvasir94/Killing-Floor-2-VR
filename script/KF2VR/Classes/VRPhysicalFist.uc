@@ -12,7 +12,7 @@ var vector PreviousKnuckle, CandidateKnuckle, CurrentKnuckle;
 var vector LastPawnPosition, LastVelocity, ResetCenter;
 var float LastTime, QuietTime, CandidateTime, PunchTime, Travel, PeakSpeed, NextPunchTime, FirstHitTime;
 var bool bHavePose, bReady, bRequireSettle, bCandidate, bPunching;
-var int HitsThisPunch;
+var int HitsThisPunch, NetworkSwingSerial;
 var array<Actor> HitActors;
 var array<PhysicalContact> Contacts;
 
@@ -87,6 +87,7 @@ var float UnreadySwingSpeed;
 simulated function Cancel()
 {
     if (bPunching) LogPunch("cancelled");
+    TailAt = 0;
     bHavePose = false;
     bReady = false;
     bRequireSettle = true;
@@ -161,6 +162,7 @@ simulated function EndPunch(float Now, vector Center, optional string Reason)
 // punch that already hit keeps its recovery.
 simulated function Interrupt(float Now, vector Center)
 {
+    TailAt = 0;
     if (bPunching)
     {
         LogPunch("interrupted");
@@ -177,6 +179,7 @@ simulated function Interrupt(float Now, vector Center)
 
 simulated function BeginPunch()
 {
+    NetworkSwingSerial = LogBridge.BeginPhysicalSwing(LogHand);
     bCandidate = false;
     bPunching = true;
     bReady = false;
@@ -228,7 +231,7 @@ simulated function Thump(VRHandsBridge Bridge, int Hand, float Alpha, bool bKill
     Pulse(Bridge, Hand, 1.0, 0.02);
     TailHand = Hand;
     TailAt = Bridge.WorldInfo.RealTimeSeconds + 0.03;
-    TailStrength = (0.35 + 0.40 * Alpha) * (bKill ? 1.3 : (bStagger ? 1.15 : 1.0));
+    TailStrength = FMin(1.0, (0.95 + 0.05 * Alpha) * (bKill ? 1.3 : (bStagger ? 1.15 : 1.0)));
     TailDuration = (0.04 + 0.08 * Alpha) * (bKill ? 1.6 : (bStagger ? 1.3 : 1.0));
 }
 
@@ -349,6 +352,8 @@ simulated function float BonusScale(VRHandsBridge Bridge, KFPawn Victim, vector 
 simulated function UpdateTail(VRHandsBridge Bridge)
 {
     if (TailAt <= 0 || Bridge == None || Bridge.WorldInfo.RealTimeSeconds < TailAt) return;
+    // A hitch must not replay an old impact when tracking/input resumes.
+    if (Bridge.WorldInfo.RealTimeSeconds - TailAt > MaximumSampleTime) { TailAt = 0; return; }
     Pulse(Bridge, TailHand, FMin(TailStrength, 1.0), TailDuration);
     TailAt = 0;
 }
@@ -357,7 +362,7 @@ simulated function UpdateTail(VRHandsBridge Bridge)
 simulated function WorldImpact(VRHandsBridge Bridge, int Hand, vector Location, vector Surface)
 {
     local KFImpactEffectManager Effects;
-    Pulse(Bridge, Hand, 0.50, 0.04);
+    Pulse(Bridge, Hand, 0.95, 0.04);
     if (Bridge == None || Bridge.Human == None || WorldImpactEffects == None) return;
     Effects = KFImpactEffectManager(Bridge.WorldInfo.MyImpactEffectManager);
     if (Effects == None) return;
@@ -370,11 +375,22 @@ simulated function Pulse(VRHandsBridge Bridge, int Hand, float Strength, float D
     local VRHandsBridge B;
     if (Bridge == None || Hand < 0 || Hand > 1) return;
     B = Bridge.RootBridge != None ? Bridge.RootBridge : Bridge;
-    if (B.NativeHapticMask == 0) { B.NativeHapticStrength = 0; B.NativeHapticDuration = 0; }
-    B.NativeHapticMask = B.NativeHapticMask | (1 << Hand);
-    B.NativeHapticStrength = FMax(B.NativeHapticStrength, Strength);
-    B.NativeHapticDuration = FMax(B.NativeHapticDuration, Duration);
+    B.QueueHandHaptic(1 << Hand, Strength, Duration);
     class'VRHitHaptics'.static.NoteStrike(B, 1 << Hand);
+}
+
+static function int OrdinaryDamage(int Damage)
+{
+    return Min(Round(Damage * 0.85),
+        int(class'KFWeapon'.default.InstantHitDamage[class'KFWeapon'.const.BASH_FIREMODE]));
+}
+
+// Only stock breakable geometry receives world-contact damage. BSP, pickups,
+// doors and arbitrary actors keep their ordinary contact feedback.
+static function bool BreakableTarget(Actor Target)
+{
+    return Target != None && !Target.bDeleteMe
+        && (KFFracturedMeshActor(Target) != None || KFDestructibleActor(Target) != None);
 }
 
 simulated function ApplyContact(VRHandsBridge Bridge, int Hand, ImpactInfo Impact)
@@ -395,6 +411,30 @@ simulated function ApplyContact(VRHandsBridge Bridge, int Hand, ImpactInfo Impac
     // Knock back along the fist's actual travel, as the charged punch does.
     if (VSizeSq(Impact.RayDir) > 0.01) PunchDir = Normal(Impact.RayDir);
     HitStop = HitStopFor(Bridge);
+    if (class'VRCorpseContact'.static.Eligible(Victim))
+    {
+        Alpha = PunchAlpha();
+        bHeavy = Alpha >= HeavyPunchAlpha;
+        Damage = Round(MinFistDamage + (MaxFistDamage - MinFistDamage) * Alpha);
+        HitType = bHeavy ? HeavyDamageType : LightDamageType;
+        if (class'VRBoxingGloves'.static.Worn(Bridge))
+        {
+            Damage = Round(Damage * class'VRBoxingGloves'.default.PunchDamageScale);
+            HitType = bHeavy ? class'VRBoxingGloves'.default.HeavyDamageType
+                : class'VRBoxingGloves'.default.LightDamageType;
+        }
+        else if (Bridge.PC.GetPerk() == None || KFPerk_Berserker(Bridge.PC.GetPerk()) == None)
+            Damage = OrdinaryDamage(Damage);
+        Momentum = PunchDir * (MinFistMomentum + (MaxFistMomentum - MinFistMomentum) * Alpha);
+        if (class'VRBoxingGloves'.static.Worn(Bridge))
+            Momentum *= class'VRBoxingGloves'.default.PunchMomentumScale;
+        Victim.TakeDamage(Damage, Bridge.Human.Controller, Impact.HitLocation,
+            Momentum, HitType, Impact.HitInfo, Bridge.Human);
+        ++Hits; ++HitsThisPunch;
+        PlayFistSound(Bridge, ZedImpactSound, Impact.HitLocation);
+        Thump(Bridge, Hand, Alpha, true, bHeavy);
+        return;
+    }
     if (Victim != None && Victim.Health > 0 && !Victim.bPlayedDeath
         && Victim.GetTeamNum() != Bridge.Human.GetTeamNum())
     {
@@ -402,7 +442,7 @@ simulated function ApplyContact(VRHandsBridge Bridge, int Hand, ImpactInfo Impac
         // react; the rest of a punch carried through a crowd lands as normal
         // blows.
         if (Bridge.HandInventory != None && Bridge.HandInventory.FistCharge != None
-            && Bridge.HandInventory.FistCharge.TryChargedHit(Bridge, Hand, Victim, Impact, PunchDir))
+            && Bridge.HandInventory.FistCharge.TryChargedHit(Bridge, Hand, Victim, Impact, PunchDir, NetworkSwingSerial))
         {
             ++Hits;
             ++HitsThisPunch;
@@ -429,6 +469,12 @@ simulated function ApplyContact(VRHandsBridge Bridge, int Hand, ImpactInfo Impac
             DamageCap = int(class'VRBoxingGloves'.static.MaxDamage());
         }
         Damage = Min(Round(Damage * Scale), DamageCap);
+        // Ordinary bare fists cannot exceed stock base bash damage (15).
+        // Charged strikes above, Berserker/gloves and Breacher pressure below
+        // retain their separate abilities; this caps the ordinary raw hit.
+        if (!class'VRBoxingGloves'.static.Worn(Bridge)
+            && (Bridge.PC.GetPerk() == None || KFPerk_Berserker(Bridge.PC.GetPerk()) == None))
+            Damage = OrdinaryDamage(Damage);
         // Parry first: the stumble must start from the attack it interrupts,
         // before the blow's own reaction. A client predicts it for feedback;
         // its server applies the same test to the forwarded punch.
@@ -446,7 +492,7 @@ simulated function ApplyContact(VRHandsBridge Bridge, int Hand, ImpactInfo Impac
             Momentum, HitType, Impact.HitInfo, Bridge.Human);
         if (Bridge.Human.Role < ROLE_Authority)
         {
-            Bridge.RequestNetworkPhysicalDamage(Victim, Damage, Impact.HitLocation, Momentum, HitType, Impact.HitInfo.BoneName, Hand);
+            Bridge.RequestNetworkPhysicalDamage(Victim, Damage, Impact.HitLocation, Momentum, HitType, Impact.HitInfo.BoneName, Hand, NetworkSwingSerial);
         }
         ++Hits;
         ++HitsThisPunch;
@@ -461,8 +507,29 @@ simulated function ApplyContact(VRHandsBridge Bridge, int Hand, ImpactInfo Impac
     else
     {
         ++WorldHits;
-        if (Victim == None) WorldImpact(Bridge, Hand, Impact.HitLocation, Impact.HitNormal);
-        else Pulse(Bridge, Hand, 0.50, 0.040);
+        if (Victim == None)
+        {
+            if (BreakableTarget(Impact.HitActor))
+            {
+                // Use the ordinary punch curve and stock bash cap even with
+                // gloves, perks or charge. This adds contact, not extra force.
+                Alpha = PunchAlpha();
+                Damage = OrdinaryDamage(Round(MinFistDamage + (MaxFistDamage - MinFistDamage) * Alpha));
+                Momentum = PunchDir * (MinFistMomentum + (MaxFistMomentum - MinFistMomentum) * Alpha);
+                HitType = Alpha >= HeavyPunchAlpha ? class'VRDT_FistDamageHeavy' : class'VRDT_FistDamage';
+                // Stock RT_ClientSide fracture props deliberately have local
+                // authority. Server-owned breakables use the same strike RPC
+                // and receipt as pawn punches, with server contact validation.
+                if (Impact.HitActor.Role == ROLE_Authority)
+                    Impact.HitActor.TakeDamage(Damage, Bridge.Human.Controller, Impact.HitLocation,
+                        Momentum, HitType, Impact.HitInfo, Bridge.Human);
+                else if (Bridge.Human.Role < ROLE_Authority)
+                    Bridge.RequestNetworkPhysicalDamage(Impact.HitActor, Damage, Impact.HitLocation,
+                        Momentum, HitType, Impact.HitInfo.BoneName, Hand, NetworkSwingSerial);
+            }
+            WorldImpact(Bridge, Hand, Impact.HitLocation, Impact.HitNormal);
+        }
+        else Pulse(Bridge, Hand, 0.95, 0.040);
     }
 }
 
@@ -529,6 +596,8 @@ simulated function GatherContacts(VRHandsBridge Bridge, vector Start, vector End
     local KFPawn Victim;
     local int Count;
     local float Radius;
+    local array<ImpactInfo> CorpseContacts;
+    local int CorpseIndex;
     if (VSizeSq(End - Start) < 0.001) return;
     Radius = FistRadius;
     Extent = vect(1,1,1) * Radius;
@@ -572,6 +641,9 @@ simulated function GatherContacts(VRHandsBridge Bridge, vector Start, vector End
     // broad phase above never reports a cylinder it starts inside. Test the
     // hit zones of nearby enemies directly so a grappler can still be hit.
     GatherNearbyPawns(Bridge, Start, LimitedEnd, Radius);
+    class'VRCorpseContact'.static.Gather(Bridge, Start, LimitedEnd, Radius, HitActors, CorpseContacts);
+    for (CorpseIndex = 0; CorpseIndex < CorpseContacts.Length; ++CorpseIndex)
+        AddContact(CorpseContacts[CorpseIndex], Start, End);
 }
 
 // A fist or weapon head already inside the body -- the second and third blow
@@ -679,7 +751,8 @@ simulated function GatherNearbyPawns(VRHandsBridge Bridge, vector Start, vector 
         if (++Count > 16) break;
         bInside = false;
         if (!TraceFistHitZones(Bridge, Victim, Start, End, Radius, Impact)
-            && !OverlapHitZone(Victim, Start, End, Radius, Impact))
+            && !OverlapHitZone(Victim, Start, End, Radius, Impact)
+            && !class'VRPhysicalContactOverlap'.static.Find(Bridge, Victim, Start, End, Impact))
         {
             if (!InsideBody(Victim, Start, End, Impact)) continue;
             bInside = true;
@@ -742,6 +815,7 @@ simulated function Update(VRHandsBridge Bridge, int Hand)
     // Require clenched fist (grip held)
     if (!IsFistClosed(Bridge, Hand))
     {
+        TailAt = 0;
         if (bPunching) LogPunch("cancelled");
         bHavePose = false; bReady = false; bCandidate = false; bPunching = false;
         QuietTime = 0; HitActors.Length = 0; Contacts.Length = 0;
@@ -751,7 +825,6 @@ simulated function Update(VRHandsBridge Bridge, int Hand)
 
     LogBridge = Bridge;
     LogHand = Hand;
-    UpdateTail(Bridge);
     Now = Bridge.WorldInfo.RealTimeSeconds;
     Delta = Now - LastTime;
     HandPos = Bridge.PalmPosition(Hand);
@@ -803,6 +876,7 @@ simulated function Update(VRHandsBridge Bridge, int Hand)
         return;
     }
 
+    UpdateTail(Bridge);
     if (Speed < StopSpeed) QuietTime += Delta; else QuietTime = 0;
 
     if (!bReady && !bPunching && !bCandidate && Now >= NextPunchTime

@@ -1,0 +1,12 @@
+--- a/tools/multiplayer/reload_analyze.py
++++ b/tools/multiplayer/reload_analyze.py
+@@ -64,7 +64,8 @@
+         if not any(r.get('hand') == hand and r.get('physicalActive') == 'True'
+                    and r.get('authorityHeld') == 'True' for r in states):
+             errors.append('Missing accepted physical state for hand '+hand)
+-        identities = {r.get('identity') for r in rows if r.get('hand') == hand and r.get('identity')}
++        identities = {r.get('identity') for r in rows if r.get('phase') != 'setup'
++                      and r.get('hand') == hand and r.get('identity')}
+         if len(identities) != 1 or 'None' in identities:
+             errors.append('Weapon identity changed for hand '+hand)
+         previous = None

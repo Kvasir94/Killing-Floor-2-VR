@@ -11,7 +11,7 @@ if (-not $OutputDirectory) {
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $results = @()
 $scripts = @(
-    'portal-config', 'portal-session', 'combined-native-refresh', 'combined-dual-fixture',
+    'combined-config', 'combined-session', 'combined-native-refresh', 'combined-dual-fixture',
     'engineer-fixture', 'engineer-replay', 'script-build-cache',
     'interactive-session', 'vr-render-settings',
     'selected-guns-control', 'playtest-modes', 'inventory-lifecycle'
@@ -21,7 +21,6 @@ foreach ($name in $scripts) {
     $path = Join-Path $PSScriptRoot ('tests/' + $name + '.tests.ps1')
     $log = Join-Path $OutputDirectory ($name + '.log')
     $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $path)
-    if ($name -eq 'portal-session') { $arguments += '-WithoutPortals' }
     if ($name -eq 'selected-guns-control') { $arguments += '-StockSourceRoot', $StockSourceRoot }
     & $windowsPowerShell @arguments *> $log
     $code = $LASTEXITCODE

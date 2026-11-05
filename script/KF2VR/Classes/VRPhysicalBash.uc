@@ -7,22 +7,27 @@ struct PhysicalContact
 {
     var ImpactInfo Impact;
     var float Fraction;
+    var float SampleSpeed;
 };
 
 var VRHandsBridge Presenter;
 var KFWeapon Weapon;
-var vector PreviousPoints[3], CandidatePoints[3], CurrentPoints[3];
+// Rear, middle and muzzle of the bore ([2] is the swing centre), then any
+// blade off the bore line (VRMeleeScale.BluntParts ContactBones). PointCount
+// says how many are live.
+var vector PreviousPoints[5], CandidatePoints[5], CurrentPoints[5];
 // The same points in the player's body frame (pawn origin, VR body yaw).
 // Swing intent, speed and readiness use these, so turning or being dragged by
 // a grab is not a swing; contact sweeps still use the world path.
-var vector PreviousLocal[3], CandidateLocal[3], CurrentLocal[3];
+var vector PreviousLocal[5], CandidateLocal[5], CurrentLocal[5];
+var int PointCount;
 var rotator LastBodyRotation;
 var vector LastPawnPosition, LastVelocity, ResetCenter;
 var rotator LastPawnRotation;
 var float LastTime, QuietTime, CandidateTime, SwingTime, Travel, PeakSpeed, NextSwingTime, LastFiredTime;
 var float PausedAt, FirstHitTime;
 var bool bHavePose, bReady, bRequireSettle, bCandidate, bSwing, bSupported, bPaused, bReadyAtPause;
-var int HitsThisSwing, LastRevision;
+var int HitsThisSwing, LastRevision, NetworkSwingSerial;
 var array<Actor> HitActors;
 var array<PhysicalContact> Contacts;
 
@@ -89,7 +94,7 @@ simulated function Release(optional bool bAbandon)
     Weapon = None;
 }
 
-simulated function Pulse(float Strength, float Duration, optional bool bBothHands)
+simulated function ImpactFeedback(optional bool bBothHands)
 {
     local VRHandsBridge B;
     local int Mask;
@@ -97,11 +102,8 @@ simulated function Pulse(float Strength, float Duration, optional bool bBothHand
     B = Presenter.RootBridge != None ? Presenter.RootBridge : Presenter;
     Mask = 1 << Presenter.WeaponHand;
     if (bBothHands && HasSupport()) Mask = 3;
-    if (B.NativeHapticMask == 0) { B.NativeHapticStrength = 0; B.NativeHapticDuration = 0; }
-    B.NativeHapticMask = B.NativeHapticMask | Mask;
+    class'VRMechanismHaptics'.static.Emit(B, class'VRMechanismHaptics'.const.GunImpact, Mask);
     class'VRHitHaptics'.static.NoteStrike(B, Mask);
-    B.NativeHapticStrength = FMax(B.NativeHapticStrength, Strength);
-    B.NativeHapticDuration = FMax(B.NativeHapticDuration, Duration);
 }
 
 simulated function bool HasSupport()
@@ -152,6 +154,10 @@ simulated function bool Eligible()
     IneligibleReason = "ownership";
     R = Presenter.PresentedItem;
     if (R == None) return Presenter.Human.Weapon == Weapon;
+    if (R.PrimaryHand < 0 && R.SupportHand == Presenter.WeaponHand
+        && R.IsCurrent() && R.Item == Weapon && R.Inventory.IsOwned(Weapon)
+        && R.Inventory.GetSupport(Presenter.WeaponHand) == R)
+        return R.Presenter != None && R.Presenter.FreshCarryVisual(Presenter.WeaponHand);
     if (R.IsCurrent() && R.Item == Weapon && R.PrimaryHand == Presenter.WeaponHand
         && R.Inventory.IsOwned(Weapon) && R.Inventory.GetPrimary(R.PrimaryHand) == R)
         IneligibleReason = "itempose";
@@ -164,7 +170,7 @@ simulated function bool Eligible()
 simulated function SaveSample(float Now, vector Velocity)
 {
     local int I;
-    for (I = 0; I < 3; ++I) { PreviousPoints[I] = CurrentPoints[I]; PreviousLocal[I] = CurrentLocal[I]; }
+    for (I = 0; I < PointCount; ++I) { PreviousPoints[I] = CurrentPoints[I]; PreviousLocal[I] = CurrentLocal[I]; }
     LastBodyRotation = Presenter.BodyRotation;
     LastVelocity = Velocity;
     LastTime = Now;
@@ -246,6 +252,7 @@ simulated function Pause()
 
 simulated function BeginSwing()
 {
+    NetworkSwingSerial = Presenter.BeginPhysicalSwing(Presenter.WeaponHand);
     bCandidate = false;
     bSwing = true;
     bReady = false;
@@ -259,48 +266,101 @@ simulated function BeginSwing()
     // Deliberately NO swing whoosh sound played in the air!
 }
 
-simulated function ApplyContact(ImpactInfo Impact)
+// Damage uses the body-relative sample of the point that generated contact,
+// never a faster point at the other end of the gun or the accumulated windup.
+simulated function float PointContactSpeed(int Point, float Delta)
+{
+    local vector Step;
+    if (Point < 0 || Point >= PointCount || !(Delta > 0 && Delta <= MaximumSampleTime)) return 0;
+    Step = CurrentLocal[Point] - PreviousLocal[Point];
+    if (!FiniteVector(Step)) return 0;
+    return VSize(Step) / Delta;
+}
+
+simulated function bool AdmitsContactSpeed(float Speed)
+{
+    return Speed >= StopSpeed && Speed <= MaximumSpeed;
+}
+
+// The rig-frame surface catalog decides blade or blunt (VRWorldGunRigs, the
+// same frame a thrown gun uses): the profile root bone of the held mesh.
+simulated function bool SharpAtWorld(vector World, float Slack)
+{
+    local name Root;
+    local float MeshScale;
+    Root = Presenter.WeaponProfiles[Presenter.ActiveProfile].RootBone;
+    MeshScale = Weapon.MySkelMesh.Scale * Weapon.DrawScale;
+    if (!(MeshScale > 0.01)) MeshScale = 1.0;
+    return class'VRWorldGunRigs'.static.SharpAt(Weapon.Class.Name,
+        QuatRotateVector(QuatInvert(Weapon.MySkelMesh.GetBoneQuaternion(Root)),
+            World - Weapon.MySkelMesh.GetBoneLocation(Root)) / MeshScale, Slack) > 0;
+}
+
+// A gun with a blade on part of it (the compound bow) slices only with the
+// blade. The contact lies on the struck body, up to BashRadius off the gun, so
+// either it or the nearest swept point of the gun on a blade counts as a blade.
+simulated function bool BluntContact(ImpactInfo Impact)
+{
+    local int I, Nearest;
+    if (!class'VRMeleeScale'.static.HasBluntParts(Weapon.Class)) return false;
+    if (SharpAtWorld(Impact.HitLocation, BashRadius)) return false;
+    Nearest = 0;
+    for (I = 1; I < PointCount; ++I)
+        if (VSizeSq(CurrentPoints[I] - Impact.HitLocation) < VSizeSq(CurrentPoints[Nearest] - Impact.HitLocation))
+            Nearest = I;
+    return !SharpAtWorld(CurrentPoints[Nearest], 2.0);
+}
+
+simulated function ApplyContact(ImpactInfo Impact, float ContactSpeed)
 {
     local float SavedShake, Scale;
-    local bool SavedEnemyHit;
+    local bool SavedEnemyHit, bBlunt;
     local KFPawn Victim;
     local KFMeleeHelperWeapon Helper;
     if (!Eligible() || Impact.HitActor == None || Impact.HitActor.bDeleteMe) return;
     Victim = KFPawn(Impact.HitActor);
-    // A gun bash has one stock mode, so speed carries the whole range: 0.8 at
-    // the start threshold up to 1.25 at three times it.
-    Scale = class'VRMeleeScale'.static.SwingScale(PeakSpeed, StartSpeed, StartSpeed * 3, 0.8, 1.25);
+    // Damage follows the actual contact sample. A fast windup followed by a
+    // slow wiggle inside a head must not retain the windup's full damage.
+    if (!AdmitsContactSpeed(ContactSpeed)) return;
+    Scale = class'VRMeleeScale'.static.SwingScale(ContactSpeed, StartSpeed, StartSpeed * 3, 0.35, 1.5);
     Helper = Weapon.MeleeAttackHelper;
     SavedShake = Helper.MeleeImpactCamShakeScale;
     SavedEnemyHit = Helper.bHitEnemyThisAttack;
     Helper.MeleeImpactCamShakeScale = 0;
     Helper.bHitEnemyThisAttack = false;
-    class'VRMeleeScale'.static.ProcessScaledHit(Weapon, class'KFWeapon'.const.BASH_FIREMODE, Impact, Scale);
+    bBlunt = BluntContact(Impact);
+    class'VRMeleeScale'.static.ProcessScaledHit(Weapon, class'KFWeapon'.const.BASH_FIREMODE, Impact, Scale,
+        false, false, Presenter.ExperimentalInteractionsEnabled(), bBlunt);
     Helper.MeleeImpactCamShakeScale = SavedShake;
     Helper.bHitEnemyThisAttack = SavedEnemyHit;
-    if (Presenter != None && Presenter.Human != None && Presenter.Human.Role < ROLE_Authority)
+    if (Presenter != None && Presenter.Human != None && Presenter.Human.Role < ROLE_Authority
+        && !class'VRCorpseContact'.static.Eligible(Victim))
     {
-        Presenter.RequestNetworkMeleeHit(class'KFWeapon'.const.BASH_FIREMODE, Impact.HitActor, Impact.HitLocation, Impact.RayDir, Impact.HitInfo.BoneName, Weapon, Scale);
+        Presenter.RequestNetworkMeleeHit(class'KFWeapon'.const.BASH_FIREMODE, Impact.HitActor, Impact.HitLocation, Impact.RayDir, Impact.HitInfo.BoneName, Weapon, Presenter.WeaponHand, NetworkSwingSerial, Scale,
+            false, false, false, bBlunt);
     }
     if (Victim != None)
     {
         ++Hits;
         ++HitsThisSwing;
-        Pulse(0.75, 0.055, true);
+        ImpactFeedback(true);
     }
     else
     {
         ++WorldHits;
-        Pulse(0.50, 0.040, true);
+        ImpactFeedback(true);
     }
 }
 
-simulated function AddContact(ImpactInfo Impact, vector Start, vector End)
+simulated function AddContact(ImpactInfo Impact, vector Start, vector End, float SampleSpeed)
 {
     local PhysicalContact C;
     local int I;
-    if (Impact.HitActor == None || HitActors.Find(Impact.HitActor) != INDEX_NONE) return;
+    // A slow point must not reserve the victim ahead of a valid point's sweep.
+    if (!AdmitsContactSpeed(SampleSpeed)
+        || Impact.HitActor == None || HitActors.Find(Impact.HitActor) != INDEX_NONE) return;
     C.Impact = Impact;
+    C.SampleSpeed = SampleSpeed;
     C.Impact.StartTrace = Start;
     C.Impact.RayDir = Normal(End - Start);
     C.Fraction = FClamp(VSize(Impact.HitLocation - Start) / FMax(VSize(End - Start), 0.01), 0, 1);
@@ -349,7 +409,7 @@ simulated function bool TraceHeadHitZones(KFPawn Victim, vector Start, vector En
     return Found;
 }
 
-simulated function GatherContacts(vector Start, vector End)
+simulated function GatherContacts(vector Start, vector End, float SampleSpeed)
 {
     local Actor A, Wall;
     local vector HitLocation, HitNormal, Extent, LimitedEnd;
@@ -358,7 +418,9 @@ simulated function GatherContacts(vector Start, vector End)
     local KFPawn Victim;
     local int Count;
     local float Radius;
-    if (VSizeSq(End - Start) < 0.001) return;
+    local array<ImpactInfo> CorpseContacts;
+    local int CorpseIndex;
+    if (!AdmitsContactSpeed(SampleSpeed) || VSizeSq(End - Start) < 0.001) return;
     Radius = BashRadius;
     Extent = vect(1,1,1) * Radius;
     LimitedEnd = End;
@@ -370,7 +432,7 @@ simulated function GatherContacts(vector Start, vector End)
         Impact.HitLocation = HitLocation;
         Impact.HitNormal = HitNormal;
         Impact.HitInfo = Info;
-        AddContact(Impact, Start, End);
+        AddContact(Impact, Start, End, SampleSpeed);
     }
     foreach Presenter.TraceActors(class'Actor', A, HitLocation, HitNormal, LimitedEnd, Start, Extent, Info)
     {
@@ -394,13 +456,16 @@ simulated function GatherContacts(vector Start, vector End)
             Impact.HitNormal = HitNormal;
             Impact.HitInfo = Info;
         }
-        AddContact(Impact, Start, End);
+        AddContact(Impact, Start, End, SampleSpeed);
     }
     // A zed pressed against the player -- a Clot, Cyst or Slasher mid-grab --
     // puts the start of the sweep inside its collision cylinder, and the
     // broad phase above never reports a cylinder it starts inside. Test the
     // hit zones of nearby enemies directly so a grappler can still be hit.
-    GatherNearbyPawns(Start, LimitedEnd, Radius);
+    GatherNearbyPawns(Start, LimitedEnd, Radius, SampleSpeed);
+    class'VRCorpseContact'.static.Gather(Presenter, Start, LimitedEnd, Radius, HitActors, CorpseContacts);
+    for (CorpseIndex = 0; CorpseIndex < CorpseContacts.Length; ++CorpseIndex)
+        AddContact(CorpseContacts[CorpseIndex], Start, End, SampleSpeed);
 }
 
 // A fist or weapon head already inside the body -- the second and third blow
@@ -490,7 +555,7 @@ simulated function bool InsideBody(KFPawn Victim, vector Start, vector End, out 
     return true;
 }
 
-simulated function GatherNearbyPawns(vector Start, vector End, float Radius)
+simulated function GatherNearbyPawns(vector Start, vector End, float Radius, float SampleSpeed)
 {
     local KFPawn Victim;
     local ImpactInfo Impact;
@@ -509,7 +574,8 @@ simulated function GatherNearbyPawns(vector Start, vector End, float Radius)
         if (++Count > 16) break;
         bInside = false;
         if (!TraceHeadHitZones(Victim, Start, End, Radius, Impact)
-            && !OverlapHitZone(Victim, Start, End, Radius, Impact))
+            && !OverlapHitZone(Victim, Start, End, Radius, Impact)
+            && !class'VRPhysicalContactOverlap'.static.Find(Presenter, Victim, Start, End, Impact))
         {
             if (!InsideBody(Victim, Start, End, Impact)) continue;
             bInside = true;
@@ -521,7 +587,7 @@ simulated function GatherNearbyPawns(vector Start, vector End, float Radius)
             ++InsideHits;
             ContactKind = ContactKind != "" ? ContactKind $ "+inside" : "inside";
         }
-        AddContact(Impact, Start, End);
+        AddContact(Impact, Start, End, SampleSpeed);
     }
 }
 
@@ -529,17 +595,19 @@ simulated function ResolveContacts(float Now, vector Center)
 {
     local int I, Nearest, PreviousHits;
     local ImpactInfo Impact;
+    local float SampleSpeed;
     while (bSwing && Contacts.Length > 0)
     {
         Nearest = 0;
         for (I = 1; I < Contacts.Length; ++I)
             if (Contacts[I].Fraction < Contacts[Nearest].Fraction) Nearest = I;
         Impact = Contacts[Nearest].Impact;
+        SampleSpeed = Contacts[Nearest].SampleSpeed;
         Contacts.Remove(Nearest, 1);
         if (HitActors.Find(Impact.HitActor) != INDEX_NONE) continue;
         HitActors.AddItem(Impact.HitActor);
         PreviousHits = HitsThisSwing;
-        ApplyContact(Impact);
+        ApplyContact(Impact, SampleSpeed);
         if (PreviousHits == 0 && HitsThisSwing > 0) FirstHitTime = Now;
         // A stroke carries through a crowd: every Zed it passes through is
         // struck once (HitActors), and only a wall or prop stops it.
@@ -547,11 +615,13 @@ simulated function ResolveContacts(float Now, vector Center)
     }
 }
 
-simulated function ComputeContactPoints(out vector Points[3])
+simulated function ComputeContactPoints(out vector Points[5])
 {
     local vector Root, MuzzlePos, RearPos, BoreDir;
     local rotator MuzzleRot;
     local VRWeaponProfile Profile;
+    local array<name> Bones;
+    local int I;
     Profile = Presenter.WeaponProfiles[Presenter.ActiveProfile];
     Root = Weapon.MySkelMesh.GetBoneLocation(Profile.RootBone);
     MuzzlePos = Presenter.FireLocation;
@@ -569,12 +639,19 @@ simulated function ComputeContactPoints(out vector Points[3])
     Points[0] = RearPos;
     Points[1] = (RearPos + MuzzlePos) * 0.5;
     Points[2] = MuzzlePos;
+    PointCount = 3;
+    // A blade off the bore line (the bow's limb blades) is swept too, so the
+    // part of the gun that can cut can also be what lands.
+    class'VRMeleeScale'.static.ContactBones(Weapon.Class, Bones);
+    for (I = 0; I < Bones.Length && PointCount < 5; ++I)
+        if (Weapon.MySkelMesh.MatchRefBone(Bones[I]) != INDEX_NONE)
+            Points[PointCount++] = Weapon.MySkelMesh.GetBoneLocation(Bones[I]);
 }
 
 simulated function Update()
 {
     local int I, Revision;
-    local vector Points[3], Step, Velocity, WorldStart, WorldEnd;
+    local vector Points[5], Step, Velocity, WorldStart, WorldEnd;
     local vector HitLocation, HitNormal, Center, PreviousCenter;
     local Actor Obstruction;
     local float Now, Delta, Speed, PointSpeed, MaxSpeed;
@@ -596,13 +673,13 @@ simulated function Update()
     Delta = Now - LastTime;
     Revision = Presenter.PresentedItem != None ? Presenter.PresentedItem.OwnershipRevision : 0;
     ComputeContactPoints(Points);
-    for (I = 0; I < 3; ++I)
+    for (I = 0; I < PointCount; ++I)
     {
         CurrentPoints[I] = Points[I];
         if (!FiniteVector(CurrentPoints[I])) { ++RejectedSamples; Cancel(); return; }
     }
     InverseBody = QuatInvert(QuatFromRotator(Presenter.BodyRotation));
-    for (I = 0; I < 3; ++I)
+    for (I = 0; I < PointCount; ++I)
         CurrentLocal[I] = QuatRotateVector(InverseBody, CurrentPoints[I] - Presenter.Human.Location);
     Center = CurrentLocal[2];
     PreviousCenter = PreviousLocal[2];
@@ -626,7 +703,7 @@ simulated function Update()
 
     if (!bHavePose)
     {
-        for (I = 0; I < 3; ++I) { PreviousPoints[I] = CurrentPoints[I]; PreviousLocal[I] = CurrentLocal[I]; }
+        for (I = 0; I < PointCount; ++I) { PreviousPoints[I] = CurrentPoints[I]; PreviousLocal[I] = CurrentLocal[I]; }
         LastTime = Now;
         LastPawnPosition = Presenter.Human.Location;
         LastPawnRotation = Presenter.Human.Rotation;
@@ -634,18 +711,6 @@ simulated function Update()
         LastRevision = Revision;
         bHavePose = true;
         return;
-    }
-
-    // Suppress bash candidate detection during firing or recoil recovery
-    ItemRecoil = Presenter.PresentedItem != None
-        ? Presenter.PresentedItem.RecoilBuffer
-        : (Presenter.PC != None ? Presenter.PC.WeaponBufferRotation : rot(0,0,0));
-    if (Weapon.IsFiring()) LastFiredTime = Now;
-    if (ItemRecoil != rot(0,0,0) || (Now - LastFiredTime) < 0.22
-        || Presenter.Hands[Presenter.WeaponHand].bTrigger)
-    {
-        if (bCandidate) bCandidate = false;
-        QuietTime = 0;
     }
 
     // Body-frame strike step: walking, turning and a grab's pull move the
@@ -661,10 +726,32 @@ simulated function Update()
         if (PointSpeed > MaxSpeed) MaxSpeed = PointSpeed;
     }
 
-    if (!(Speed >= 0 && Speed <= MaximumSpeed) || VSize(Step) > MaximumStep)
+    if (!FiniteVector(Velocity) || !(MaxSpeed >= 0 && MaxSpeed < 100000000))
     {
         ++RejectedSamples;
         Cancel();
+        return;
+    }
+    if (Speed > MaximumSpeed || VSize(Step) > MaximumStep)
+    {
+        ++RejectedSamples;
+        Interrupt(Now, Center, "sample");
+        return;
+    }
+
+    // Firing/recoil cannot qualify a bash in this sample. Keep the pose
+    // chain current so the next admitted sample cannot sweep across the gap.
+    ItemRecoil = Presenter.PresentedItem != None
+        ? Presenter.PresentedItem.RecoilBuffer
+        : (Presenter.PC != None ? Presenter.PC.WeaponBufferRotation : rot(0,0,0));
+    if (Weapon.IsFiring()) LastFiredTime = Now;
+    if (ItemRecoil != rot(0,0,0) || (Now - LastFiredTime) < 0.22
+        || Presenter.Hands[Presenter.WeaponHand].bTrigger)
+    {
+        if (bSwing) EndSwing(Now, Center, "missed");
+        bCandidate = false;
+        QuietTime = 0;
+        SaveSample(Now, Velocity);
         return;
     }
 
@@ -683,7 +770,7 @@ simulated function Update()
         CandidateTime = 0;
         Travel = 0;
         PeakSpeed = 0;
-        for (I = 0; I < 3; ++I) { CandidatePoints[I] = PreviousPoints[I]; CandidateLocal[I] = PreviousLocal[I]; }
+        for (I = 0; I < PointCount; ++I) { CandidatePoints[I] = PreviousPoints[I]; CandidateLocal[I] = PreviousLocal[I]; }
     }
 
     if (bCandidate)
@@ -719,17 +806,17 @@ simulated function Update()
             Obstruction = Presenter.Trace(HitLocation, HitNormal, CurrentPoints[2], Presenter.Hands[Presenter.WeaponHand].Position, false);
             if (Obstruction != None && KFPawn(Obstruction) == None)
             {
-                Pulse(0.50, 0.04, true);
+                ImpactFeedback(true);
                 EndSwing(Now, Center, "world");
             }
             else
             {
                 Contacts.Length = 0;
-                for (I = 0; I < 3; ++I)
+                for (I = 0; I < PointCount; ++I)
                 {
                     WorldStart = bJustStarted ? CandidatePoints[I] : PreviousPoints[I];
                     WorldEnd = CurrentPoints[I];
-                    GatherContacts(WorldStart, WorldEnd);
+                    GatherContacts(WorldStart, WorldEnd, PointContactSpeed(I, Delta));
                 }
                 ResolveContacts(Now, Center);
             }
@@ -756,5 +843,6 @@ defaultproperties
     MaximumStep=90
     MaximumPause=0.30
     BashRadius=7.0
+    PointCount=3
     InsideMinApproach=-0.2
 }

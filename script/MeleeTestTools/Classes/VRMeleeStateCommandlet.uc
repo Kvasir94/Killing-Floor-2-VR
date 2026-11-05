@@ -3,11 +3,63 @@ class VRMeleeStateCommandlet extends Commandlet dependson(VRPhysicalInteraction)
 
 var int Checks, Failures;
 
+function CheckBashContactSpeed()
+{
+    local VRPhysicalBash B;
+    local int I;
+    B = new(self) class'VRPhysicalBash';
+    // A pivot at the butt must not borrow the moving muzzle's speed.
+    B.CurrentLocal[2] = vect(4,0,0);
+    Check(Abs(B.PointContactSpeed(2, 0.01) - 400) < 0.01, "moving muzzle retains its own contact speed");
+    Check(!B.AdmitsContactSpeed(B.PointContactSpeed(0, 0.01)), "stationary butt cannot borrow muzzle speed");
+    B.CurrentLocal[2] = vect(0,0,0);
+    B.CurrentLocal[0] = vect(4,0,0);
+    Check(Abs(B.PointContactSpeed(0, 0.01) - 400) < 0.01, "moving butt retains its own contact speed");
+    Check(!B.AdmitsContactSpeed(B.PointContactSpeed(2, 0.01)), "stationary muzzle cannot borrow butt speed");
+    for (I = 0; I < 3; ++I)
+    {
+        B.CurrentLocal[I] = vect(3,0,0);
+        Check(Abs(B.PointContactSpeed(I, 0.01) - 300) < 0.01, "translation speed preserved at point " $ I);
+    }
+    B.CandidateLocal[0] = vect(-100,0,0);
+    Check(Abs(B.PointContactSpeed(0, 0.01) - 300) < 0.01, "windup path cannot inflate contact speed");
+    B.CurrentLocal[0] = vect(0.5,0,0);
+    Check(!B.AdmitsContactSpeed(B.PointContactSpeed(0, 0.01)), "slow contact rejected despite armed swing");
+    Check(B.AdmitsContactSpeed(B.StopSpeed), "contact threshold remains inclusive");
+    Check(!B.AdmitsContactSpeed(B.MaximumSpeed + 1), "impossible point speed rejected");
+    Check(B.PointContactSpeed(0, 0) == 0 && B.PointContactSpeed(0, -1) == 0,
+        "nonpositive sample interval cannot produce contact speed");
+    Check(B.PointContactSpeed(0, B.MaximumSampleTime + 0.01) == 0,
+        "hitch interval cannot produce contact speed");
+    Check(B.PointContactSpeed(-1, 0.01) == 0 && B.PointContactSpeed(3, 0.01) == 0,
+        "invalid sample point cannot produce contact speed");
+    Check(class'VRPhysicalFist'.static.OrdinaryDamage(100) == 15,
+        "ordinary fist bonus cannot exceed stock base bash");
+    Check(class'VRPhysicalFist'.static.OrdinaryDamage(12) == 10,
+        "ordinary fist reduction preserves weaker hits");
+}
+
 function CheckInteraction()
 {
     local VRPhysicalInteraction.InteractionState S, T;
     local class<KFSpecialMove> Moves[5];
     local int I;
+    local byte Attempt;
+    Attempt = class'KFSM_GrappleCombined'.static.PackFlagsBase(None);
+    Check(class'VRSM_HeldKnockdown'.static.UnattachedAttempt(Attempt, false, false),
+        "ordinary missed grapple attempt can yield before animation ends");
+    Check(!class'VRSM_HeldKnockdown'.static.UnattachedAttempt(Attempt, true, false),
+        "partial follower attachment cannot use empty-attempt admission");
+    Check(!class'VRSM_HeldKnockdown'.static.UnattachedAttempt(Attempt, false, true),
+        "partial owner interaction cannot use empty-attempt admission");
+    Check(!class'VRSM_HeldKnockdown'.static.UnattachedAttempt(Attempt, true, true),
+        "connected grapple still requires reciprocal victim validation");
+    Check(!class'VRSM_HeldKnockdown'.static.UnattachedAttempt(byte(Attempt + 1), false, false),
+        "success without a victim is not an unattached attempt");
+    Check(!class'VRSM_HeldKnockdown'.static.UnattachedAttempt(byte(Attempt + 2), false, false),
+        "derived miss state is not an ordinary attempt");
+    Check(!class'VRSM_HeldKnockdown'.static.UnattachedAttempt(255, false, false),
+        "unknown grapple flags remain rejected");
     Moves[0] = class'KFSM_GrappleVictim';
     Moves[1] = class'KFSM_DisabledGrappleVictim';
     Moves[2] = class'KFSM_HansGrappleVictim';
@@ -59,6 +111,7 @@ event int Main(string Params)
     local VRPhysicalMelee M, Other;
     local VRPhysicalFist Left, Right;
     CheckInteraction();
+    CheckBashContactSpeed();
     M = new(self) class'VRPhysicalMelee';
     Other = new(self) class'VRPhysicalMelee';
     M.CurrentHead[0] = vect(-30,0,0); M.CurrentHead[1] = vect(0,0,0); M.CurrentHead[2] = vect(30,0,0);

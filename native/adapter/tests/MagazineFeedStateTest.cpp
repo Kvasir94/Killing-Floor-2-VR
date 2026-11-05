@@ -92,6 +92,45 @@ int main() {
         Check(state.DisplayAmmo(15)==1,"full magazine removal still exposes only one chamber round");
     }
     {
+        // Stock round rules: a pulled magazine blocks every shot, chambered or
+        // not; the seat restores the unfired chamber with no rack.
+        State state;
+        state.Apply(Event::Observe,9);
+        state.Apply(Event::Eject,9);
+        Check(state.BlocksFire(9,false) && !state.BlocksFire(9,true),
+              "magazine-out chamber fires only with realistic ammo");
+        state.Apply(Event::Seat,15);
+        Check(!state.BlocksFire(15,false) && state.Chamber(15),"stock top-up keeps the chamber, no rack");
+        state.Apply(Event::Observe,0); state.Apply(Event::Eject,0); state.Apply(Event::Seat,15);
+        Check(state.BlocksFire(15,false) && state.BlocksFire(15,true),"an empty seat waits for the rack in both modes");
+    }
+    {
+        // Realistic snapshots: ten loaded (nine + chamber); the pulled
+        // magazine's nine are lost before the eject event, so stock drops to
+        // the chamber; seating a full fifteen holds sixteen with no rack.
+        State state;
+        state.Apply(Event::Observe,10);
+        state.Apply(Event::Eject,1);
+        Check(state.Out() && state.Chamber(1) && state.DisplayAmmo(1)==1,"lost magazine rounds keep the chamber");
+        state.Apply(Event::Seat,16);
+        Check(!state.Out() && state.Chamber(16) && !state.BlocksFire(16),"tactical reload holds magazine plus one");
+        // Rack with a live chamber: stock loses the ejected round, the next feeds.
+        state.Apply(Event::Rack,15);
+        Check(state.Chamber(15) && !state.BlocksFire(15),"rack ejects one live round and chambers the next");
+        // Rack with the magazine out: the ejected chamber leaves nothing.
+        state.Apply(Event::Eject,1);
+        state.Apply(Event::Observe,0);
+        state.Apply(Event::Rack,0);
+        Check(!state.Chamber(0) && state.BlocksFire(0),"magazine-out rack empties the chamber");
+        // AF2011: two chambers leave together as one two-round shot.
+        State pair;
+        pair.Apply(Event::Observe,12);
+        pair.Apply(Event::Eject,2);
+        Check(pair.Chamber(2) && !pair.BlocksFire(2),"two-barrel chamber pair survives its lost magazine");
+        pair.Apply(Event::Observe,0);
+        Check(!pair.Chamber(0) && pair.BlocksFire(0),"the paired shot empties both chambers");
+    }
+    {
         State unknown;
         Check(!unknown.Apply(Event::Seat,15) && unknown.flags==0,
               "unknown seat cannot infer an existing chamber from total rounds");
@@ -167,8 +206,15 @@ int main() {
             const auto removed=weapon.flags;
             Check(weapon.Apply(E::Eject,stock,action) && weapon.flags==removed,
                   "duplicate empty ejection preserves presence metadata");
-            Check(!weapon.Apply(E::Seat,stock,action) && weapon.flags==removed,
-                  "missing reserve cannot produce a seated loaded magazine");
+            Empty emptySeated=weapon;
+            Check(emptySeated.Apply(E::Seat,stock,action) && !(emptySeated.flags&Empty::Removed),
+                  "a real empty replacement restores installed-magazine presence");
+            Check(bool(emptySeated.flags&Empty::NeedsAction)==(action!=2)
+                  && !(emptySeated.flags&Empty::Cocked) && stock==0 && reserve==0,
+                  "empty seating preserves pending action without inventing rounds or cocking");
+            const auto installedEmpty=emptySeated.flags;
+            Check(!emptySeated.Apply(E::Seat,stock,action) && emptySeated.flags==installedEmpty,
+                  "duplicate empty seating cannot clear a pending action");
             Empty stowed=weapon, other;
             Check(stowed.flags==removed && other.flags==0,
                   "stow and switching retain state only on the exact weapon");
@@ -201,6 +247,9 @@ int main() {
         const auto cocked=open.flags;
         open.Apply(E::Eject,0,1);
         Check(open.flags==cocked,"duplicate ejection does not uncock an open bolt");
+        Empty emptyOpen=open;
+        Check(emptyOpen.Apply(E::Seat,0,1) && emptyOpen.flags==0,
+              "cocked open bolt accepts an empty magazine without requiring another action");
         Check(open.Apply(E::Seat,9,1) && open.flags==0,
               "cock-before-seat open bolt needs no invented chamber or second rack");
         Empty closed;
@@ -256,6 +305,44 @@ int main() {
               "reinserting the unworked open-bolt load gates actual shots");
         open.Apply(E::Action,12,1);
         Check(open.flags==0,"physical cock releases the same conserved open-bolt load");
+    }
+    {
+        State pistol;
+        pistol.Apply(Event::Observe,1);
+        pistol.Apply(Event::Eject,1);
+        pistol.Apply(Event::Shot,0);
+        pistol.Apply(Event::ShotFlushed,0);
+        Check((pistol.flags&State::UnlockedEmpty)!=0 && !pistol.Chamber(0),
+              "magazine-out shot closes the slide without a follower-operated lock");
+        State transferred=pistol;
+        transferred.Apply(Event::Seat,15);
+        Check((transferred.flags&State::UnlockedEmpty)!=0 && transferred.BlocksFire(15),
+              "stow/transfer and seating preserve the closed-slide rack obligation");
+        transferred.Apply(Event::Rack,15);
+        Check((transferred.flags&State::UnlockedEmpty)==0 && transferred.Chamber(15),
+              "full rack feeds the replacement without another ammo payment");
+        State empty;
+        empty.Apply(Event::Observe,0);
+        empty.Apply(Event::Eject,0);
+        Check((empty.flags&State::UnlockedEmpty)==0,
+              "removing an empty magazine does not release a previously locked slide");
+        empty.Apply(Event::Rack,0);
+        Check((empty.flags&State::UnlockedEmpty)!=0 && empty.Out(),
+              "releasing the slide without a magazine closes it and cannot feed");
+        empty.Apply(Event::Seat,0);
+        Check((empty.flags&State::UnlockedEmpty)!=0,
+              "seating an empty magazine cannot move the closed action");
+        empty.Apply(Event::Rack,0);
+        Check((empty.flags&State::UnlockedEmpty)==0 && !empty.Chamber(0),
+              "racking with an installed empty magazine restores follower lock eligibility");
+        State interrupted;
+        interrupted.Apply(Event::Observe,1);
+        interrupted.Apply(Event::Eject,1);
+        interrupted.Apply(Event::EmptyChamber,0);
+        State redrawn=interrupted;
+        redrawn.Apply(Event::Seat,15);
+        Check((redrawn.flags&State::UnlockedEmpty)!=0 && redrawn.BlocksFire(15),
+              "stowing at the rear stop without a magazine cannot invent a slide catch");
     }
     std::printf("Magazine feed checks=%d failures=%d\n",checks,failures);
     return failures?1:0;

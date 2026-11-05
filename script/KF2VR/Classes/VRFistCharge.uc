@@ -59,10 +59,7 @@ function Pulse(int Hand, float Strength, float Duration)
     local VRHandsBridge B;
     B = HapticBridge();
     if (B == None || Hand < 0 || Hand > 1) return;
-    if (B.NativeHapticMask == 0) { B.NativeHapticStrength = 0; B.NativeHapticDuration = 0; }
-    B.NativeHapticMask = B.NativeHapticMask | (1 << Hand);
-    B.NativeHapticStrength = FMax(B.NativeHapticStrength, Strength);
-    B.NativeHapticDuration = FMax(B.NativeHapticDuration, Duration);
+    B.QueueHandHaptic(1 << Hand, Strength, Duration);
 }
 
 // The same clench the punch itself requires. VRDualHandInput asks this too,
@@ -101,7 +98,7 @@ function bool ContextValid()
     local VRHandsBridge B;
     if (Inventory == None || Inventory.bDiagnostic || Inventory.Bridge == None) return false;
     B = Inventory.Bridge;
-    return B.Human != None && !B.Human.bDeleteMe && B.Human.Health > 0 && B.PC != None
+    return class'VRPhysicalInteraction'.static.Allowed(B.Human) && B.PC != None
         && B.PC.Pawn == B.Human && B.NativeConnection > 0 && B.NativeControlsEnabled != 0
         && B.NativeMenuActive == 0 && B.PC.UsingFirstPersonCamera();
 }
@@ -190,8 +187,12 @@ function Update()
         // A trigger already held when the hand became empty -- a dropped gun,
         // a thrown grenade, a charge just spent -- never starts a charge until
         // it is released.
-        if (!bTrigger) bTriggerArmed[Hand] = byte(bEmpty);
-        else if (!bEmpty) bTriggerArmed[Hand] = 0;
+        // An unavailable action is not a physical release. Reconnect while
+        // squeezed must not silently restart a charge.
+        if (!bEmpty || (Inventory.Bridge.NativeTriggerActiveMask & (1 << Hand)) == 0)
+            bTriggerArmed[Hand] = 0;
+        else if (Inventory.Input != None && Inventory.Input.TriggerReleased(Hand))
+            bTriggerArmed[Hand] = 1;
         bEligible = bEmpty && IsFistClosed(Hand);
         if (bEligible && bTrigger && bTriggerArmed[Hand] != 0 && !CoolingDown(Now) && ChargeTime > 0)
         {
@@ -322,7 +323,7 @@ function string WithheldReason(KFPawn Victim, ImpactInfo Impact)
 // Called by the punch for each enemy contact. Spends a full charge on the
 // first one that can react, starts the shared cooldown and lands the blow.
 // False leaves the contact to the normal punch and the charge untouched.
-function bool TryChargedHit(VRHandsBridge Bridge, int Hand, KFPawn Victim, ImpactInfo Impact, vector PunchDir)
+function bool TryChargedHit(VRHandsBridge Bridge, int Hand, KFPawn Victim, ImpactInfo Impact, vector PunchDir, int SwingSerial)
 {
     local string Reason;
     if (Victim == None || !CanSpend(Hand)) return false;
@@ -335,7 +336,7 @@ function bool TryChargedHit(VRHandsBridge Bridge, int Hand, KFPawn Victim, Impac
         return false;
     }
     Consume(Hand);
-    ApplyChargedHit(Bridge, Hand, Victim, Impact, PunchDir);
+    ApplyChargedHit(Bridge, Hand, Victim, Impact, PunchDir, SwingSerial);
     return true;
 }
 
@@ -355,7 +356,7 @@ function Consume(int Hand)
     Pulse(Hand, 1.0, 0.12);
 }
 
-function ApplyChargedHit(VRHandsBridge Bridge, int Hand, KFPawn Victim, ImpactInfo Impact, vector PunchDir)
+function ApplyChargedHit(VRHandsBridge Bridge, int Hand, KFPawn Victim, ImpactInfo Impact, vector PunchDir, int SwingSerial)
 {
     local class<DamageType> HitType;
     local vector Direction, Momentum;
@@ -388,7 +389,7 @@ function ApplyChargedHit(VRHandsBridge Bridge, int Hand, KFPawn Victim, ImpactIn
         HitType, Impact.HitInfo, Bridge.Human);
     if (Bridge.Human.Role < ROLE_Authority)
         Bridge.RequestNetworkPhysicalDamage(Victim, Damage, Impact.HitLocation, Momentum,
-            HitType, Impact.HitInfo.BoneName, Hand);
+            HitType, Impact.HitInfo.BoneName, Hand, SwingSerial);
     `log("KF2VR_MELEE kind=charged hand=" $ Hand $ " victim=" $ Victim.Class.Name
         $ " zone=" $ Impact.HitInfo.BoneName $ " head=" $ bHead $ " large=" $ bLarge
         $ " gloves=" $ bGloved $ " type=" $ HitType.Name $ " damage=" $ Damage);

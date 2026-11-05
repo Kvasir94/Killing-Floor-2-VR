@@ -8,13 +8,21 @@ var float RequestedAt;
 
 function bool AcceptsGun(KFWeapon W)
 {
-    return class'VRVampireReloadAuthority'.static.Supports(W);
+    return W != None && W.Class == class'KFWeap_HRG_Vampire'
+        && class'VRVampireReloadAuthority'.static.Supports(W);
 }
 
 function bool ReadyForBind() { return AuthoritySession > 0; }
 function bool Busy() { return bRequested; }
 function bool BlocksFire(KFWeapon W) { return bRequested && W == Gun; }
 function bool HoldsPose(KFWeapon W) { return bRequested && !bStockRequested && W == Gun; }
+
+function bool BeginAutomatic(VRWeaponRuntime R, int Hand)
+{
+    if (R == None || !AcceptsGun(R.Item) || !Owner.Automatic(R)) return false;
+    if (bRequested) return Runtime == R && GunHand == Hand && LocalIdentityCurrent();
+    return TryBegin(R, Hand);
+}
 
 // Preflight before asking authority to suspend a reload. Missing assets,
 // disabled physical reloads and two occupied hands use the acknowledged stock
@@ -24,19 +32,24 @@ function bool TryBegin(VRWeaponRuntime R, int Hand)
     local bool Physical;
     if (R == None || !AcceptsGun(R.Item)) return false;
     if (bRequested) return true;
+    if (Owner.DedicatedReloadBusy(R.Item)) return true;
     // The authority fence survives a temporary tracking/transport failure.
     // Consuming this intent avoids sending a stock RPC that it would reject.
     if (!Bridge.VampireAvailable()) return Bridge.VampireManaged();
     // Preserve the transaction already using the update loop. A concurrent
     // Vampire stock fallback would starve generic cleanup, while Mechanism
     // would prevent this helper from observing its own acknowledgement.
-    if (Owner.bActive || (Owner.Mechanism != None && Owner.Mechanism.bActive)) return true;
-    if (!R.IsCurrent() || !R.Item.IsInState('Active') || !R.Item.CanReload(0)) return true;
+    // A session parked for its button (the other hand's gun) owns no hand or loop.
+    if ((Owner.bActive && (!Owner.SessionParked() || Owner.Gun == R.Item)) || (Owner.Mechanism != None && Owner.Mechanism.bActive)) return true;
+    if (!R.IsCurrent() || Hand < 0 || Hand > 1
+        || Owner.InputOwner.Inventory.GetHeldForHand(Hand) != R
+        || (!R.Item.IsInState('Active') && !R.Item.IsInState('WeaponSprinting'))
+        || !R.Item.CanReload(0)) return true;
     Runtime = R; Gun = R.Item; GunHand = Hand;
     RootBone = 'RW_Weapon';
     if (R.Presenter != None && R.Presenter.ActiveProfile >= 0)
         RootBone = R.Presenter.WeaponProfiles[R.Presenter.ActiveProfile].RootBone;
-    Physical = Enabled() && FreeActionHand()
+    Physical = !Owner.Automatic(R) && Enabled() && FreeActionHand()
         && Gun.MySkelMesh != None && SampleMechanism();
     // Relinquish only this gun's support role before capturing the session.
     // The existing held grip is consumed by Bind; a real release/re-grip is
@@ -59,16 +72,17 @@ function bool TryEmptyFire(KFWeapon W, int Mode)
 {
     local VRWeaponRuntime R;
     if (!AcceptsGun(W) || Mode < 0 || Mode > 1
-        || !W.IsInState('Active') || W.HasAmmo(byte(Mode)) || W.AmmoCount[0] > 0
+        || (!W.IsInState('Active') && !W.IsInState('WeaponSprinting'))
+        || W.HasAmmo(byte(Mode)) || W.AmmoCount[0] > 0
         || !W.CanReload(0)) return false;
     // Only the stock auto-reload conversion is consumed. A charged blood
     // mode already returned above and retains its ordinary firing path.
     if (!Bridge.VampireAvailable()) return Bridge.VampireManaged();
     R = Owner.InputOwner.Inventory.Registry.FindItem(W);
     if (R == None || R.PrimaryHand < 0) return false;
-    if (!Enabled()) return TryBegin(R, R.PrimaryHand);
+    if (!Owner.AutomaticButtonRequired(W) && (!Enabled() || Owner.EmptyTriggerReloads())) return TryBegin(R, R.PrimaryHand);
     if (W.WeaponDryFireSnd.Length > 0) W.WeaponPlaySound(W.WeaponDryFireSnd[0]);
-    Owner.NoteDryFire();
+    Owner.NoteDryFire(W);
     return true;
 }
 
@@ -76,9 +90,9 @@ function bool LocalIdentityCurrent()
 {
     return Owner != None && Owner.InputOwner != None && Owner.InputOwner.ContextValid()
         && Gun != None && !Gun.bDeleteMe && Runtime != None && Runtime.IsCurrent()
-        && Runtime.Item == Gun && Runtime.PrimaryHand == GunHand
+        && Runtime.Item == Gun && GunHand >= 0 && GunHand <= 1
         && Runtime.OwnershipRevision == BoundRevision
-        && Owner.InputOwner.Inventory.Registry.GetPrimary(GunHand) == Runtime;
+        && Owner.InputOwner.Inventory.GetHeldForHand(GunHand) == Runtime;
 }
 
 function Update()
@@ -114,6 +128,7 @@ function Update()
         return;
     }
     if (Status != class'VRVampireReloadAuthority'.const.Held) { Abort(); return; }
+    if (!Owner.Automatic(Runtime) && Owner.AutomaticButtonRequired(Gun)) return;
     if (!bActive)
     {
         if (Gun.Role < ROLE_Authority) Gun.GotoState('Reloading');
@@ -130,6 +145,7 @@ function Update()
         bCommitSent = Bridge.VampireCommit(Gun, BeginRequest, AuthoritySession);
         return;
     }
+    if (Owner.Automatic(Runtime)) { UpdateHand(); return; }
     if ((Bridge.NativeValidMask & Bridge.NativeGripActiveMask & 3) != 3)
     { CancelHand(OffHand()); return; }
     UpdateHand();
@@ -148,7 +164,17 @@ function Finish()
 {
     local KFWeapon W;
     W = Gun;
-    if (!bStockRequested) PlayPumpSound(RetractSound);
+    if (Owner.Automatic(Runtime))
+    {
+        Runtime.AutomaticReload.bPaid = true;
+        Runtime.AutomaticReload.bStockCompleted = true;
+    }
+    if (!bStockRequested)
+    {
+        PlayPumpSound(RetractSound);
+        PlayPumpSound(CompleteSound);
+        PlayPumpSound(CompleteLayerSound);
+    }
     RestoreAnimation();
     if (W != None && !W.bDeleteMe && W.Role < ROLE_Authority && W.IsInState('Reloading'))
     {
@@ -188,4 +214,21 @@ function Abort()
 function PlaceVisuals()
 {
     if (!bStockRequested) super.PlaceVisuals();
+}
+
+// A finished stroke is waiting for stock's minimum time or its authority
+// acknowledgement. Asking for another grip here contradicts the fire gate.
+function PlaceHint()
+{
+    if (bStrokeComplete)
+    { HidePipeHints(); return; }
+    super.PlaceHint();
+}
+
+function string ReloadPrompt(KFWeapon W)
+{
+    if (!bRequested || bStockRequested || W != Gun || !LocalIdentityCurrent()
+        || !Bridge.bReloadHints) return "";
+    if (bStrokeComplete) return "RELOADING";
+    return super.ReloadPrompt(W);
 }

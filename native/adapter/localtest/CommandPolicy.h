@@ -8,7 +8,7 @@
 #include <unordered_map>
 
 namespace kf2vr::localtest {
-// No shell/console string is accepted. All values are bounded protocol tokens.
+// Console text is confined to the opted-in local game channel, never a shell.
 struct Request {
     std::string session, id, operation, player, argument;
     unsigned count{};
@@ -29,6 +29,14 @@ inline bool Decimal(std::string_view value, unsigned& output) {
     const auto [end,error]=std::from_chars(value.data(),value.data()+value.size(),output);
     return error==std::errc{} && end==value.data()+value.size();
 }
+inline bool ConsoleText(std::string_view value) {
+    if (value.empty() || value.size()>384 || value.find_first_not_of(' ')==value.npos) return false;
+    for (unsigned char c:value) if (c<32 || c>126) return false;
+    return true;
+}
+inline bool FreshRequest(std::uint64_t written,std::uint64_t current,std::uint64_t minimum=0) {
+    return (!minimum || written>minimum) && written<=current && current-written<=60ULL*10000000;
+}
 inline bool Parse(std::string_view wire, Request& output) {
     if (wire.empty() || wire.size()>512) return false;
     if (wire.back()=='\n') wire.remove_suffix(1);
@@ -40,11 +48,13 @@ inline bool Parse(std::string_view wire, Request& output) {
     }
     unsigned player=0,count=0;
     if (!HexId(fields[0]) || !HexId(fields[1]) || !Decimal(fields[3],player) ||
-        player>2147483647u || !Token(fields[4]) || !Decimal(fields[5],count)) return false;
+        player>2147483647u || !Decimal(fields[5],count)) return false;
     const auto op=fields[2],arg=fields[4];
+    if (op=="console" ? !ConsoleText(arg) : !Token(arg)) return false;
     if (op=="status" || op=="disable") { if (arg!="-" || count!=0) return false; }
     else if (op=="catalog" || op=="give-all") { if (count!=0) return false; }
     else if (op=="give-one") { if (arg=="-" || count!=1) return false; }
+    else if (op=="console") { if (count!=0) return false; }
     else if (op=="diagnostic") {
         constexpr std::array cases{"ready","snapshot",
             "case-deadbolt-left-manual","case-deadbolt-right-manual",
@@ -71,7 +81,16 @@ public:
         if (enabled_ || closed_ || !explicitOptIn || !localAuthority || !HexId(session)) return false;
         session_=std::move(session); enabled_=true; return true;
     }
-    bool Enabled() const { return enabled_; }
+    bool Enabled() const { return enabled_ && !suspended_; }
+    bool Suspended() const { return enabled_ && suspended_ && !closed_; }
+    bool Suspend() {
+        if (!Enabled()) return false;
+        suspended_=true; return true;
+    }
+    bool Resume(std::string_view session,bool explicitOptIn,bool localAuthority) {
+        if (!enabled_ || closed_ || !suspended_ || session!=session_ || !explicitOptIn || !localAuthority) return false;
+        suspended_=false; return true;
+    }
     const std::string& Session() const { return session_; }
     bool Complete(const std::string& id,const std::string& receipt) {
         const auto entry=ledger_.find(id);
@@ -85,7 +104,7 @@ public:
         if (request.session!=session_) return "error\twrong_session";
         if (const auto existing=ledger_.find(request.id);existing!=ledger_.end())
             return existing->second.wire==wire ? existing->second.receipt : "error\tid_conflict";
-        if (!enabled_) return "error\tcontrols_off";
+        if (!Enabled()) return "error\tcontrols_off";
         if (ledger_.size()>=MaxActions && request.operation!="disable") return "error\tsession_action_limit";
         if (request.operation!="disable" && seenTime_ && (nowMs<lastTime_ || nowMs-lastTime_<500))
             return Remember(request.id,wire,"error\trate_limited");
@@ -108,7 +127,7 @@ private:
     std::string Remember(const std::string& id,std::string_view wire,std::string receipt) {
         ledger_.emplace(id,Entry{std::string(wire),receipt}); return receipt;
     }
-    bool enabled_{},closed_{},seenTime_{};
+    bool enabled_{},closed_{},seenTime_{},suspended_{};
     std::uint64_t lastTime_{};
     std::string session_;
     std::unordered_map<std::string,Entry> ledger_;

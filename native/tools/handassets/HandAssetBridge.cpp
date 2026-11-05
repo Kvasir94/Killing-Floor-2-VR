@@ -98,11 +98,40 @@ void* FindWithSave(void* objectClass, void* outer, const wchar_t* name, int exac
         // textures owned by this hand package and these texture properties.
         if (payload.find(L"|SRGB|") == std::wstring::npos &&
             payload.find(L"|CompressionSettings|") == std::wstring::npos &&
-            payload.find(L"|LODGroup|") == std::wstring::npos) return nullptr;
+            payload.find(L"|LODGroup|") == std::wstring::npos &&
+            payload.find(L"|BodySetup|") == std::wstring::npos &&
+            payload.find(L"|BoundsBodies|") == std::wstring::npos &&
+            payload.find(L"|bUsedWithSkeletalMesh|") == std::wstring::npos &&
+            payload.find(L"|bUsedWithStaticLighting|") == std::wstring::npos) return nullptr;
         void* result = portal_asset_edit::Apply(editorBase, originalFind, packageName, payload);
         std::wofstream(std::filesystem::path(outputPath + L".property-edits"), std::ios::app)
             << L"success=" << (result != nullptr) << L" request=" << payload << L'\n';
         return result;
+    }
+    // A script-created material lacks RF_Public|RF_Standalone, so SavePackage
+    // would drop it and the game could not load it by name. Copy the flags
+    // from the factory-imported hand mesh, as the takes above do.
+    if (name && std::wstring(name) == L"KF2VRHands.PublishHologram") {
+        void* material = originalFind(originalFind(nullptr,nullptr,L"Engine.Material",0),nullptr,
+            L"KF2VRHands.VRHologram",1);
+        void* mesh = originalFind(originalFind(nullptr,nullptr,L"Engine.SkeletalMesh",0),nullptr,
+            L"KF2VRHands.VRFloatingHands",1);
+        constexpr std::uint64_t publicStandalone = 0x0000000400000000ULL | 0x0008000000000000ULL;
+        if (!material || !mesh || (*reinterpret_cast<std::uint64_t*>(static_cast<char*>(mesh)+0x10)
+            & publicStandalone) != publicStandalone) return nullptr;
+        *reinterpret_cast<std::uint64_t*>(static_cast<char*>(material)+0x10) |= publicStandalone;
+        return material;
+    }
+    if (name && std::wstring(name) == L"KF2VRHands.PublishHandBounds") {
+        void* asset = originalFind(originalFind(nullptr,nullptr,L"Engine.PhysicsAsset",0),nullptr,
+            L"KF2VRHands.VRFloatingHandsBounds",1);
+        void* mesh = originalFind(originalFind(nullptr,nullptr,L"Engine.SkeletalMesh",0),nullptr,
+            L"KF2VRHands.VRFloatingHands",1);
+        constexpr std::uint64_t publicStandalone = 0x0000000400000000ULL | 0x0008000000000000ULL;
+        if (!asset || !mesh || (*reinterpret_cast<std::uint64_t*>(static_cast<char*>(mesh)+0x10)
+            & publicStandalone) != publicStandalone) return nullptr;
+        *reinterpret_cast<std::uint64_t*>(static_cast<char*>(asset)+0x10) |= publicStandalone;
+        return asset;
     }
     if (!name || packageName + L".SaveRequest" != name)
         return originalFind(objectClass, outer, name, exactClass);

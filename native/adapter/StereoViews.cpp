@@ -79,17 +79,18 @@ bool MakeProjection(const pinned::NativeMatrix4& stock, const xr::FovRadians& fo
 template<class Eye>
 bool MakeEye(const Transform<Eye, frames::Tracking>& eye, const xr::FovRadians& fov,
              const HeadInTracking& reference, dx::FXMMATRIX baseInverseView,
-             const pinned::NativeMatrix4& stockProjection, EyeMatrices& out) {
+             const pinned::NativeMatrix4& stockProjection, EyeMatrices& out, float worldScale) {
     const Quat referenceInverse = reference.rot.Normalized().Inverse();
     const Quat relative = (referenceInverse * eye.rot.Normalized()).Normalized();
     const Vec3 position = referenceInverse.Rotate(eye.pos - reference.pos);
     // Reflect XR's -Z-forward axes into +Z-forward native camera axes.
     // An improper basis change conjugates the rotation: (-qx,-qy,qz,qw).
     const auto quaternion = dx::XMVectorSet(-relative.x, -relative.y, relative.z, relative.w);
+    const float unitsPerMetre = kProvisionalUnitsPerMetre * worldScale;
     const auto eyeLocal = dx::XMMatrixRotationQuaternion(quaternion) *
-        dx::XMMatrixTranslation(position.x * kProvisionalUnitsPerMetre,
-                                position.y * kProvisionalUnitsPerMetre,
-                               -position.z * kProvisionalUnitsPerMetre);
+        dx::XMMatrixTranslation(position.x * unitsPerMetre,
+                                position.y * unitsPerMetre,
+                               -position.z * unitsPerMetre);
     dx::XMMATRIX worldToEye;
     if (!Invert(eyeLocal * baseInverseView, worldToEye)) return false;
     out.view = Store(worldToEye);
@@ -225,6 +226,10 @@ void ConfigureEye(ViewCopy& copy, const EyeMatrices& matrices, const EyeRect& re
 }
 } // namespace
 
+float SanitiseWorldScale(float scale) noexcept {
+    return Finite(scale) && scale > 1.0f && scale <= kMaxWorldScale ? scale : 1.0f;
+}
+
 bool IsValidWorldViewOffset(const Vec3& offset) noexcept {
     return Finite(offset.x) && Finite(offset.y) && Finite(offset.z) &&
         offset.LengthSq() <= kMaxWorldViewOffset * kMaxWorldViewOffset;
@@ -236,8 +241,10 @@ bool BuildStereoMatrices(const pinned::NativeMatrix4& baseView,
                          const xr::FrameState& frame,
                          std::array<EyeMatrices, 2>& out, std::string& error,
                          const Quat& appliedCameraRotation,
-                         const Vec3& worldViewOffset) {
+                         const Vec3& worldViewOffset,
+                         float worldScale) {
     error.clear();
+    worldScale = SanitiseWorldScale(worldScale);
     if (!IsValidWorldViewOffset(worldViewOffset)) {
         error = "Rendering-only view offset must be finite and within 400 Unreal units";
         return false;
@@ -280,8 +287,8 @@ bool BuildStereoMatrices(const pinned::NativeMatrix4& baseView,
         inverseView = inverseView * dx::XMMatrixTranslation(
             worldViewOffset.x, worldViewOffset.y, worldViewOffset.z);
     std::array<EyeMatrices, 2> result;
-    if (!MakeEye(frame.eyeLeft.pose, frame.eyeLeft.fov, initialHead, inverseView, baseProjection, result[0]) ||
-        !MakeEye(frame.eyeRight.pose, frame.eyeRight.fov, initialHead, inverseView, baseProjection, result[1])) {
+    if (!MakeEye(frame.eyeLeft.pose, frame.eyeLeft.fov, initialHead, inverseView, baseProjection, result[0], worldScale) ||
+        !MakeEye(frame.eyeRight.pose, frame.eyeRight.fov, initialHead, inverseView, baseProjection, result[1], worldScale)) {
         error = "Eye pose or asymmetric field of view cannot produce a finite matrix";
         return false;
     }
@@ -292,7 +299,8 @@ bool BuildStereoMatrices(const pinned::NativeMatrix4& baseView,
 bool StereoViews::SubmitStereoPair(void* familyPointer, const xr::FrameState& frame,
                                   pinned::SubmitSceneFamilyFn originalSubmit,
                                   void* canvas, std::uintptr_t baseAddress, std::string& error,
-                                  const AppliedHeadAim* appliedAim, const Vec3& worldViewOffset) {
+                                  const AppliedHeadAim* appliedAim, const Vec3& worldViewOffset,
+                                  float worldScale) {
     lastSubmittedValid_ = false;
     lastPairValid_ = false;
     error.clear();
@@ -335,7 +343,7 @@ bool StereoViews::SubmitStereoPair(void* familyPointer, const xr::FrameState& fr
     const HeadInTracking candidateReference = appliedAim ? appliedAim->reference :
         (referenceReady_ ? initialHead_ : frame.head);
     if (!BuildStereoMatrices(view.viewMatrix, view.projectionMatrix, candidateReference, frame, matrices, error,
-                             appliedAim ? appliedAim->cameraRotation : Quat{}, worldViewOffset))
+                             appliedAim ? appliedAim->cameraRotation : Quat{}, worldViewOffset, worldScale))
         return false;
     if (baseAddress > (std::numeric_limits<std::uintptr_t>::max)() - build::Rva(pinned::kSceneViewCopyConstructRva) ||
         !Executable(baseAddress+build::Rva(pinned::kSceneViewCopyConstructRva)) ||

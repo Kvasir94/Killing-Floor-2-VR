@@ -74,10 +74,24 @@ public:
     QuadFrame SubmitStaticQuadFrame();
     std::uint64_t StaticQuadFrames() const;
     std::uint64_t StaticQuadFailures() const;
+    // Loading-movie mirror: a dynamic quad swapchain the size and format family
+    // of the game's backbuffer. Owner thread only, after Initialise; false when
+    // the runtime offers no sRGB format in the backbuffer's family.
+    bool CreateMirrorQuad(std::uint32_t width, std::uint32_t height, std::uint32_t backbufferDxgiFormat,
+                          float widthMetres, float distanceMetres);
+    // Like SubmitStaticQuadFrame, but first copies `source` (the backbuffer the
+    // loading movie just drew, before its Present) into the mirror quad. Only
+    // for the thread that is presenting that movie: it already owns the game's
+    // immediate context. Falls back to the static quad for the frame when the
+    // copy is impossible; Unavailable when no mirror exists.
+    QuadFrame SubmitMirrorQuadFrame(ID3D11Texture2D* source);
+    std::uint64_t MirrorQuadFrames() const;
+    std::uint64_t MirrorQuadFailures() const;
     void RequestExit();
     // Thread-safe receipt only: the next focused XR frame applies the pulse
     // on the session owner thread. Left=0, right=1; durations are seconds.
     bool RequestHaptic(unsigned hand, float amplitude, float durationSeconds);
+    void SetHapticStrength(float strength);
     std::uint32_t RecommendedWidth() const override;
     std::uint32_t RecommendedHeight() const override;
     ID3D11Device* Device() const;

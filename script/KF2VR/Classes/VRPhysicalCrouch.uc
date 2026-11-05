@@ -51,7 +51,7 @@ function Update(VRHandsBridge B, float RealDelta)
     local float Drop;
     if (B == None || B.NativeHeadTracked == 0 || B.NativeRecenterRequested != 0
         || RealDelta <= 0 || RealDelta > 0.25 || Epoch != B.NativeCalibrationEpoch
-        || B.NativeStandingHeight <= 0)
+        || B.NativeConnection <= 0)
     {
         // No usable head height: drop the physical crouch only. A button
         // crouch needs no calibration and survives tracking blips.
@@ -76,7 +76,10 @@ function Update(VRHandsBridge B, float RealDelta)
     {
         // Reject transient drops and tracking jumps. A full stable dwell is
         // needed after the movement has settled, including for seated users.
-        if (Drop >= 0.33 && Abs(B.NativeHeadHeight - PreviousHeight) <= 0.025)
+        // Absolute XR height may be zero/negative in LOCAL reference space;
+        // only the drop from the calibrated standing reference has meaning.
+        // Use speed, not distance per frame, so settling behaves at 120 Hz.
+        if (Drop >= 0.33 && Abs(B.NativeHeadHeight - PreviousHeight) / RealDelta <= 0.20)
             StableTime += RealDelta;
         else StableTime = 0;
         if (StableTime >= 0.15) bCrouched = true;

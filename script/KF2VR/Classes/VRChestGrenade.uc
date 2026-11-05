@@ -18,10 +18,16 @@ var class<KFProj_Grenade> MarkerClass;
 var class<KFProj_Grenade> UnsupportedMarkerClass;
 var string UnsupportedBodyReason;
 var vector LastPosition, LastPawnPosition, ThrowVelocity;
+var VRThrowRelease Thrower;
 var int NearChestMask;
 var float NearSince[2];
 var rotator Torso;
 var float LastTime;
+// The preview releases immediately; only the matching authority refusal cues later.
+var int ReleaseRequest, ReleaseHand, ReleaseCalibration, ReleaseRoomSpace;
+var KFPawn_Human ReleasePawn;
+// Grenades thrown from the chest; VR Training watches it for its step.
+var int ThrowCount;
 
 function Initialize(VRDualHandInput I)
 {
@@ -36,10 +42,7 @@ function bool IsHeld(int Hand) { return HoldingHand == Hand && HeldClass != None
 function Pulse(int Hand, float Strength, float Duration)
 {
     if (Bridge == None || Hand < 0 || Hand > 1) return;
-    if (Bridge.NativeHapticMask == 0) { Bridge.NativeHapticStrength = 0; Bridge.NativeHapticDuration = 0; }
-    Bridge.NativeHapticMask = Bridge.NativeHapticMask | (1 << Hand);
-    Bridge.NativeHapticStrength = FMax(Bridge.NativeHapticStrength, Strength);
-    Bridge.NativeHapticDuration = FMax(Bridge.NativeHapticDuration, Duration);
+    Bridge.QueueHandHaptic(1 << Hand, Strength, Duration);
 }
 
 // Weaker and longer than the 0.25/0.035 grab cue, so a refused reach at the
@@ -74,6 +77,8 @@ function KFWeapon FindProjectileOwner(KFInventoryManager Inv)
 
 function CancelHand(int Hand, optional bool bThrown)
 {
+    // Context/tracking cancellation also retires an already released preview's reply.
+    if (!bThrown && ReleaseRequest > 0 && ReleaseHand == Hand) ClearReleaseReply();
     if (!IsHeld(Hand)) return;
     // Losing a held grenade to tracking, a hitch, recenter or the selector is
     // otherwise indistinguishable from a broken throw.
@@ -85,6 +90,28 @@ function CancelHand(int Hand, optional bool bThrown)
     Bridge.Hands[Hand].bTriggerArmed = false;
     // Inventory was only reserved logically; cancellation consumes nothing.
     UpdateChestProximity();
+}
+
+function ClearReleaseReply()
+{
+    ReleaseRequest = 0; ReleasePawn = None;
+}
+
+function UpdateReleaseReply()
+{
+    local byte Result;
+    local int Hand;
+    if (ReleaseRequest <= 0) return;
+    if (!NetworkMode() || !InputOwner.ContextValid() || Bridge.Human != ReleasePawn
+        || !HandTracked(ReleaseHand) || FiringLocked()
+        || ReleaseCalibration != Bridge.NativeCalibrationEpoch || ReleaseRoomSpace != Bridge.NativeRoomSpaceEpoch
+        || InputOwner.IsSelectorOpen(0) || InputOwner.IsSelectorOpen(1))
+    { ClearReleaseReply(); return; }
+    Result = Bridge.ReadNetworkGrenadeResult(ReleaseRequest, ReleasePawn);
+    if (Result == 0) return;
+    Hand = ReleaseHand;
+    ClearReleaseReply();
+    if (Result == 2) Pulse(Hand, 0.18, 0.050);
 }
 
 function bool NetworkMode()
@@ -119,7 +146,7 @@ function vector ChestPosition()
 // The stock EMP flight effect uses its oversized first-person mesh (27.34 cm
 // long). Fit its display to the standard frag's measured 11.40 cm length;
 // projectile gameplay and the other authored grenade sizes stay stock.
-function bool UsesEMPDisplay(class<KFProj_Grenade> GrenadeClass)
+static function bool UsesEMPDisplay(class<KFProj_Grenade> GrenadeClass)
 {
     // Derived grenade gameplay can reuse the exact stock mesh effect. Fit the
     // displayed asset, not the class name; unrelated custom effects stay intact.
@@ -127,7 +154,7 @@ function bool UsesEMPDisplay(class<KFProj_Grenade> GrenadeClass)
         && GrenadeClass.default.ProjFlightTemplate == class'KFProj_EMPGrenade'.default.ProjFlightTemplate;
 }
 
-function float GrenadeDisplayScale(class<KFProj_Grenade> GrenadeClass)
+static function float GrenadeDisplayScale(class<KFProj_Grenade> GrenadeClass)
 {
     if (UsesEMPDisplay(GrenadeClass))
         return 5.699153 / 13.671265;
@@ -139,7 +166,7 @@ function float GrenadeDisplayScale(class<KFProj_Grenade> GrenadeClass)
 // their pivot: frag, HE, medic, freeze and flashbang sit within 1 UU. These are
 // the exceptions, from the cooked StaticMesh bounds (see VR_CONTROLS.md). An
 // unknown or modded grenade is treated as centred.
-function vector MeshCenter(class<KFProj_Grenade> GrenadeClass)
+static function vector MeshCenter(class<KFProj_Grenade> GrenadeClass)
 {
     local vector Center;
     if (GrenadeClass == None) return Center;
@@ -168,6 +195,7 @@ function bool FreeHand(int Hand)
         && !(NetworkMode() && Bridge.NetworkGrenadePending())
         && HandTracked(Hand) && !FiringLocked()
         && !InputOwner.IsSelectorOpen(0) && !InputOwner.IsSelectorOpen(1)
+        && !InputOwner.HandCarrying(Hand)
         && InputOwner.Inventory.Registry.GetPrimary(Hand) == None
         && InputOwner.Inventory.Registry.GetSupport(Hand) == None;
 }
@@ -186,22 +214,32 @@ function vector DisplayCenter()
 // Kept for the calibration preview and older callers.
 function vector ChestGrabPosition() { return SlotGrabPosition(); }
 
-function float ChestGrabRadius() { return 12.0; }
-function float ChestGrabExitRadius() { return 16.0; }
-function float ChestGrabReportRadius() { return 20.0; }
+function float ChestGrabRadius() { return 12.0 * FClamp(Bridge.GrenadeZoneScale, 0.5, 1.5); }
+function float ChestGrabExitRadius() { return 16.0 * FClamp(Bridge.GrenadeZoneScale, 0.5, 1.5); }
+function float ChestGrabReportRadius() { return 20.0 * FClamp(Bridge.GrenadeZoneScale, 0.5, 1.5); }
 
 // The reaching point: the palm centre, as AS2's HandCenter volume.
 function vector GrabPoint(int Hand) { return Bridge.PalmPosition(Hand); }
 
+// A failed/stale chest model must never reserve a body contact or take a grip.
+// This is model availability, not whether the player is looking at the chest.
+function bool HasVisibleSlot()
+{
+    return MarkerClass != None && ZoneBodies.Length > 0
+        && Bridge.PC != None && Bridge.PC.GetPerk() != None
+        && MarkerClass == Bridge.PC.GetPerk().GetGrenadeClass();
+}
+
 function bool InGrabZone(int Hand, optional bool bWasNear)
 {
-    return VSize(GrabPoint(Hand) - SlotGrabPosition()) <= (bWasNear ? ChestGrabExitRadius() : ChestGrabRadius());
+    return HasVisibleSlot()
+        && VSize(GrabPoint(Hand) - SlotGrabPosition()) <= (bWasNear ? ChestGrabExitRadius() : ChestGrabRadius());
 }
 
 // AS2's grab choice between overlapping targets: the nearer one wins.
 function bool PrefersOver(int Hand, vector Other)
 {
-    return Retrievable(Hand) && InGrabZone(Hand, (NearChestMask & (1 << Hand)) != 0)
+    return Retrievable(Hand) && InGrabZone(Hand, false)
         && VSize(GrabPoint(Hand) - SlotGrabPosition()) <= VSize(GrabPoint(Hand) - Other);
 }
 
@@ -234,6 +272,7 @@ function HandFrame(int Hand, out vector Position, out vector Forward, out vector
 function PlaceHeldPreview(int Hand)
 {
     local vector Wrist, Forward, Thumb, Palm, Center, Offset;
+    local vector LocalForward, LocalThumb, RotatedForward, RotatedThumb;
     local rotator Facing;
     if (Preview == None) return;
     HandFrame(Hand, Wrist, Forward, Thumb, Palm);
@@ -248,6 +287,13 @@ function PlaceHeldPreview(int Hand)
         Thumb = Normal(Thumb - Forward * (Thumb dot Forward));
         Offset = class'VRGrenadeGripPose'.static.HeldOffset(HeldClass.Name);
         Center = Wrist + Forward * Offset.X + Thumb * Offset.Y + Palm * Offset.Z;
+        if (class'VRGrenadeGripPose'.static.HeldAxes(HeldClass.Name, LocalForward, LocalThumb))
+        {
+            RotatedForward = Forward * LocalForward.X + Thumb * LocalForward.Y + Palm * LocalForward.Z;
+            RotatedThumb = Forward * LocalThumb.X + Thumb * LocalThumb.Y + Palm * LocalThumb.Z;
+            Forward = Normal(RotatedForward);
+            Thumb = Normal(RotatedThumb);
+        }
         Facing = OrthoRotation(Forward, Thumb cross Forward, Thumb);
         Preview.SetRotation(Facing);
         Preview.SetTranslation(Center - ((MeshCenter(HeldClass) * GrenadeDisplayScale(HeldClass)) >> Facing));
@@ -255,13 +301,19 @@ function PlaceHeldPreview(int Hand)
     Preview.ForceUpdate(true);
 }
 
-// Grab/cancel can occur after the free hand's normal tick. Evaluate once here
-// so the preview and fingers change together, including a same-tick release.
+// Grab/cancel can occur after the free hand's normal tick. Update the finger
+// targets now; PlaceAll evaluates the root rig after setting current wrist IK.
+// Forcing that rig here can bake the old weapon/support wrist into this grab.
 function RefreshGripPose()
 {
+    // One line per grab: whether the authored grip can apply to this hand.
+    if (HeldClass != None && HoldingHand >= 0 && HoldingHand <= 1 && Bridge.FreeHandPose != None)
+        `log("KF2VR_GRENADE grip hand=" $ HoldingHand @ "class=" $ HeldClass.Name
+            @ "profile=" $ class'VRGrenadeGripPose'.static.ProfileFor(HeldClass.Name)
+            @ "ready=" $ Bridge.FreeHandPose.bReady
+            @ "catchPose=" $ Bridge.FreeHandPose.bWorldCatchPose[HoldingHand]);
     if (Bridge.FreeHandPose == None || !Bridge.FreeHandPose.bReady) return;
     Bridge.FreeHandPose.Apply();
-    if (Bridge.Arms != None) Bridge.Arms.ForceSkelUpdate();
 }
 
 // A zed holding the player sets bNoWeaponFiring. Match tracked melee: a clot
@@ -286,8 +338,10 @@ function bool HeldContextValid()
 
 function bool TryGrab(int Hand)
 {
-    if (!FreeHand(Hand)) return false;
-    if (!InGrabZone(Hand, (NearChestMask & (1 << Hand)) != 0))
+    if (!FreeHand(Hand) || !HasVisibleSlot()) return false;
+    // Proximity feedback retains its wider exit radius; a new grab uses the
+    // same strict acquisition boundary as competing pouch/body arbitration.
+    if (!InGrabZone(Hand, false))
     {
         // Only a reach that lands in the surrounding band reports a refusal; an
         // ordinary empty-hand grip away from the slot stays silent.
@@ -302,6 +356,7 @@ function bool TakeGrenade(int Hand)
     local KFInventoryManager Inv;
     local class<KFProj_Grenade> GrenadeClass;
     local KFWeapon StockOwner;
+    if (!Retrievable(Hand) || !InGrabZone(Hand)) return false;
     Inv = KFInventoryManager(Bridge.Human.InvManager);
     if (Inv == None || AvailableCount() == 0 || Bridge.PC.GetPerk() == None) { PulseRefused(Hand); return false; }
 
@@ -314,6 +369,14 @@ function bool TakeGrenade(int Hand)
     CaptureEpoch = Bridge.NativeCalibrationEpoch;
     LastPosition = Bridge.PalmPosition(Hand); LastPawnPosition = Bridge.Human.Location;
     LastTime = Bridge.WorldInfo.RealTimeSeconds; Samples = 0; ThrowVelocity = vect(0,0,0);
+    if (Thrower == None)
+    {
+        Thrower = new(self) class'VRThrowRelease';
+        // #83: a grenade lob's grip opens late and unevenly after its peak.
+        // Take the peak over 0.15 s before the newest frames, not 0.056 s.
+        Thrower.WindowSeconds = 0.15;
+    }
+    Thrower.Reset(Hand);
     Preview = new(Bridge) class'ParticleSystemComponent';
     Preview.SetTemplate(GrenadeClass.default.ProjFlightTemplate);
     Preview.SetAbsolute(true, true, true);
@@ -337,23 +400,32 @@ function bool TakeGrenade(int Hand)
 
 function bool Throw()
 {
-    local int Hand;
+    local int Hand, Request;
     local vector Position, HitLocation, HitNormal;
     local bool Thrown;
     Hand = HoldingHand;
     if (Hand < 0 || Hand > 1) return false;
     Position = Bridge.PalmPosition(Hand);
+    // Alyx's release: drop the braking frames, average direction at peak speed.
+    if (Thrower != None) ThrowVelocity = Thrower.Release(Hand, Bridge.WorldInfo.RealTimeSeconds, ThrowVelocity);
     // Refuse a release through a wall and stale inventory/perk transactions.
     if (HeldContextValid()
         && Bridge.Trace(HitLocation, HitNormal, Position, Bridge.HeadPosition, false) == None)
     {
         if (NetworkMode())
         {
-            Thrown = Bridge.RequestNetworkGrenade(HeldOwner, HeldClass, Hand, Position, ThrowVelocity);
+            Request = Bridge.RequestNetworkGrenade(HeldOwner, HeldClass, Hand, Position, ThrowVelocity);
+            Thrown = Request > 0;
+            if (Thrown)
+            {
+                ReleaseRequest = Request; ReleaseHand = Hand; ReleasePawn = Bridge.Human;
+                ReleaseCalibration = Bridge.NativeCalibrationEpoch; ReleaseRoomSpace = Bridge.NativeRoomSpaceEpoch;
+            }
         }
         else Thrown = class'VRGrenadeThrow'.static.Launch(Bridge, Bridge.Human, HeldOwner,
             HeldClass, Hand, Position, ThrowVelocity, Bridge.HeadPosition);
     }
+    if (Thrown) ThrowCount++;
     CancelHand(Hand, Thrown);
     return Thrown;
 }
@@ -391,66 +463,29 @@ function bool RejectStowedBody(string Reason, optional ParticleModuleSize Size)
     return false;
 }
 
-// The stock EMP body authors DistributionVectorConstant_4 at unit size. SDK
-// distributions can be omitted after baking; the observed stock client has no
-// UObject and eight unit lookup values. Match only this audited graph and raw
-// fingerprint, without interpreting operation/type numbers as a general format.
-// Called after the normal frame guards, only for an absent distribution object.
-function bool AuditedEMPUnitSize(ParticleSystem FlightTemplate, ParticleEmitter Emitter,
-    ParticleLODLevel LOD, ParticleModuleSize Size)
+// Cooked stock grenade templates can omit the constant distribution UObject.
+// Admit only their exact observed unit-size lookup fingerprint, after the
+// fixed body/module guards below. This does not decode arbitrary distributions
+// or copy particle graphs; it presents the unchanged stock mesh at unit size.
+function bool BakedStockUnitSize(ParticleSystem FlightTemplate, ParticleModuleSize Size)
 {
-    local ParticleModuleTypeDataMesh Body;
-    local string StockPath;
     local int I;
-    StockPath = "WEP_3P_EMP_EMIT.FX_EMP_Grenade_Mesh";
-    if (FlightTemplate != class'KFProj_EMPGrenade'.default.ProjFlightTemplate)
-        return RejectStowedBody("emp_template_reference stock_template="
-            $ PathName(class'KFProj_EMPGrenade'.default.ProjFlightTemplate), Size);
-    if (PathName(FlightTemplate) != StockPath)
-        return RejectStowedBody("emp_template_identity actual_template=" $ PathName(FlightTemplate), Size);
-    if (Emitter == None) return RejectStowedBody("emp_emitter_missing", Size);
-    if (PathName(Emitter) != (StockPath $ ".ParticleSpriteEmitter_1"))
-        return RejectStowedBody("emp_emitter_identity actual_emitter=" $ PathName(Emitter), Size);
-    if (Emitter.LODLevels.Length != 2)
-        return RejectStowedBody("emp_lod_count actual_lod_count=" $ Emitter.LODLevels.Length, Size);
-    if (PathName(Emitter.LODLevels[0]) != (StockPath $ ".ParticleSpriteEmitter_1.ParticleLODLevel_1"))
-        return RejectStowedBody("emp_lod_0_identity actual_lod_0=" $ PathName(Emitter.LODLevels[0]), Size);
-    if (PathName(Emitter.LODLevels[1]) != (StockPath $ ".ParticleSpriteEmitter_1.ParticleLODLevel_24"))
-        return RejectStowedBody("emp_lod_1_identity actual_lod_1=" $ PathName(Emitter.LODLevels[1]), Size);
-    if (Emitter.LODLevels[0] == Emitter.LODLevels[1])
-        return RejectStowedBody("emp_duplicate_lod", Size);
-    if (LOD != Emitter.LODLevels[0] && LOD != Emitter.LODLevels[1])
-        return RejectStowedBody("emp_lod_membership actual_lod=" $ PathName(LOD), Size);
-    Body = ParticleModuleTypeDataMesh(LOD.TypeDataModule);
-    if (PathName(Body) != (StockPath $ ".ParticleModuleTypeDataMesh_0"))
-        return RejectStowedBody("emp_body_identity actual_body=" $ PathName(Body), Size);
-    if (PathName(Body.Mesh) != "WEP_3P_EMP_MESH.Wep_1stP_EMP")
-        return RejectStowedBody("emp_mesh_identity actual_mesh=" $ PathName(Body.Mesh), Size);
-    if (Body.bOverrideMaterial) return RejectStowedBody("emp_material_override", Size);
-    if (PathName(LOD.RequiredModule) != (StockPath $ ".ParticleModuleRequired_1"))
-        return RejectStowedBody("emp_required_identity actual_required=" $ PathName(LOD.RequiredModule), Size);
-    if (PathName(LOD.RequiredModule.Material) != "WEP_3P_EMP_MAT.Wep_1P_EMP_MIC")
-        return RejectStowedBody("emp_material_identity actual_material=" $ PathName(LOD.RequiredModule.Material), Size);
-    if (LOD.Modules.Length != 2)
-        return RejectStowedBody("emp_module_count actual_module_count=" $ LOD.Modules.Length, Size);
-    if (PathName(LOD.Modules[0]) != (StockPath $ ".ParticleModuleLifetime_1"))
-        return RejectStowedBody("emp_lifetime_identity actual_lifetime=" $ PathName(LOD.Modules[0]), Size);
-    if (LOD.Modules[1] != Size)
-        return RejectStowedBody("emp_size_membership actual_module_1=" $ PathName(LOD.Modules[1])
-            $ " actual_size=" $ PathName(Size), Size);
-    if (PathName(Size) != (StockPath $ ".ParticleModuleSize_1"))
-        return RejectStowedBody("emp_size_identity actual_size=" $ PathName(Size), Size);
-    if (Size.StartSize.Distribution != None) return RejectStowedBody("emp_distribution_present", Size);
-    if (Size.StartSize.Type != 0) return RejectStowedBody("emp_raw_type", Size);
-    if (Size.StartSize.Op != 1) return RejectStowedBody("emp_raw_op", Size);
-    if (Size.StartSize.LookupTableNumElements != 1) return RejectStowedBody("emp_raw_elements", Size);
-    if (Size.StartSize.LookupTableChunkSize != 3) return RejectStowedBody("emp_raw_chunk", Size);
-    if (Size.StartSize.LookupTable.Length != 8) return RejectStowedBody("emp_raw_count", Size);
-    if (Size.StartSize.LookupTableTimeScale != 0) return RejectStowedBody("emp_raw_time_scale", Size);
-    if (Size.StartSize.LookupTableStartTime != 0) return RejectStowedBody("emp_raw_start_time", Size);
+    if (FlightTemplate != class'KFProj_FragGrenade'.default.ProjFlightTemplate
+        && FlightTemplate != class'KFProj_HEGrenade'.default.ProjFlightTemplate
+        && FlightTemplate != class'KFProj_FlashBangGrenade'.default.ProjFlightTemplate
+        && FlightTemplate != class'KFProj_FreezeGrenade'.default.ProjFlightTemplate
+        && FlightTemplate != class'KFProj_MedicGrenade'.default.ProjFlightTemplate
+        && FlightTemplate != class'KFProj_MolotovGrenade'.default.ProjFlightTemplate
+        && FlightTemplate != class'KFProj_NailBombGrenade'.default.ProjFlightTemplate
+        && FlightTemplate != class'KFProj_DynamiteGrenade'.default.ProjFlightTemplate
+        && FlightTemplate != class'KFProj_EMPGrenade'.default.ProjFlightTemplate)
+        return RejectStowedBody("unrecognized_stock_template=" $ PathName(FlightTemplate), Size);
+    if (Size.StartSize.Distribution != None || Size.StartSize.Type != 0 || Size.StartSize.Op != 1
+        || Size.StartSize.LookupTableNumElements != 1 || Size.StartSize.LookupTableChunkSize != 3
+        || Size.StartSize.LookupTable.Length != 8 || Size.StartSize.LookupTableTimeScale != 0
+        || Size.StartSize.LookupTableStartTime != 0) return RejectStowedBody("stock_unit_size_shape", Size);
     for (I = 0; I < Size.StartSize.LookupTable.Length; ++I)
-        if (Size.StartSize.LookupTable[I] != 1)
-            return RejectStowedBody("emp_raw_entry index=" $ I, Size);
+        if (Size.StartSize.LookupTable[I] != 1) return RejectStowedBody("stock_nonunit_size", Size);
     return true;
 }
 
@@ -485,7 +520,7 @@ function bool FixedStowedBody(ParticleLODLevel LOD, ParticleSystem FlightTemplat
             {
                 if (Size.StartSize.Distribution != None)
                     return RejectStowedBody("constant_size_object_missing", Size);
-                if (!AuditedEMPUnitSize(FlightTemplate, Emitter, LOD, Size))
+                if (!BakedStockUnitSize(FlightTemplate, Size))
                 {
                     UnsupportedBodyReason = "constant_size_object_missing fallback=" $ UnsupportedBodyReason;
                     return false;
@@ -585,6 +620,10 @@ function UpdateZoneMarker(class<KFProj_Grenade> GrenadeClass)
 function PlaceMarker()
 {
     local int I;
+    // The root wrist has now been evaluated for this frame. Tick runs before
+    // PlaceAll, so using only its rendered wrist leaves the held body one
+    // frame behind the hand during locomotion and controller movement.
+    if (HoldingHand >= 0 && HeldClass != None) PlaceHeldPreview(HoldingHand);
     for (I = 0; I < ZoneBodies.Length; ++I)
     {
         ZoneBodies[I].SetScale(GrenadeDisplayScale(MarkerClass));
@@ -597,7 +636,7 @@ function PlaceMarker()
 // Grab eligibility and proximity cues are separate from availability display.
 function bool Retrievable(int Hand)
 {
-    return FreeHand(Hand) && AvailableCount() > 0;
+    return FreeHand(Hand) && HasVisibleSlot() && AvailableCount() > 0;
 }
 
 // Availability stays visible with occupied/far hands. Only eligible reaching
@@ -614,6 +653,15 @@ function UpdateChestProximity()
         ReleaseZoneMarker();
         return;
     }
+    // Publish the model before testing reach, including perk/count changes.
+    // Reserving the last grenade removes the chest body immediately. Cancelling
+    // restores it without any inventory debit; extra grenades remain visible.
+    if (AvailableCount() > (HoldingHand >= 0 ? 1 : 0))
+    {
+        Perk = Bridge.PC.GetPerk();
+        if (Perk != None) GrenadeClass = Perk.GetGrenadeClass();
+    }
+    UpdateZoneMarker(GrenadeClass);
     for (Hand = 0; Hand < 2; ++Hand)
     {
         Bit = 1 << Hand;
@@ -625,20 +673,13 @@ function UpdateChestProximity()
         if (bNear) NearChestMask = NearChestMask | Bit;
         else NearChestMask = NearChestMask & ~Bit;
     }
-    // Reserving the last grenade removes the chest body immediately. Cancelling
-    // restores it without any inventory debit; extra grenades remain visible.
-    if (AvailableCount() > (HoldingHand >= 0 ? 1 : 0))
-    {
-        Perk = Bridge.PC.GetPerk();
-        if (Perk != None) GrenadeClass = Perk.GetGrenadeClass();
-    }
-    UpdateZoneMarker(GrenadeClass);
 }
 
 function Update(float Delta)
 {
     local float Now, Elapsed;
     local vector Position, Velocity;
+    UpdateReleaseReply();
     Torso = Bridge.BodyYaw();
     UpdateChestProximity();
     if (HoldingHand < 0) return;
@@ -655,6 +696,7 @@ function Update(float Delta)
     // cancelling here turned the hardest throws into duds.
     if (VSize(Velocity) > 1790) Velocity = Normal(Velocity) * 1790;
     ThrowVelocity = Velocity * 0.65 + ThrowVelocity * 0.35;
+    if (Thrower != None) Thrower.Add(HoldingHand, Velocity, Now);
     LastPosition = Position; LastPawnPosition = Bridge.Human.Location; LastTime = Now; ++Samples;
     PlaceHeldPreview(HoldingHand);
     if (InputOwner.GripReleased(HoldingHand))

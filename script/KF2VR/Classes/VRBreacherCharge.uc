@@ -28,12 +28,12 @@ static function bool Apply(Controller C, Actor Source, name Bone, Actor Target,
     if (Body==None || Body.Mesh==None || Bone=='' || Body.Mesh.MatchRefBone(Bone)==INDEX_NONE
         || class'VRBodyHold'.static.Consumed(Body.Mesh,Bone)) return false;
     SourcePiece=class'VRBodyHold'.static.PieceRoot(Body.Mesh,Bone);
-    if (SourcePiece=='' || Body.Mesh.IsBoneHidden(Body.Mesh.MatchRefBone(Bone))) return false;
+    if (SourcePiece=='' || class'VRBoneVisibility'.static.IsHidden(Body.Mesh, Bone)) return false;
     foreach C.DynamicActors(class'VRGrabOwnership',R)
         if (!R.bDeleteMe && !R.bPendingDelete && R.Owner==Source && R.Instigator==C.Pawn
             && (R.bTearOff || C.WorldInfo.TimeSeconds-R.LastRefresh<=1)
             && R.Tag!='' && Body.Mesh.MatchRefBone(R.Tag)!=INDEX_NONE
-            && !Body.Mesh.IsBoneHidden(Body.Mesh.MatchRefBone(R.Tag))
+            && !class'VRBoneVisibility'.static.IsHidden(Body.Mesh, R.Tag)
             && !class'VRBodyHold'.static.Consumed(Body.Mesh,R.Tag)
             && class'VRBodyHold'.static.PieceRoot(Body.Mesh,R.Tag)==SourcePiece)
         { Claim=R; break; }

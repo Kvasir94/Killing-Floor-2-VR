@@ -1,4 +1,4 @@
-"""Offline real player form and repository context checks; no game or server."""
+"""Offline player launch, settings and repository context checks; no game, server or window."""
 import json
 import contextlib
 import io
@@ -9,99 +9,149 @@ from unittest.mock import patch
 from unittest.mock import MagicMock
 
 import friends
-import launcher_gui as gui
+import launcher_app as app
+import launcher_settings as model
 import workshop_loadout
 
 
+def no_install():
+    return (patch.object(app.game_install, 'select_for_launch', side_effect=ValueError('no install')),
+            patch.object(app.game_install, 'discover', return_value=[]))
+
+
 class PlayerLauncherTests(unittest.TestCase):
+    def setUp(self):
+        # A KF2-VR session someone is playing on this PC must not make settings read-only;
+        # the read-only test patches its own state.
+        running = patch.object(app.LauncherState, '_other_session_running', return_value=False)
+        running.start()
+        self.addCleanup(running.stop)
+
+    def profile(self, root):
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch.object(workshop_loadout, 'profile_root', return_value=root))
+        stack.enter_context(patch('vr_config.profile_root', return_value=root))
+        stack.enter_context(patch.object(app, 'LOGS', root / 'logs'))
+        return stack
+
+    def test_join_preserves_or_explicitly_replaces_personal_graphics(self):
+        for vr, initial in ((True, []), (True, ['--vr-quality', 'quality']), (False, [])):
+            with self.subTest(vr=vr, initial=initial), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                profile = root / 'profile'
+                profile.mkdir()
+                (profile / 'launcher.json').write_text(json.dumps({'vr_quality': 'quality'}))
+                context = app.parse_context(['--workspace', str(root), '--initial-arguments',
+                                             json.dumps(['--vr' if vr else '--desktop'] + initial)])
+                missing, empty = no_install()
+                with patch.object(app, 'ROOT', root), self.profile(profile), missing, empty:
+                    state = app.LauncherState(context)
+                    self.assertIsNone(state.join_arguments(root / 'game', 'code', code='not a code'))
+                    args = friends.parse_options(state.join_arguments(root / 'game', 'code', code=' KF2VR1:test '))
+                    self.assertIsNone(args.vr_quality_requested)
+                    self.assertEqual(args.vr, vr)
+                    self.assertEqual(args.address, 'KF2VR1:test')
+                    address = friends.parse_options(state.join_arguments(root / 'game', 'address', address='192.168.1.20',
+                                                                         password='secret'))
+                    self.assertEqual((address.address, address.password, address.port), ('192.168.1.20', 'secret', 7777))
+                    # host:port works for IP addresses and names, with any port the game accepts (1-65535).
+                    for typed, host, port in (('203.0.113.7:7790', '203.0.113.7', 7790), ('kf.example.net:8000', 'kf.example.net', 8000),
+                                              ('203.0.113.7:80', '203.0.113.7', 80), ('203.0.113.7:65535', '203.0.113.7', 65535)):
+                        joined = friends.parse_options(state.join_arguments(root / 'game', 'address', address=typed))
+                        self.assertEqual((joined.address, joined.port), (host, port))
+                    for bad in ('203.0.113.7:0', '203.0.113.7:65536'):
+                        self.assertIsNone(state.join_arguments(root / 'game', 'address', address=bad), bad)
+                    self.assertEqual({'address'}, set(state.address_problems('bad host', '')))
+                    for bad in ('192.168.1', '192.168.1.300', '10.0.0.1.', 'host..example', '-host', 'host:', 'host:x7'):
+                        self.assertEqual({'address'}, set(state.address_problems(bad, '')), bad)
+                    for good in ('203.0.113.7', '203.0.113.7:7790', 'my-pc', 'host.example.com:7777'):
+                        self.assertEqual({}, state.address_problems(good, ''), good)
+                    self.assertEqual({'password'}, set(state.address_problems('host', 'not ok!')))
+                    self.assertIsNone(state.join_arguments(root / 'game', 'address', address='bad host!'))
+                self.assertEqual(json.loads((profile / 'launcher.json').read_text()), {'vr_quality': 'quality'})
+
+    def test_host_form_uses_explicit_identity_and_public_override(self):
+        for initial, expected in ((['--server-name', 'CLI host', '--password', 'cli-secret'], ('CLI host', 'cli-secret')),
+                                  (['--server-name', 'Public host', '--open-server'], ('Public host', ''))):
+            with self.subTest(initial=initial), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                settings = root / 'settings.json'
+                settings.write_text(json.dumps({'server_name': 'Saved host', 'host_password': 'saved-secret'}))
+                before = settings.read_bytes()
+                context = app.parse_context(['--workspace', str(root), '--initial-arguments',
+                                             json.dumps(['--host', '--desktop'] + initial)])
+                with patch.object(app, 'ROOT', root), self.profile(root / 'profile'):
+                    state = app.LauncherState(context)
+                    form = state.match_defaults('host', ['KF-Outpost'])
+                    self.assertEqual((form['server_name'], form['password']), expected)
+                    parsed = friends.parse_options(state.match_arguments('host', root / 'game', form))
+                self.assertEqual(parsed.server_name, expected[0])
+                self.assertEqual(parsed.open_server, not bool(expected[1]))
+                self.assertEqual(parsed.password, expected[1] or None)
+                self.assertEqual(settings.read_bytes(), before)
+
     def test_host_form_preserves_saved_password_and_blank_requests_public_host(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root/'settings.json').write_text(json.dumps({'server_name': 'Saved server', 'host_password': 'saved-secret'}))
-            with patch.object(gui, 'ROOT', root), patch.object(workshop_loadout, 'profile_root', return_value=root/'profile'), \
-                    patch.object(gui, 'LOGS', root/'logs'):
-                window = gui.Launcher(art=False)
-                window.withdraw()
-                try:
-                    for vr in (False, True):
-                        window.vr.set(vr)
-                        launched, start = [], []
-                        with patch.object(window, 'need_game', return_value=root/'game'), \
-                                patch('launch_menu.installed_maps', return_value=['KF-Outpost']), \
-                                patch.object(window, 'footer', side_effect=lambda frame, **kw: start.append(kw['start'])), \
-                                patch.object(window, 'run', side_effect=lambda args, title: launched.append(args)):
-                            window.options('host')
-                            def descendants(widget):
-                                for child in widget.winfo_children():
-                                    yield child
-                                    yield from descendants(child)
-                            widgets = list(descendants(window.body))
-                            entries = [w for w in widgets if isinstance(w, gui.ttk.Entry) and not isinstance(w, gui.ttk.Combobox)]
-                            self.assertEqual([e.get() for e in entries], ['Saved server', 'saved-secret'])
-                            start[0]()
-                            args = friends.parse_options(launched[-1])
-                            self.assertEqual((args.server_name, args.password, args.open_server), ('Saved server', 'saved-secret', False))
-                            entries[0].delete(0, 'end'); entries[0].insert(0, 'Our game')
-                            entries[1].delete(0, 'end')
-                            start[0]()
-                            args = friends.parse_options(launched[-1])
-                            self.assertEqual((args.server_name, args.password, args.open_server), ('Our game', None, True))
-                            self.assertFalse(args.workshop_desktop)
-                    self.assertFalse((root/'profile/launcher.json').exists())
-                finally:
-                    window.destroy()
+            (root / 'settings.json').write_text(json.dumps({'server_name': 'Saved server', 'host_password': 'saved-secret'}))
+            with patch.object(app, 'ROOT', root), self.profile(root / 'profile'):
+                state = app.LauncherState()
+                for vr in (False, True):
+                    state.vr = vr
+                    form = state.match_defaults('host', ['KF-Outpost'])
+                    self.assertEqual((form['server_name'], form['password']), ('Saved server', 'saved-secret'))
+                    args = friends.parse_options(state.match_arguments('host', root / 'game', form))
+                    self.assertEqual((args.server_name, args.password, args.open_server), ('Saved server', 'saved-secret', False))
+                    form.update(server_name='Our game', password='')
+                    args = friends.parse_options(state.match_arguments('host', root / 'game', form))
+                    self.assertEqual((args.server_name, args.password, args.open_server), ('Our game', None, True))
+                    self.assertTrue(args.workshop_desktop)
+                    self.assertIs(False, args.inventory_focus)
+                    for field, value in (('server_name', ''), ('password', 'has space')):
+                        with self.assertRaises(ValueError) as problems:
+                            state.match_arguments('host', root / 'game', dict(form, **{field: value}))
+                        self.assertTrue(problems.exception.args[0][field])
+            self.assertFalse((root / 'profile/launcher.json').exists())
 
-    def test_prelaunch_pages_show_progression_and_unavailable_vac_without_saving_it(self):
-        for store in ('steam', 'epic'):
-            with self.subTest(store=store), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                context = gui.parse_context(['--workspace', 'checkout', '--initial-arguments',
-                                             json.dumps(['--solo', '--vr', '--store', store])])
-                with patch.object(workshop_loadout, 'profile_root', return_value=root/'profile'), \
-                        patch('vr_config.profile_root', return_value=root/'profile'), \
-                        patch.object(gui, 'LOGS', root/'logs'), \
-                        patch.object(gui.game_install, 'select_for_launch', side_effect=ValueError('no install')), \
-                        patch.object(gui.game_install, 'discover', return_value=[]):
-                    window = gui.Launcher(art=False, context=context)
-                    window.withdraw()
-                    try:
-                        pages = [window.home, lambda: window.options('solo'), window.settings]
-                        if store == 'steam':
-                            pages += [lambda: window.options('host'), window.join]
-                        def visit(widget):
-                            yield widget
-                            for child in widget.winfo_children():
-                                yield from visit(child)
-                        with patch.object(window, 'need_game', return_value=root/'game'), \
-                                patch('launch_menu.installed_solo_maps', return_value=['KF-Outpost']), \
-                                patch('launch_menu.installed_maps', return_value=['KF-Outpost']):
-                            for page in pages:
-                                page()
-                                window.update_idletasks()
-                                widgets = list(visit(window.body))
-                                labels = [w.cget('text') for w in widgets if isinstance(w, gui.tk.Label)]
-                                for notice in friends.launch_notices(store):
-                                    self.assertIn(notice, labels)
-                                controls = [w for w in widgets if isinstance(w, gui.ttk.Checkbutton)
-                                            and w.cget('text') == 'Enable VAC (unavailable for KF2-VR)']
-                                self.assertEqual(0 if store == 'epic' else 1, len(controls))
-                                for control in controls:
-                                    self.assertTrue(control.instate(['disabled', '!selected']))
-                                    control.invoke()
-                                    self.assertFalse(control._vac_off.get())
-                        self.assertFalse(hasattr(window.saved, 'vac'))
-                        self.assertFalse((root/'profile'/'KFEngine.ini').exists())
-                    finally:
-                        window.update_idletasks()
-                        window.destroy()
+    def test_host_loads_the_patch_whenever_mods_or_spawn_changes_need_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(app, 'ROOT', root), self.profile(root / 'profile'):
+                state = app.LauncherState()
+                form = state.match_defaults('host', ['KF-Outpost'])
+                self.assertEqual([], friends.parse_options(state.match_arguments('host', root / 'game', form)).mods)
+                for change in ({'mods': ['yas']}, {'max_zeds': 32}):
+                    parsed = friends.parse_options(state.match_arguments('host', root / 'game', dict(form, **change)))
+                    self.assertIn('ukfp', parsed.mods)
+                    self.assertTrue(state.patch_needed(dict(form, **change)))
+                solo = state.match_defaults('solo', ['KF-Outpost'])
+                parsed = friends.parse_options(state.match_arguments('solo', root / 'game', dict(solo, max_zeds=32)))
+                self.assertEqual(32, parsed.max_zeds)
+
+    def test_epic_solo_uses_single_pass_without_writing_preferences(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            missing, empty = no_install()
+            with self.profile(root / 'profile'), missing, empty:
+                state = app.LauncherState()
+                state.store = 'epic'
+                state.epic_rules()
+                # Render modes are fixed, not settings (Kvasir94, 11-05, #200).
+                self.assertFalse({'single_pass', 'threaded_render'} & set(model.BY_KEY))
+                launched = state.match_arguments('solo', root / 'game', state.match_defaults('solo', ['KF-Outpost']))
+                parsed = friends.parse_options(launched + ['--store', 'epic'])
+                parsed.profile_root = root / 'profile'
+                workshop_loadout.load_preferences(parsed)
+                self.assertTrue(parsed.single_pass)
+            self.assertFalse((root / 'profile/launcher.json').exists())
 
     def test_console_warning_precedes_steam_preflight_and_epic_session(self):
         for store in ('steam', 'epic'):
             with self.subTest(store=store), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 manifest = {'files_sha256': {}, 'game_sha256': 'fixture'}
-                (root/'release.json').write_text(json.dumps(manifest))
-                install = gui.game_install.Installation(store, root/'game')
+                (root / 'release.json').write_text(json.dumps(manifest))
+                install = app.game_install.Installation(store, root / 'game')
                 output = io.StringIO()
                 with patch.object(friends, 'ROOT', root), \
                         patch.object(friends.sys, 'argv', ['friends.py', '--solo', '--vr', '--store', store, '--dlss', 'off']), \
@@ -120,318 +170,291 @@ class PlayerLauncherTests(unittest.TestCase):
                             friends.main()
                         epic.assert_not_called()
                 self.assertEqual(list(friends.launch_notices(store)), output.getvalue().splitlines())
-                self.assertFalse((root/'settings.json').exists())
+                # Epic has no VAC to mention; both say the same XP rule.
+                self.assertEqual(() if store == 'epic' else (friends.LAUNCH_NOTE,),
+                                 friends.launch_notices(store))
+                self.assertFalse((root / 'settings.json').exists())
 
-    def test_graphics_form_keeps_saved_edits_unless_a_preset_is_chosen(self):
-        for explicit in (False, True):
-            with self.subTest(explicit=explicit), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                game = root / 'game'
-                maps = game / 'KFGame/BrewedPC/Maps/test'
-                maps.mkdir(parents=True)
-                (maps / 'KF-Outpost.kfm').write_bytes(b'parser fixture')
-                initial = ['--solo', '--vr'] + (['--vr-quality', 'balanced'] if explicit else [])
-                context = gui.parse_context(['--workspace', 'checkout', '--initial-arguments', json.dumps(initial)])
-                with patch.object(workshop_loadout, 'profile_root', return_value=root/'profile'), patch.object(gui, 'LOGS', root/'logs'):
-                    window = gui.Launcher(art=False, context=context)
-                    window.withdraw()
-                    try:
-                        launched, start, fields = [], [], {}
-                        original_combo = window.combo
-                        def combo(frame, controls, name, labels, selected):
-                            result = original_combo(frame, controls, name, labels, selected)
-                            fields[name] = controls[name]
-                            return result
-                        with patch.object(window, 'need_game', return_value=game), \
-                                patch.object(window, 'combo', side_effect=combo), \
-                                patch.object(window, 'footer', side_effect=lambda frame, **kw: start.append(kw['start'])), \
-                                patch.object(window, 'run', side_effect=lambda args, title: launched.append(args)):
-                            window.options('solo')
-                            start[0]()
-                            self.assertEqual('balanced' if explicit else None, friends.parse_options(launched[-1]).vr_quality_requested)
-                            variable, labels = fields['Graphics']
-                            variable.set(gui.QUALITY_LABELS['performance'])
-                            start[0]()
-                            self.assertEqual('performance', friends.parse_options(launched[-1]).vr_quality_requested)
-                            variable.set(gui.QUALITY_LABELS['keep'])
-                            start[0]()
-                            self.assertIsNone(friends.parse_options(launched[-1]).vr_quality_requested)
-                    finally:
-                        window.destroy()
-
-    def test_real_settings_default_and_saved_render_scale_round_trip(self):
+    def test_settings_auto_save_and_running_session_is_read_only(self):
         from session import read_ini
-        from vr_config import apply_preferences, values
+        import vr_config
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            profile = root/'profile'
+            profile = root / 'profile'
+            with self.profile(profile):
+                state = app.LauncherState()
+                self.assertEqual((True, None), state.persist({'eye_render_percent': '75'}))
+                self.assertEqual('75', vr_config.values(read_ini(profile / 'KFGame.ini'), model.SESSION)['EyeRenderPercent'])
+                before = (profile / 'KFGame.ini').read_bytes()
+                with patch.object(state, 'session_running', return_value=True):
+                    self.assertEqual((False, 'running'), state.persist(model.RELOAD_PRESETS['Realistic']))
+                    self.assertEqual((False, 'running'), state.reset('Hands & Weapons'))
+                    self.assertEqual((False, 'running'), state.apply_preset('graphics_preset', 'Performance'))
+                self.assertEqual(before, (profile / 'KFGame.ini').read_bytes())
+
+    def test_reload_preset_saves_all_owned_rules_and_preserves_fit(self):
+        import vr_config
+        from session import read_ini
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = root / 'profile'
             profile.mkdir()
-            path = profile/'KFGame.ini'
-            path.write_text(apply_preferences('[KF2VR.VRHandsBridge]\nCustomGripOffset=(X=1,Y=2,Z=3)\n'), encoding='utf-16')
-            with patch.object(workshop_loadout, 'profile_root', return_value=profile), \
-                    patch('vr_config.profile_root', return_value=profile), \
-                    patch.object(gui, 'ROOT', root), \
-                    patch.object(gui.game_install, 'select_for_launch', side_effect=ValueError('no install')), \
-                    patch.object(gui.game_install, 'discover', return_value=[]):
-                window = gui.Launcher(art=False)
-                window.withdraw()
-                try:
-                    fields, start = {}, []
-                    original_combo = window.combo
-                    def combo(frame, controls, label, labels, selected):
-                        original_combo(frame, controls, label, labels, selected)
-                        fields[label] = controls[label]
-                    with patch.object(window, 'combo', side_effect=combo), \
-                            patch.object(window, 'footer', side_effect=lambda frame, **kw: start.append(kw['start'])):
-                        window.settings()
-                        self.assertEqual(fields['Render scale'][0].get(), '100%')
-                        fields['Render scale'][0].set('75%')
-                        start[0]()
-                    text = read_ini(path)
-                    hands, session = values(text, 'KF2VR.VRHandsBridge'), values(text, 'KF2VR.VRSessionUI')
-                    self.assertEqual(session['EyeRenderPercent'], '75')
-                    self.assertEqual(hands['CustomGripOffset'], '(X=1,Y=2,Z=3)')
-                    self.assertEqual(values(text, 'KF2VRNetClient.KF2VRNetSessionUI')['EyeRenderPercent'], '75')
-                    fields.clear()
-                    with patch.object(window, 'combo', side_effect=combo):
-                        window.settings()
-                    self.assertEqual(fields['Render scale'][0].get(), '75%')
-                    self.assertFalse((profile/'launcher.json').exists())
-                finally:
-                    window.update_idletasks()
-                    window.destroy()
+            (profile / 'KFGame.ini').write_text('[KF2VR.VRHandsBridge]\nFirearmAimPitchDegrees=-13.25\nFirearmAimYawDegrees=4.5\n',
+                                               encoding='utf-16')
+            with self.profile(profile):
+                state = app.LauncherState()
+                self.assertTrue(state.apply_preset('reload_mode', 'Realistic')[0])
+                self.assertEqual('Realistic', model.preset_name('reload_mode', model.load(state.saved)))
+                hands = vr_config.values(read_ini(profile / 'KFGame.ini'), model.HANDS)
+                self.assertEqual(('-13.25', '4.5'), (hands['FirearmAimPitchDegrees'], hands['FirearmAimYawDegrees']))
+                self.assertTrue(state.persist({'bReloadHints': False})[0])
+                self.assertEqual('Realistic', model.preset_name('reload_mode', state.settings_values))
+                self.assertTrue(state.persist({'bEmptyTriggerReloads': True})[0])
+                self.assertEqual('Custom', model.preset_name('reload_mode', state.settings_values))
+                self.assertTrue(state.preset_change_lines('reload_mode', 'Realistic'))
 
-    def test_gui_premium_preset_keeps_development_level_and_respects_breacher_off(self):
+    def test_graphics_preset_also_becomes_the_saved_launch_quality(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            initial = ['--solo', '--vr', '--store', 'steam', '--breacher-level', '25',
-                       '--breacher-skills', '12121', '--vr-quality', 'quality',
-                       '--eye-render-percent', '100', '--dlss', 'quality',
-                       '--no-threaded-render', '--hbao', '--reflections', '--single-pass']
-            context = gui.parse_context(['--workspace', str(root), '--initial-arguments', json.dumps(initial)])
-            with patch.object(workshop_loadout, 'profile_root', return_value=root/'profile'), \
-                    patch.object(gui, 'LOGS', root/'logs'):
-                window = gui.Launcher(art=False, context=context)
-                window.withdraw()
-                try:
-                    launched, start = [], []
-                    with patch.object(window, 'need_game', return_value=root/'game'), \
-                            patch('launch_menu.installed_solo_maps', return_value=['KF-Outpost']), \
-                            patch.object(window, 'footer', side_effect=lambda frame, **kw: start.append(kw['start'])), \
-                            patch.object(window, 'run', side_effect=lambda args, title: launched.append(
-                                gui.contextual_arguments(args, window.saved, context))):
-                        window.options('solo')
-                        start[0]()
-                        args = friends.parse_options(launched[-1])
-                        self.assertEqual((args.breacher_level, args.breacher_skills), (25, '12121'))
-                        self.assertEqual((args.vr_quality, args.eye_render_percent, args.dlss), ('quality', 100, 'quality'))
-                        self.assertFalse(args.threaded_render)
-                        self.assertTrue(args.hbao and args.reflections and args.single_pass)
-                        def children(widget):
-                            for child in widget.winfo_children():
-                                yield child
-                                yield from children(child)
-                        toggle = next(w for w in children(window.body) if isinstance(w, gui.ttk.Checkbutton)
-                                      and w.cget('text').startswith('Breacher'))
-                        toggle.invoke()
-                        start[0]()
-                        args = friends.parse_options(launched[-1])
-                        self.assertFalse(args.breacher)
-                        self.assertIsNone(args.breacher_level)
-                    joined = gui.contextual_arguments(['--vr', '--address', 'host.example'], window.saved, context)
-                    self.assertNotIn('--breacher-level', joined)
-                    self.assertFalse((root/'profile'/'launcher.json').exists())
-                finally:
-                    window.destroy()
+            with self.profile(root):
+                state = app.LauncherState()
+                self.assertTrue(state.apply_preset('graphics_preset', 'Performance')[0])
+                self.assertEqual('performance', json.loads((root / 'launcher.json').read_text())['vr_quality'])
+                self.assertEqual('Graphics: Performance', state.graphics_summary())
+                state.vr = False
+                self.assertEqual("Graphics: the game's own options", state.graphics_summary())
 
-    def test_long_page_scrolls_with_footer_outside_content(self):
+    def test_dominant_hand_mirrors_a_standard_layout_and_keeps_fit(self):
+        # A standard layout (move with the other hand, point with the gun hand) follows the new
+        # dominant hand; hands the player arranged themselves are left alone.
+        for layout, expected in (({}, ('0', '1', '0', '7')), ({'MenuHand': '0'}, ('0', '0', '0', '7'))):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                with self.profile(root):
+                    model.save({'FirearmAimYawDegrees': '7', **layout})
+                    state = app.LauncherState()
+                    self.assertTrue(state.persist(state.with_mirroring({'PreferredWeaponHand': '0'}))[0])
+                    actual = model.load(state.saved)
+                    self.assertEqual(expected, tuple(actual[k] for k in
+                                                     ('PreferredWeaponHand', 'MovementHand', 'MenuHand', 'FirearmAimYawDegrees')))
+
+    def test_first_time_setup_never_discards_answered_choices(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary)
-            with patch.object(workshop_loadout, 'profile_root', return_value=root), patch.object(gui, 'LOGS', root/'logs'):
-                window=gui.Launcher(art=False);window.withdraw()
-                try:
-                    page=window.screen("Long settings", scrollable=True)
-                    for i in range(40):window.label(page, f"Setting {i}").pack()
-                    footer=window.footer(page)
-                    window.update_idletasks()
-                    self.assertIs(footer.master,page._scroll_shell)
-                    canvas=page.master
-                    self.assertGreater(canvas.bbox("all")[3],canvas.winfo_height())
-                    canvas.yview_moveto(1)
-                    self.assertGreater(canvas.yview()[0],0)
-                finally:window.destroy()
+            root = Path(temporary)
+            with self.profile(root):
+                state = app.LauncherState()
+                # A fresh profile already holds every recommended choice.
+                self.assertEqual([], state.unanswered_differing())
+                model.save({'bSeatedPlay': 'True', **model.RELOAD_PRESETS['Manual']})
+                state = app.LauncherState()
+                # Hand and seated mode are the player's own, never "recommended" or reset by Use recommended.
+                self.assertEqual({'reload_mode'}, {card['id'] for card in state.unanswered_differing()})
+                self.assertTrue(state.choose_card_preset('reload_mode', 'reload_mode', 'Realistic')[0])
+                self.assertTrue(state.choose_card_preset('ammo_rules', 'ammo_rules', 'Realistic')[0])
+                self.assertTrue(state.use_recommended()[0])
+                values = model.load(state.saved)
+                self.assertEqual(('Realistic', 'Realistic', 'True'),
+                                 (model.preset_name('reload_mode', values), model.preset_name('ammo_rules', values),
+                                  str(values['bSeatedPlay'])))
+                # Button reloads skip Ammo rules and keep Standard (R52).
+                self.assertTrue(state.choose_card_preset('reload_mode', 'reload_mode', 'Button')[0])
+                self.assertEqual('Standard', model.preset_name('ammo_rules', state.settings_values))
+                card = next(c for c in model.FIRST_TIME_SETUP['cards'] if c['id'] == 'ammo_rules')
+                self.assertFalse(model.card_applies(card, state.settings_values))
+                self.assertTrue(model.first_time_setup_pending())
+                state.complete_setup()
+                self.assertFalse(model.first_time_setup_pending())
 
-    def test_window_growth_is_bounded_and_never_shrinks(self):
-        window = MagicMock()
-        window.px.side_effect = lambda value: value
-        window.winfo_screenheight.return_value = 1080
-        window.winfo_width.return_value = 900
-        window.winfo_height.return_value = 700
-        window.winfo_reqheight.return_value = 1500
-        gui.Launcher.fit_window(window)
-        window.geometry.assert_called_once_with("900x1000")
-        window.geometry.reset_mock()
-        window.winfo_height.return_value = 1050
-        gui.Launcher.fit_window(window)
-        window.geometry.assert_not_called()
+    def test_first_launch_onboarding_and_upgrade_note(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.profile(root):
+                state = app.LauncherState()
+                self.assertTrue(state.first_launch())
+                state.onboarding = True
+                state.finish_onboarding()
+                self.assertFalse(state.first_launch())
+                self.assertFalse(state.upgrade_note_pending())
+            with tempfile.TemporaryDirectory() as older:
+                # A returning player from an older release: no onboarding, setup marked done, one note.
+                older = Path(older)
+                (older / 'launcher.json').write_text(json.dumps({'last_session': 'host'}))
+                with self.profile(older):
+                    state = app.LauncherState()
+                    self.assertFalse(state.first_launch())
+                    self.assertEqual('host', state.last_kind())
+                    self.assertTrue(state.upgrade_note_pending())
+                    self.assertFalse(model.first_time_setup_pending())
+                    state.dismiss_upgrade_note()
+                    self.assertFalse(state.upgrade_note_pending())
 
-    def test_single_store_detection_limits_home_options_and_survives_saved_package_choice(self):
+    def test_search_finds_dormant_controls_without_changing_preferences(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.profile(root):
+                state = app.LauncherState()
+                before = model.load(state.saved)
+                found = model.search('perk insertion')
+                setting = next(s for s in found if s.label == 'Perk reload assist')
+                self.assertEqual('Only with Manual or Realistic reloads', model.requirement_text(setting, before))
+                elsewhere = model.search_elsewhere('snap')
+                self.assertTrue(elsewhere and all(app.where_text(s).startswith('In ') for s in elsewhere))
+                self.assertEqual(before, model.load(state.saved))
+
+    def test_gui_rejects_parked_initial_overrides_before_creating_a_window(self):
+        for initial in (["--solo", "--breacher-level", "25"], ["--solo", "--zed-defense"]):
+            context = app.parse_context(["--workspace", "checkout", "--initial-arguments", json.dumps(initial)])
+            with self.subTest(initial=initial), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                app.LauncherState(context)
+
+    def test_single_store_detection_and_saved_package_choice(self):
         import game_install
         for store in ('steam', 'epic'):
             with tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                install = game_install.Installation(store, root/'game')
-                (root/'settings.json').write_text(json.dumps({'game_root': str(install.root)}))
-                with patch.object(workshop_loadout, 'profile_root', return_value=root/'profile'), \
-                        patch.object(gui, 'ROOT', root), patch.object(gui, 'LOGS', root/'logs'), \
+                install = game_install.Installation(store, root / 'game')
+                (root / 'settings.json').write_text(json.dumps({'game_root': str(install.root)}))
+                with self.profile(root / 'profile'), patch.object(app, 'ROOT', root), \
                         patch.object(game_install, 'discover', return_value=[install]):
-                    window = gui.Launcher(art=False)
-                    window.withdraw()
-                    try:
-                        self.assertEqual(store, window.store.get())
-                        self.assertEqual(install.root, window.need_game())
-                        self.assertEqual(install.root, window.saved.game_root)
-                        labels = []
-                        def visit(widget):
-                            for child in widget.winfo_children():
-                                if isinstance(child, (gui.tk.Label, gui.tk.Button)):
-                                    labels.append(child.cget('text'))
-                                visit(child)
-                        visit(window.body)
-                        self.assertIn('PLAY SOLO', labels)
-                        self.assertEqual(store == 'steam', 'HOST A GAME' in labels)
-                        self.assertEqual(store == 'steam', 'JOIN A FRIEND' in labels)
-                    finally:
-                        window.destroy()
+                    state = app.LauncherState()
+                    self.assertEqual(store, state.store)
+                    self.assertEqual(install.root, state.game())
+                    self.assertEqual(install.root, state.saved.game_root)
+                    if store == 'epic':
+                        self.assertTrue(state.vr and state.last_kind() == 'solo')
 
     def test_malformed_saved_package_settings_fall_back_to_discovery(self):
         import game_install
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root/'settings.json').write_text('{')
-            install = game_install.Installation('epic', root/'game')
-            with patch.object(gui, 'ROOT', root), patch.object(game_install, 'discover', return_value=[install]):
-                self.assertEqual(install.root, gui.game_folder())
+            (root / 'settings.json').write_text('{')
+            install = game_install.Installation('epic', root / 'game')
+            with patch.object(app, 'ROOT', root), patch.object(game_install, 'discover', return_value=[install]), \
+                    patch.object(workshop_loadout, 'profile_root', return_value=root / 'profile'):
+                self.assertEqual(install.root, app.game_folder())
 
     def test_epic_window_forwards_store_and_disables_recording_choices(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            context = gui.parse_context(['--workspace', 'checkout', '--initial-arguments', json.dumps([
+            context = app.parse_context(['--workspace', 'checkout', '--initial-arguments', json.dumps([
                 '--store', 'epic', '--solo', '--vr'])])
-            with patch.object(workshop_loadout, 'profile_root', return_value=root), patch.object(gui, 'LOGS', root/'logs'):
-                window = gui.Launcher(art=False, context=context)
-                window.withdraw()
-                try:
-                    self.assertEqual('epic', window.store.get())
-                    self.assertTrue(window.vr.get())
-                    self.assertFalse(window.record_motion.get() or window.highlight_events.get())
-                    with patch.object(window, 'allow_workspace_launch', return_value=True), \
-                            patch.object(gui.subprocess, 'Popen', return_value=MagicMock()), patch.object(window, 'poll'):
-                        window.run(['--solo', '--vr'], 'Epic Solo')
-                        parsed = friends.parse_options(gui.subprocess.Popen.call_args.args[0][3:])
-                    self.assertEqual('epic', parsed.store)
-                    self.assertFalse(parsed.record_motion or parsed.promo_events)
-                    window.progress.stop()
-                    window.epic_options = '-example=session'
-                    window.show_epic_options()
-                    text = next(child for child in window.code_box.winfo_children() if isinstance(child, gui.tk.Text))
-                    self.assertEqual('-example=session', text.get('1.0', 'end').strip())
-                finally:
-                    window.destroy()
+            with self.profile(root):
+                state = app.LauncherState(context)
+                self.assertEqual('epic', state.store)
+                self.assertTrue(state.vr)
+                self.assertFalse(state.record_motion or state.highlight_events)
+                with patch.object(app.subprocess, 'Popen', return_value=MagicMock()) as popen:
+                    session = state.launch(['--solo', '--vr'], 'Epic Solo')
+                    parsed = friends.parse_options(popen.call_args.args[0][3:])
+                self.assertEqual('epic', parsed.store)
+                self.assertEqual('epic', session.kind)
+                self.assertFalse(parsed.record_motion or parsed.promo_events)
 
     def test_real_recording_controls_forward_independently_and_off_clears_both(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            with patch.object(workshop_loadout, 'profile_root', return_value=root), patch.object(gui, 'LOGS', root/'logs'):
-                window = gui.Launcher(art=False)
-                window.withdraw()
-                try:
-                    self.assertFalse(window.record_motion.get() or window.highlight_events.get())
-                    window.vr.set(True)
-                    for motion, highlights in ((False, False), (True, False), (False, True), (True, True)):
-                        window.record_motion.set(motion)
-                        window.highlight_events.set(highlights)
-                        with patch.object(gui.subprocess, 'Popen', return_value=MagicMock()), patch.object(window, 'poll'):
-                            window.run(['--host', '--vr', '--no-breacher'], 'Hosting')
-                            command = gui.subprocess.Popen.call_args.args[0]
-                        parsed = friends.parse_options(command[3:])
-                        self.assertEqual((motion, highlights), (parsed.record_motion, parsed.promo_events))
-                        self.assertFalse(parsed.replay_teammate or parsed.avatar_preview)
-                        window.progress.stop()
-                    window.vr.set(False)
-                    with patch.object(gui.subprocess, 'Popen', return_value=MagicMock()), patch.object(window, 'poll'):
-                        window.run(['--host', '--desktop'], 'Hosting')
-                        parsed = friends.parse_options(gui.subprocess.Popen.call_args.args[0][3:])
-                    self.assertFalse(parsed.record_motion or parsed.promo_events)
-                    window.progress.stop()
-                finally:
-                    window.destroy()
+            with self.profile(root):
+                state = app.LauncherState()
+                self.assertFalse(state.record_motion or state.highlight_events)
+                state.vr = True
+                for motion, highlights in ((False, False), (True, False), (False, True), (True, True)):
+                    state.record_motion, state.highlight_events = motion, highlights
+                    with patch.object(app.subprocess, 'Popen', return_value=MagicMock()) as popen:
+                        state.launch(['--host', '--vr'], 'Hosting')
+                        parsed = friends.parse_options(popen.call_args.args[0][3:])
+                    self.assertEqual((motion, highlights), (parsed.record_motion, parsed.promo_events))
+                    self.assertFalse(parsed.replay_teammate or parsed.avatar_preview)
+                state.vr = False
+                with patch.object(app.subprocess, 'Popen', return_value=MagicMock()) as popen:
+                    state.launch(['--host', '--desktop'], 'Hosting')
+                    parsed = friends.parse_options(popen.call_args.args[0][3:])
+                self.assertFalse(parsed.record_motion or parsed.promo_events)
 
     def test_repository_context_preserves_explicit_off_and_dependency_locations(self):
-        context = gui.parse_context(['--workspace', 'checkout', '--initial-arguments', json.dumps([
-            '--host', '--desktop', '--no-breacher', '--server-root', 'server', '--cache-root', 'cache', '--prepare-only'])])
+        context = app.parse_context(['--workspace', 'checkout', '--initial-arguments', json.dumps([
+            '--host', '--desktop', '--no-inventory-focus', '--server-root', 'server', '--cache-root', 'cache', '--prepare-only'])])
         saved = friends.parse_options(context.initial_arguments)
-        args = gui.contextual_arguments(['--host', '--desktop', '--no-breacher'], saved, context)
+        args = app.contextual_arguments(['--host', '--desktop', '--no-inventory-focus'], saved, context)
         parsed = friends.parse_options(args)
-        self.assertFalse(parsed.breacher)
+        self.assertIs(False, parsed.inventory_focus)
         self.assertEqual((Path('server'), Path('cache'), True),
                          (parsed.server_root, parsed.cache_root, parsed.prepare_only))
-        join = gui.contextual_arguments(['--desktop', '--address', 'host.example'], saved, context)
+        join = app.contextual_arguments(['--desktop', '--address', 'host.example'], saved, context)
         self.assertNotIn('--server-root', join)
-        portable = gui.parse_context([])
-        self.assertEqual(['--host', '--no-breacher'],
-                         gui.contextual_arguments(['--host', '--no-breacher'], saved, portable))
+        portable = app.parse_context([])
+        self.assertEqual(['--host', '--no-inventory-focus'],
+                         app.contextual_arguments(['--host', '--no-inventory-focus'], saved, portable))
 
-    def test_real_host_checkbox_clears_saved_on_in_both_modes(self):
+    def test_parked_optional_controls_are_absent_with_old_enabled_profiles(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / 'launcher.json').write_text(json.dumps({'breacher': True}))
-            game = root / 'game'
-            maps = game / 'KFGame/BrewedPC/Maps/test'
-            maps.mkdir(parents=True)
-            (maps / 'KF-Outpost.kfm').write_bytes(b'parser fixture')
-            with patch.object(workshop_loadout, 'profile_root', return_value=root):
-                window = gui.Launcher(art=False)
-                window.withdraw()
-                try:
+            (root / "launcher.json").write_text(json.dumps({"breacher": True, "zed_defense": True}))
+            with self.profile(root):
+                state = app.LauncherState()
+                for kind in ('host', 'solo'):
                     for vr in (False, True):
-                        window.vr.set(vr)
-                        launched = []
-                        start = []
-                        with patch.object(window, 'need_game', return_value=game), \
-                                patch.object(window, 'footer', side_effect=lambda frame, **kw: start.append(kw['start'])), \
-                                patch.object(window, 'run', side_effect=lambda args, title: launched.append(args)):
-                            window.options('host')
-                            def descendants(widget):
-                                for child in widget.winfo_children():
-                                    yield child
-                                    yield from descendants(child)
-                            checkbox = next(child for child in descendants(window.body)
-                                if isinstance(child, gui.ttk.Checkbutton) and child.cget('text').startswith('Breacher'))
-                            self.assertTrue(checkbox.instate(['selected']))
-                            checkbox.invoke()
-                            start[0]()
-                        self.assertEqual(len(launched), 1)
-                        args = friends.parse_options(launched[0])
-                        self.assertFalse(args.breacher)
-                        self.assertTrue(args.breacher_requested_off)
-                        self.assertEqual(args.vr, vr)
-                        self.assertNotIn('--breacher', launched[0])
-                finally:
-                    window.destroy()
+                        state.vr = vr
+                        launched = state.match_arguments(kind, root / 'game', state.match_defaults(kind, ['KF-Outpost']))
+                        args = friends.parse_options(launched)
+                        self.assertFalse(hasattr(args, 'breacher') or hasattr(args, 'zed_defense'))
+                        self.assertNotIn('--breacher', launched)
+                        self.assertNotIn('--zed-defense', launched)
 
     def test_workspace_stale_consent_and_changed_selection_block_launch(self):
-        window = object.__new__(gui.Launcher)
-        window.context = gui.parse_context(['--workspace', 'checkout'])
-        with patch('release_state.selected_release', return_value=(gui.ROOT.resolve(), {})), \
-                patch('release_state.verify_workspace', side_effect=RuntimeError('source changed')), \
-                patch.object(gui.messagebox, 'askyesno', return_value=False) as consent:
-            self.assertFalse(window.allow_workspace_launch())
-            consent.assert_called_once()
-        with patch('release_state.selected_release', return_value=(Path('other'), {})), \
-                patch.object(gui.messagebox, 'showerror') as error:
-            self.assertFalse(window.allow_workspace_launch())
-            error.assert_called_once()
+        state = object.__new__(app.LauncherState)
+        state.context = app.parse_context(['--workspace', 'checkout'])
+        ask, alert = MagicMock(return_value=False), MagicMock()
+        with patch('release_state.selected_release', return_value=(app.ROOT.resolve(), {})), \
+                patch('release_state.verify_workspace', side_effect=RuntimeError('source changed')):
+            self.assertFalse(state.allow_workspace_launch(ask, alert))
+            ask.assert_called_once()
+        with patch('release_state.selected_release', return_value=(Path('other'), {})):
+            self.assertFalse(state.allow_workspace_launch(ask, alert))
+            alert.assert_called_once()
+
+    def test_map_lists_group_stock_and_workshop_and_hide_nothing(self):
+        maps = ['KF-Outpost', 'KF-BurningParis', 'KF-TF2_Upward', 'KF-VRRange', 'KF-SomeTestMap_v2', 'KF-Remilly_Test_Map']
+        choices = app.map_choices(maps, stock={'KF-Outpost', 'KF-BurningParis'})
+        # The list opens on a map: only the groups after the game's own maps have a heading.
+        self.assertEqual(['Burning Paris', 'Outpost', 'KF2-VR maps', 'VR Range (practice)',
+                          'Workshop maps', "Remilly's Test Map", 'Some Test Map (v2)', 'TF2 Upward'],
+                         [text for _, text in choices])
+        self.assertFalse(isinstance(choices[0][0], app.Heading))
+        self.assertTrue(isinstance(choices[2][0], app.Heading))
+
+    def test_match_picks_are_saved_as_chosen_and_quick_start_uses_them(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.profile(root):
+                state = app.LauncherState()
+                form = state.match_defaults('solo', ['KF-Outpost', 'KF-BurningParis'])
+                state.remember_match('solo', dict(form, map='KF-Outpost', difficulty='hard', game_length='short', max_zeds=32))
+                self.assertEqual('Outpost  ·  Hard  ·  Short length', state.match_summary('solo'))
+                again = state.match_defaults('solo', ['KF-Outpost', 'KF-BurningParis'])
+                self.assertEqual(('KF-Outpost', 'hard', 'short', 32),
+                                 (again['map'], again['difficulty'], again['game_length'], again['max_zeds']))
+                # Quick start passes only --solo; friends.py fills the match from the saved picks.
+                arguments, _ = state.quick_play_arguments(root / 'game')
+                parsed = friends.parse_options(arguments)
+                parsed.profile_root = root
+                workshop_loadout.load_preferences(parsed)
+                self.assertEqual(('KF-Outpost', 'hard', 'short', 32),
+                                 (parsed.map, parsed.difficulty, parsed.game_length, parsed.max_zeds))
+
+    def test_join_code_states_name_what_to_do(self):
+        self.assertEqual('empty', app.LauncherState.join_code_state('  ', 'build')[0])
+        kind, text = app.LauncherState.join_code_state('KF2VR1:garbage', 'build')
+        self.assertEqual('bad', kind)
+        self.assertIn('Copy it again', text)
+
+    def test_a_chosen_server_folder_is_used_before_the_server_is_installed(self):
+        # Host > Change folder saves machine.json server_root; the first Host downloads into that folder.
+        with tempfile.TemporaryDirectory() as temp:
+            chosen = Path(temp) / 'E' / 'KF2VR-Server'
+            with patch('machine_settings.load', return_value={'server_root': str(chosen), 'game_root': temp}):
+                self.assertNotEqual(chosen, friends.default_data_roots()['server_root'])
+                chosen.mkdir(parents=True)
+                self.assertEqual(chosen, friends.default_data_roots()['server_root'])
 
 
 if __name__ == '__main__':

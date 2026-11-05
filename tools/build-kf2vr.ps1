@@ -1,11 +1,13 @@
-<# Build and select the authoritative multiplayer/VR package from this checkout.
-   The optional Breacher package is compiled and shipped under optional/breacher by default;
-   its gameplay stays OFF until a player enables Breacher. -NoBreacher omits it;
-   -Breacher is still accepted from older command lines and changes nothing. #>
+<# Build the stable playable package. Optional Breacher sources
+   remain preserved, but their build/launch opt-ins are parked in this candidate.
+   -NoSelect prepares a candidate without changing the selected rollback. #>
 [CmdletBinding()]
-param([string]$Python = 'python', [switch]$NoSelect, [switch]$Dlss, [switch]$Breacher, [switch]$NoBreacher,
+param([string]$Python = 'python', [switch]$NoSelect, [switch]$Dlss = $true, [switch]$Breacher, [switch]$NoBreacher,
     [ValidateRange(1,12)][int]$Parallel = 2)
 $ErrorActionPreference = 'Stop'
+if (-not $Dlss) { throw 'Playable builds require DLSS support. Choose DLSS Off in the launcher to disable it at runtime.' }
+if ($Breacher) { throw 'Optional experimental content is parked in the stable build.' }
+$NoBreacher = $true
 $repo = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 . (Join-Path $PSScriptRoot 'build-lock.ps1')
 $stableOutputs = @('build/native', 'build/hand-meshes', 'build/hand-assets', 'build/multiplayer/native', 'build/multiplayer/script')
@@ -30,13 +32,17 @@ try {
     try { $buildLocked = $buildMutex.WaitOne(0) }
     catch [Threading.AbandonedMutexException] { $buildLocked = $true }
     if (-not $buildLocked) { throw 'Another build owns this checkout; defer this build.' }
+    # Same-thread invocation reenters the checkout lease; the builder throws
+    # on failure, including on a stale or incomplete map cache.
+    & (Join-Path $PSScriptRoot 'build-vr-range.ps1')
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'build-hand-assets.ps1') -TimeoutSeconds 600
     if ($LASTEXITCODE -ne 0) { throw 'Shared VR asset build failed.' }
     # Run on this thread so the native script can reenter the checkout mutex.
     # A child PowerShell process would contend with our own outer lease.
     & (Join-Path $PSScriptRoot 'build-multiplayer-native.ps1') -Dlss:$Dlss -Parallel $Parallel
     if ($LASTEXITCODE -ne 0) { throw 'Native build or CTest failed.' }
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'build-multiplayer-scripts.ps1') -IncludeVRClient
+    $scriptArgs = @('-IncludeVRClient')
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'build-multiplayer-scripts.ps1') @scriptArgs
     if ($LASTEXITCODE -ne 0) { throw 'Script build failed.' }
     & $Python -m unittest discover -s tools/multiplayer -p 'test_*.py' -q
     if ($LASTEXITCODE -ne 0) { throw 'Offline multiplayer tests failed.' }

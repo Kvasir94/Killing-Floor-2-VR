@@ -199,7 +199,16 @@ function bool UpdateBossView(KFPlayerController PC, Pawn Boss, VRHandsBridge Han
     if (BossTarget == None) return false;
     if (BossPC != PC || BossHuman != PC.Pawn || BossTarget.bDeleteMe || BossTarget.Health <= 0
         || Now - BossStart > BossMaxSeconds || (!PC.bCinematicMode && Now - BossStart > BossMinSeconds))
-    { EndBossView(true); return false; }
+    {
+        EndBossView(true);
+        // Stock hides the nameplate when ServerCamera('FirstPerson') changes
+        // the camera mode. We already set FirstPerson ourselves, so that change
+        // never happens on this machine and the nameplate (and its VR card)
+        // stayed up until the boss died. The intro ends here instead.
+        if (PC.MyGFxHUD != None && (PC.MyGFxHUD.BossHealthBar == None || PC.MyGFxHUD.BossHealthBar.EscortPawn == None))
+            PC.HideBossNameplate();
+        return false;
+    }
     PC.bGamePlayDOFActive = false;
     PC.PlayerCamera.CameraCache.POV.Location = BossVantage;
     PC.PlayerCamera.CameraCache.POV.Rotation = LevelRotation(PC);

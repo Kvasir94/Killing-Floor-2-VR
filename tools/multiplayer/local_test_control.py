@@ -1,4 +1,4 @@
-"""Explicit, session-only Solo test control. No profile saves or process access."""
+"""Explicit Solo test control, including game console commands. No shell execution."""
 import argparse
 import os
 from pathlib import Path
@@ -13,14 +13,12 @@ ZEDS = ("cyst", "alpha", "slasher", "crawler", "gorefast", "bloat", "husk", "scr
 DIAGNOSTIC_CASES = ("ready", "snapshot") + tuple(
     f"case-{weapon}-{hand}-{mode}" for weapon in ("deadbolt", "ripcord")
     for hand in ("left", "right") for mode in ("manual", "automatic"))
-OPERATIONS = ("status", "catalog", "give-all", "give-one", "spawn-zeds", "disable", "diagnostic")
+OPERATIONS = ("status", "catalog", "give-all", "give-one", "spawn-zeds", "disable", "diagnostic", "console")
 
 
 def add_options(parser):
-    parser.add_argument("--local-test-control", action="store_true", default=False,
-                        help="Solo VR only, this launch: UNRANKED local agent control and test capacity bypass; not saved")
-    parser.add_argument("--local-test-diagnostic", action="store_true", default=False,
-                        help="Explicit Solo live-XR diagnostic: neutral physical input, F10 abort, fixed Breacher cases; not saved")
+    import settings_registry
+    settings_registry.add_arguments(parser, only=("local_test_control", "local_test_diagnostic"))
 
 
 def validate_options(args):
@@ -62,7 +60,7 @@ def configure_role(role, args, role_name):
     role["local_test_control"] = {"session": session, "test_unranked": True, "capacity_bypass": True,
                                   "scope": "standalone_local_authority", "hosted_lan_supported": False}
     if getattr(args, "local_test_diagnostic", False):
-        from session import read_ini, set_ini
+        from launch_support import read_ini, set_ini
         configs = Path(role["config_root"])
         engine = configs / "KFEngine.ini"
         if not engine.is_file() or engine.is_symlink():
@@ -95,7 +93,10 @@ def request_wire(session, action_id, operation, player_id, argument="-", count=0
         raise ValueError("Session and action ID must be 32 lowercase hex digits")
     if operation not in OPERATIONS or not isinstance(player_id, int) or not 0 <= player_id <= 2147483647:
         raise ValueError("Invalid operation or local player ID")
-    if not TOKEN.fullmatch(argument) or ".." in argument:
+    if operation == "console":
+        if not 1 <= len(argument) <= 384 or not argument.strip(" ") or any(not 32 <= ord(c) <= 126 for c in argument) or count != 0:
+            raise ValueError("Console requires 1..384 printable ASCII characters and count 0")
+    elif not TOKEN.fullmatch(argument) or ".." in argument:
         raise ValueError("Argument must be a bounded protocol token")
     if operation in ("status", "disable") and (argument != "-" or count != 0):
         raise ValueError("Status/disable accepts no argument or count")
@@ -175,7 +176,7 @@ def main(argv=None):
     parser.add_argument("--action-id", help="Reuse only to inspect/retry the identical action")
     parser.add_argument("--timeout", type=int, default=45)
     parser.add_argument("operation", choices=OPERATIONS)
-    parser.add_argument("--argument", default="-", help="Catalog/give-all perk class name, give-one full class path, or zed type")
+    parser.add_argument("--argument", default="-", help="Perk/class/zed token, or quoted game command for console")
     parser.add_argument("--count", type=int, default=0)
     args = parser.parse_args(argv)
     try:

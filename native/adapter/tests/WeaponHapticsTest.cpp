@@ -1,4 +1,5 @@
 #include "WeaponHaptics.h"
+#include "kf2vr/xr/HapticPlayback.h"
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -11,6 +12,31 @@ void Check(bool ok,const char* message) {
 }
 }
 int main() {
+    kf2vr::xr::HapticPlayback playback;
+    Check(!playback.ShouldStop(1000,false),"an idle hand needs no stop request");
+    playback.Applied(1000,.5f,.02f,true);
+    Check(!playback.ShouldStop(1019,true),"a valid pulse is not cut short");
+    Check(playback.ShouldStop(1021,true),"an expired pulse explicitly stops");
+    Check(playback.ShouldStop(1001,false),"tracking loss stops a live pulse immediately");
+    playback.Applied(1010,.5f,.03f,false);
+    Check(playback.ShouldStop(1021,true),"a failed replacement retains the prior expiry");
+    playback.Applied(1010,.5f,.03f,true);
+    Check(!playback.ShouldStop(1039,true) && playback.ShouldStop(1041,true),
+          "a successful repeated pulse owns its new bounded duration");
+    playback.Stopped();
+    Check(!playback.ShouldStop(2000,true),"a stopped pulse does not repeatedly stop");
+    playback.Applied(2000,.5f,std::numeric_limits<float>::infinity(),true);
+    Check(!playback.playing,"a nonfinite duration cannot create an indefinite pulse");
+    playback.Applied(3000,.5f,.045f,true);
+    Check(!playback.Allows(3008,.1f),"a spring cue cannot truncate a selector detent next frame");
+    playback.Applied(3008,.1f,.3f,true);
+    Check(playback.ShouldStop(3046,true),"discarded weak feedback never prolongs the stronger pulse");
+    Check(playback.Allows(playback.until,.1f),"weak feedback resumes at the exact original deadline");
+    Check(playback.Allows(3008,.5f) && playback.Allows(3008,.8f),
+          "equal repeated shots and stronger impacts remain responsive");
+    Check(playback.ShouldStop(3008,false),"priority never prevents tracking-loss cancellation");
+    Check(!playback.Allows(3008,std::numeric_limits<float>::infinity()) && !playback.Allows(3008,0.f),
+          "invalid replacement amplitudes are refused");
     const auto mp7=RecoilHapticsFor(50.f,false), pistol=RecoilHapticsFor(250.f,false);
     const auto shotgun=RecoilHapticsFor(900.f,false), m99=RecoilHapticsFor(1200.f,false);
     Check(mp7.primary.amplitude<pistol.primary.amplitude && pistol.primary.amplitude<shotgun.primary.amplitude &&

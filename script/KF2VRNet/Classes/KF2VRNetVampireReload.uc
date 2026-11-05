@@ -24,6 +24,7 @@ var private Actor Transport;
 var private KF2VRNetHeldInventory Inventory;
 var private bool bAdmission;
 var private bool bCommitRequested;
+var private int CommitMaximum;
 
 function bool Initialize(Actor OwnerChannel, KF2VRNetHeldInventory Ledger,
     int WorldEpoch, int ConnectionEpoch, int PawnEpoch)
@@ -84,11 +85,14 @@ function bool SameIncarnation()
         && Id == Snapshot.ItemId;
 }
 
-function bool ActionAllowed(optional bool bStock)
+function bool ActionAllowed()
 {
+    // Begin still requires a free loading hand for physical admission. Once
+    // admitted, taking another gun must preserve this held transaction: the
+    // client pauses its physical steps until an explicit reload-button owner
+    // continues them. Occupancy alone neither cancels nor pays the reload.
     return bAdmission && EpochsMatch(Snapshot.WorldEpoch, Snapshot.ConnectionEpoch, Snapshot.PawnEpoch)
-        && IdentityCurrent()
-        && (bStock || (Snapshot.Hand == 0 ? Inventory.Snapshot.RightWeapon : Inventory.Snapshot.LeftWeapon) == None);
+        && IdentityCurrent();
 }
 
 function Publish()
@@ -116,7 +120,7 @@ function NotifyRemoved(KFWeapon W)
 }
 
 function bool Begin(int Request, KFWeapon W, int Hand, int ExpectedHeldRevision,
-    int WorldEpoch, int ConnectionEpoch, int PawnEpoch, optional bool bStock)
+    int WorldEpoch, int ConnectionEpoch, int PawnEpoch, optional bool bStock, optional bool bLoseAmmo)
 {
     local int Id, Revision;
     if (!RecordRequest(Request, WorldEpoch, ConnectionEpoch, PawnEpoch)) return false;
@@ -140,7 +144,7 @@ function bool Begin(int Request, KFWeapon W, int Hand, int ExpectedHeldRevision,
     Snapshot.SessionId = Request;
     Snapshot.PrimaryAmmo = W.AmmoCount[0];
     Snapshot.PrimaryReserve = W.SpareAmmoCount[0];
-    Snapshot.bAccepted = Authority.Begin(Snapshot.Human, W, Request, bStock);
+    Snapshot.bAccepted = Authority.Begin(Snapshot.Human, W, Request, bStock, bLoseAmmo);
     Snapshot.bBeginAccepted = Snapshot.bAccepted;
     bCommitRequested = false;
     Publish();
@@ -160,8 +164,19 @@ function bool TupleMatches(KFWeapon W, int Hand, int Id, int Revision, int Sessi
         && Session > 0 && Session == Snapshot.SessionId && Session == Authority.SessionId;
 }
 
-function bool Commit(int Request, KFWeapon W, int Hand, int Id, int Revision, int Session,
+function bool RemoveMagazine(int Request, KFWeapon W, int Hand, int Id, int Revision, int Session,
     int WorldEpoch, int ConnectionEpoch, int PawnEpoch)
+{
+    if (!RecordRequest(Request, WorldEpoch, ConnectionEpoch, PawnEpoch)) return false;
+    Inventory.Refresh();
+    if (TupleMatches(W, Hand, Id, Revision, Session) && ActionAllowed())
+        Snapshot.bAccepted = Authority.RemoveMagazine(Session);
+    Publish();
+    return Snapshot.bAccepted;
+}
+
+function bool Commit(int Request, KFWeapon W, int Hand, int Id, int Revision, int Session,
+    int WorldEpoch, int ConnectionEpoch, int PawnEpoch, optional int Maximum)
 {
     if (!RecordRequest(Request, WorldEpoch, ConnectionEpoch, PawnEpoch)) return false;
     Inventory.Refresh();
@@ -170,9 +185,10 @@ function bool Commit(int Request, KFWeapon W, int Hand, int Id, int Revision, in
     {
         // A physical completion can beat the stock minimum time. Accept the
         // intent once, then pay on authority when that minimum has elapsed.
+        if (!bCommitRequested) CommitMaximum = Maximum;
         bCommitRequested = true;
         Snapshot.bAccepted = true;
-        Authority.Commit(Session);
+        Authority.Commit(Session, CommitMaximum);
     }
     Publish();
     return Snapshot.bAccepted;
@@ -202,10 +218,10 @@ function Tick(bool ContextAllowed)
         || Authority.Status == class'VRVampireReloadAuthority'.const.Stock)
     {
         if (!IdentityCurrent()) Authority.Cancel(Authority.SessionId, !SameIncarnation());
-        else if (!ActionAllowed(Authority.Status == class'VRVampireReloadAuthority'.const.Stock)) Authority.Cancel(Authority.SessionId);
+        else if (!ActionAllowed()) Authority.Cancel(Authority.SessionId);
         else Authority.Tick();
         if (Authority.Status == class'VRVampireReloadAuthority'.const.Held && bCommitRequested)
-            Authority.Commit(Authority.SessionId);
+            Authority.Commit(Authority.SessionId, CommitMaximum);
     }
     if (Authority.Status != class'VRVampireReloadAuthority'.const.Held) bCommitRequested = false;
     if (Previous != Authority.Status) Publish();

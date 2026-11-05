@@ -30,7 +30,7 @@ def breakdown(root):
                 previous_xr=values
     output={}
     keys=['otherMs','controllerMs','simulationMs','vmDispatchMs','vmBodyMs','leftMs','rightMs',
-          'portalMs','worldMs','xrBeginMs','xrSubmitMs','presentMs','eyeCopyMs','viewSetupMs','sceneSetupMs','viewportSetupMs',
+          'worldMs','xrBeginMs','xrSubmitMs','presentMs','eyeCopyMs','viewSetupMs','sceneSetupMs','viewportSetupMs',
           'worldTickMs','leftSceneMs','rightSceneMs','diagnosticOutputMs']
     for phase,label in [(2,'idle'),(4,'horde')]:
         if phase not in bounds or phase+1 not in bounds:continue

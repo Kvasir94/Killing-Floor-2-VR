@@ -42,7 +42,7 @@ class RootStoreDispatchTests(unittest.TestCase):
                 env=environment, capture_output=True, text=True, creationflags=0x08000000)
             self.assertEqual(0, linked.returncode, linked.stderr)
             try:
-                options = (['-Gui', '-Vr', '-BreacherLevel', '25', '-Dlss', 'quality',
+                options = (['-Gui', '-Vr', '-DlssSharpness', '25', '-Dlss', 'quality',
                             '-GameRoot', str(root/'Steam Library'/'killingfloor2')] if gui else ['-Desktop'])
                 result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     str(tools/'play-main.ps1'), '-Solo', '-PrepareOnly', '-Store', store, *options],
@@ -75,7 +75,7 @@ class RootStoreDispatchTests(unittest.TestCase):
         result, args = self.dispatch('Steam', 1, gui=True)
         self.assertEqual(0, result.returncode, result.stdout+result.stderr)
         initial = json.loads(args[args.index('--initial-arguments')+1])
-        self.assertEqual('25', initial[initial.index('--breacher-level')+1])
+        self.assertEqual('25', initial[initial.index('--dlss-sharpness')+1])
         self.assertEqual('quality', initial[initial.index('--dlss')+1])
         self.assertIn('Steam Library', initial[initial.index('--game-root')+1])
         self.assertIn('--vr', initial)

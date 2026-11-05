@@ -130,10 +130,20 @@ function PutBack()
     InputOwner.Inventory.ReleaseHand(Hand);
 }
 
+// Stock pays healing from its firing timer, which follows game/actor time.
+// A wall-clock recovery deadline must not cancel that unpaid action in Zed
+// Time. Once the payment timer is gone, an idle or stalled state can return.
+static function bool ReturnReady(name StateName, bool bHealTimer, float ReleaseElapsed)
+{
+    if (StateName == 'Active') return true;
+    if ((StateName == 'WeaponHealing' || StateName == 'WeaponQuickHeal') && bHealTimer) return false;
+    return ReleaseElapsed > 1.5;
+}
+
 function Update(float Delta)
 {
     local int Hand, Bit;
-    local bool bNear, bWasNear;
+    local bool bNear, bWasNear, bHealTimer;
     local float Now, Distance;
     FollowTorso(Delta);
     UpdatePocketMesh();
@@ -161,7 +171,8 @@ function Update(float Delta)
     if (ReleasedAt < 0 && InputOwner.GripReleased(DrawnHand)) ReleasedAt = Now;
     if (ReleasedAt < 0) return;
     // Let a heal that is already under way land before the syringe goes away.
-    if (Drawn.IsInState('Active') || Now - ReleasedAt > 1.5) PutBack();
+    bHealTimer = Drawn.IsTimerActive('RefireCheckTimer') || Drawn.IsTimerActive('QuickHealFireTimer');
+    if (ReturnReady(Drawn.GetStateName(), bHealTimer, Now - ReleasedAt)) PutBack();
 }
 
 function UpdatePocketMesh()

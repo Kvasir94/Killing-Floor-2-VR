@@ -7,13 +7,13 @@ from pathlib import Path
 import shutil
 
 from dependencies import extract_verified
-from package import ROOT, START_FILE, START_SCRIPT, add_tkinter, check_portable_launchers, copy_launcher_tools
+from package import ROOT, START_FILE, START_SCRIPT, add_qt, add_qt_notices, check_portable_launchers, copy_launcher_tools
 from release_state import digest
 
 
 README = """KF2-VR launcher source audit build
 
-This folder contains the launcher and its pinned Python/Tk runtime, without
+This folder contains the launcher and its pinned Python/Qt runtime, without
 native mod DLLs, compiled game packages or a playable release manifest.
 It is for reviewing and modifying the launcher. To play, download the complete
 playable ZIP from https://github.com/Kvasir94/Killing-Floor-2-VR/releases.
@@ -22,7 +22,7 @@ Do not copy this build over a playable release or bypass package checks.
 Start KF2-VR.cmd opens the launcher UI. For the offline packaging self-check:
 app\\runtime\\python.exe app\\tools\\multiplayer\\launcher_gui.py --self-check
 No game, server or Workshop download is started by the build/self-check.
-The build can download only the pinned official Python and Tcl/Tk archives.
+The build can download only the pinned official Python and Qt (PySide6) archives.
 See app/tools/dependency-pins.json and app/launcher-build.json for input hashes.
 No local profiles, logs, caches or author identity are bundled.
 """
@@ -40,13 +40,15 @@ def build_launcher(output: Path):
     archive_name = "python-3.14.3-embed-amd64.zip"
     extract_verified(archive_name, ROOT / "build/multiplayer" / archive_name, runtime)
     (runtime / "python314._pth").write_text("python314.zip\n.\n../tools/multiplayer\n", encoding="ascii")
-    add_tkinter(runtime)
+    add_qt(runtime)
+    add_qt_notices(app / "notices")
     (output / START_FILE).write_bytes(START_SCRIPT.encode("ascii"))
     (output / "READ ME FIRST.txt").write_text(README, encoding="utf-8")
     (app / "THIRD-PARTY-NOTICES.txt").write_text(
-        "CPython 3.14.3 and Tcl/Tk 8.6.15 are from the official Python Software "
-        "Foundation distribution. Retain runtime/LICENSE.txt and the Tcl/Tk "
-        "license.terms files. Microsoft runtime components retain their terms.\n"
+        "CPython 3.14.3 is from the official Python Software Foundation "
+        "distribution; retain runtime/LICENSE.txt. Qt 6.12 (PySide6 6.12.0, LGPL-3.0) is bundled as "
+        "replaceable libraries; see notices/. Microsoft runtime components retain "
+        "their terms.\n"
         "SteamCMD is not bundled; explicit hosting can download it from Valve "
         "using the pin in tools/dependency-pins.json.\n", encoding="utf-8")
     check_portable_launchers(app, runtime / "python.exe")

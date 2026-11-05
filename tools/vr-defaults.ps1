@@ -1,3 +1,36 @@
+function Protect-VRStableFeatures([string]$Text) {
+    $flags = @('bExperimentalStandingHolds')
+    $pattern = '(?ims)^\[(KF2VR\.VRHandsBridge|KF2VRNetClient\.KF2VRNetHandsBridge)\][^\n]*\n(.*?)(?=^\[|\z)'
+    $Text = [regex]::Replace($Text, $pattern, [Text.RegularExpressions.MatchEvaluator]{ param($match)
+        $body = $match.Groups[2].Value
+        $grabChoices = [regex]::Matches($body, '(?im)^bZedGrabEnabled\s*=([^\r\n]*)')
+        $grabChoice = (Get-VRDefaults 'KF2VR.VRHandsBridge')['bZedGrabEnabled']
+        if ($grabChoices.Count -gt 0) {
+            $savedGrab = $grabChoices[$grabChoices.Count - 1].Groups[1].Value.Trim()
+            if ($savedGrab -ieq 'True') { $grabChoice = 'True' }
+            elseif ($savedGrab -ieq 'False') { $grabChoice = 'False' }
+        }
+        $body = [regex]::Replace($body, '(?im)^bZedGrabEnabled\s*=[^\r\n]*\r?\n?', '')
+        $body = $body.TrimEnd() + "`r`nbZedGrabEnabled=$grabChoice`r`n"
+        # World drops are shipped behavior; sharing and return remain saved choices.
+        $body = [regex]::Replace($body, '(?im)^bWorldWeaponDrops\s*=[^\r\n]*\r?\n?', '')
+        $body = $body.TrimEnd() + "`r`nbWorldWeaponDrops=True`r`n"
+        foreach ($key in $flags) {
+            $body = [regex]::Replace($body, '(?im)^' + $key + '\s*=[^\r\n]*\r?\n?', '')
+            $body = $body.TrimEnd() + "`r`n$key=False`r`n"
+        }
+        return '[' + $match.Groups[1].Value + "]`r`n" + $body.TrimEnd() + "`r`n`r`n"
+    })
+    $menuPattern = '(?ims)^\[(KF2VR\.VRSessionUI|KF2VRNetClient\.KF2VRNetSessionUI)\][^\n]*\n(.*?)(?=^\[|\z)'
+    return [regex]::Replace($Text, $menuPattern, [Text.RegularExpressions.MatchEvaluator]{ param($section)
+        return [regex]::Replace($section.Value, '(?im)^LocalMutators=([^\r\n]*)', [Text.RegularExpressions.MatchEvaluator]{ param($line)
+            $kept = @($line.Groups[1].Value.Split(',') | ForEach-Object { $_.Trim() } |
+                Where-Object { $_ -and $_ -notmatch '(?i)^(KF2Breacher|KF2TD)\.' })
+            return 'LocalMutators=' + ($kept -join ',')
+        })
+    })
+}
+
 # Defaults are shared with tools/multiplayer/vr_config.py. Keep values in JSON.
 function Get-VRDefaults([string]$Section) {
     $document = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'vr-defaults.json') -Raw | ConvertFrom-Json
@@ -39,5 +72,6 @@ function Repair-VRPreferenceValues([string]$Text) {
             return $body
         })
     }
+    $Text = Protect-VRStableFeatures $Text
     return $Text
 }

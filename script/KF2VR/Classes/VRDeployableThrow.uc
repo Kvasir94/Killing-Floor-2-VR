@@ -10,6 +10,13 @@ static function bool Handles(KFWeapon W)
     return KFWeap_Thrown_C4(W) != None || KFWeap_AutoTurret(W) != None || KFWeap_HRG_Warthog(W) != None;
 }
 
+static function float RearmDelay(KFWeapon W)
+{
+    local KFWeap_ThrownBase Thrown;
+    Thrown = KFWeap_ThrownBase(W);
+    return Thrown != None ? FMax(0.0, Thrown.ConsumeSpareAmmoDelay) : 0.0;
+}
+
 // Stock launch speed caps: C4 flies at 1200 UU/s, the drones at ThrowStrength.
 static function float SpeedCap(KFWeapon W)
 {
@@ -133,7 +140,7 @@ static function bool Launch(Actor Spawner, KFPawn_Human Human, KFWeapon W, int H
     local KFPlayerController KFPC;
     local vector HitLocation, HitNormal;
     if (Spawner == None || Spawner.Role != ROLE_Authority || Human == None
-        || Human.Role != ROLE_Authority || Human.Health <= 0 || Human.bDeleteMe
+        || Human.Role != ROLE_Authority || Human.Health <= 0 || Human.bDeleteMe || Human.bNoWeaponFiring
         || Hand < 0 || Hand > 1 || !Handles(W) || W.bDeleteMe
         || W.Owner != Human || W.Instigator != Human || W.InvManager != Human.InvManager
         || !class'VRGrenadeThrow'.static.Bounded(Position - Human.Location, 240)

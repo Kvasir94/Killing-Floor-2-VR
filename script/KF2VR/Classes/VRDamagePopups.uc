@@ -6,9 +6,11 @@ class VRDamagePopups extends Actor;
 
 const MaxPopups = 24;
 const MaxTrackedZeds = 48;
-const DefaultLifetime = 1.1;
-const QuadWidth = 16.0;
-const QuadHeight = 4.5;
+const DefaultLifetime = 2.0;
+// At the 400-unit reference distance, the glyph fills about 6.5 units
+// vertically (roughly 0.9 degrees), twice the previous angular height.
+const QuadWidth = 32.0;
+const QuadHeight = 8.0;
 
 struct DamagePopupSlot
 {
@@ -16,6 +18,7 @@ struct DamagePopupSlot
     var vector WorldPos;
     var vector Velocity;
     var float Age;
+    var float Started;
     var float Lifetime;
     var string DamageText;
     var color TextColor;
@@ -36,7 +39,6 @@ var int NextTrackedIndex;
 var VRSpatialHUD HUDOwner;
 var bool bInitialized, bNeedsDamageBaseline, bAuthoritativeFeed;
 var vector MeshScale;
-var float LastUpdateTime;
 
 var color HeadshotColor;
 var color HighDamageColor;
@@ -46,6 +48,17 @@ var color FireColor;
 var color ToxicColor;
 var color EmpColor;
 var color FreezeColor;
+var color BleedColor, FlashbangColor, UnspecifiedColor;
+
+// Use the stock effect point when present; otherwise use the pawn's head.
+static function vector DamageLocation(KFPawn_Monster Victim)
+{
+    local vector At;
+    At = Victim.HitFxInfo.HitLocation;
+    if (!IsZero(At) && class'VRGrenadeThrow'.static.Bounded(At, 100000000)
+        && VSizeSq(At - Victim.Location) <= Square(256.0 * FMax(1.0, Victim.CurrentBodyScale))) return At;
+    return Victim.Location + vect(0,0,1) * (Victim.GetCollisionHeight() * 1.15 * Victim.CurrentBodyScale);
+}
 
 simulated function bool Initialize(VRSpatialHUD NewHUDOwner)
 {
@@ -75,6 +88,7 @@ simulated function bool Initialize(VRSpatialHUD NewHUDOwner)
 
 simulated function color GetDamageColor(int Amount, class<KFDamageType> DmgType, bool bHeadshot)
 {
+    if (DmgType == None) return UnspecifiedColor;
     if (bHeadshot) return HeadshotColor;
     if (DmgType != None)
     {
@@ -82,20 +96,23 @@ simulated function color GetDamageColor(int Amount, class<KFDamageType> DmgType,
             return FireColor;
         if (DmgType.default.PoisonPower > 0 || class<KFDT_Toxic>(DmgType) != None)
             return ToxicColor;
+        if (DmgType.default.BleedPower > 0 || class<KFDT_Bleeding>(DmgType) != None)
+            return BleedColor;
         if (DmgType.default.EMPPower > 0 || class<KFDT_EMP>(DmgType) != None)
             return EmpColor;
         if (DmgType.default.FreezePower > 0 || class<KFDT_Freeze>(DmgType) != None)
             return FreezeColor;
+        if (class<KFDT_Explosive_FlashBangGrenade>(DmgType) != None) return FlashbangColor;
     }
-    if (Amount >= 150) return HighDamageColor;
-    if (Amount >= 50) return MedDamageColor;
+    if (Amount >= 175) return HighDamageColor;
+    if (Amount >= 100) return MedDamageColor;
     return LowDamageColor;
 }
 
-simulated function AddDamage(int Amount, vector HitLocation, class<KFDamageType> DmgType, bool bHeadshot)
+simulated function AddDamage(int Amount, vector HitLocation, class<KFDamageType> DmgType, bool bHeadshot,
+    optional float InitialAge = 0.0)
 {
     local int SlotIdx;
-    local vector Jitter;
 
     if (!bInitialized || Amount <= 0 || HUDOwner == None
         || HUDOwner.Bridge == None || !HUDOwner.Bridge.bDamagePopups) return;
@@ -106,18 +123,14 @@ simulated function AddDamage(int Amount, vector HitLocation, class<KFDamageType>
     Slots[SlotIdx].DamageText = string(Amount);
     Slots[SlotIdx].TextColor = GetDamageColor(Amount, DmgType, bHeadshot);
 
-    // Slight positional scatter so rapid bursts / shotgun pellets don't completely overlap
-    Jitter.X = RandRange(-5.0, 5.0);
-    Jitter.Y = RandRange(-5.0, 5.0);
-    Jitter.Z = RandRange(0.0, 8.0);
-    Slots[SlotIdx].WorldPos = HitLocation + Jitter;
-
-    // Upward float with subtle lateral drift
-    Slots[SlotIdx].Velocity.X = RandRange(-8.0, 8.0);
-    Slots[SlotIdx].Velocity.Y = RandRange(-8.0, 8.0);
-    Slots[SlotIdx].Velocity.Z = RandRange(42.0, 55.0);
-
-    Slots[SlotIdx].Age = 0.0;
+    // UKFP-style scattered, rising numbers. Hit age drives motion, so extra
+    // HUD/event updates cannot accelerate or expire an existing number.
+    Slots[SlotIdx].WorldPos = HitLocation;
+    Slots[SlotIdx].Velocity.X = RandRange(-64.0, 64.0);
+    Slots[SlotIdx].Velocity.Y = RandRange(-64.0, 64.0);
+    Slots[SlotIdx].Velocity.Z = RandRange(-64.0, 64.0);
+    Slots[SlotIdx].Age = FMax(0, InitialAge);
+    Slots[SlotIdx].Started = WorldInfo.TimeSeconds - Slots[SlotIdx].Age;
     Slots[SlotIdx].Lifetime = DefaultLifetime;
     Slots[SlotIdx].bActive = true;
 
@@ -128,7 +141,7 @@ simulated function AddDamage(int Amount, vector HitLocation, class<KFDamageType>
 
 simulated function RenderSlot(int Index, Canvas C)
 {
-    local float XL, YL;
+    local float XL, YL, Scale;
     local string TextStr;
     local color TextCol;
 
@@ -140,16 +153,18 @@ simulated function RenderSlot(int Index, Canvas C)
     if (C.Font == None) C.Font = class'Engine'.static.GetLargeFont();
 
     C.TextSize(TextStr, XL, YL);
+    Scale = FMin(52.0 / FMax(1, YL), 240.0 / FMax(1, XL));
+    XL *= Scale; YL *= Scale;
 
     // Subtle dark shadow for contrast against glowing or dark environments
     C.SetPos((256 - XL) * 0.5 + 2.0, (64 - YL) * 0.5 + 2.0);
     C.DrawColor = MakeColor(0, 0, 0, 230);
-    C.DrawText(TextStr);
+    C.DrawText(TextStr, false, Scale, Scale);
 
     // Main colored damage number
     C.SetPos((256 - XL) * 0.5, (64 - YL) * 0.5);
     C.DrawColor = TextCol;
-    C.DrawText(TextStr);
+    C.DrawText(TextStr, false, Scale, Scale);
 }
 
 simulated function PollNearbyMonsters(vector ViewLocation, vector ViewDir)
@@ -238,42 +253,29 @@ simulated function PollNearbyMonsters(vector ViewLocation, vector ViewDir)
     bNeedsDamageBaseline = false;
 }
 
-simulated function UpdatePopups(optional float DeltaTime = 0.0)
+simulated function UpdatePopups()
 {
     local int I;
-    local vector ViewLocation, ViewDir;
+    local vector ViewLocation, ViewDir, At, Scale;
     local rotator ViewRotation, BillboardRot;
-    local float FadeStart, ActualDelta;
+    local float FadeStart, Size;
 
-    if (!bInitialized || HUDOwner == None || HUDOwner.PC == None) return;
+    if (!bInitialized || HUDOwner == None || HUDOwner.PC == None || HUDOwner.Bridge == None) return;
 
-    if (DeltaTime > 0.0)
-    {
-        ActualDelta = DeltaTime;
-        LastUpdateTime = WorldInfo.TimeSeconds;
-    }
-    else
-    {
-        if (LastUpdateTime <= 0.0)
-            ActualDelta = 0.016;
-        else
-            ActualDelta = FClamp(WorldInfo.TimeSeconds - LastUpdateTime, 0.001, 0.1);
-        LastUpdateTime = WorldInfo.TimeSeconds;
-    }
-
-    HUDOwner.PC.GetPlayerViewPoint(ViewLocation, ViewRotation);
+    ViewLocation = HUDOwner.Bridge.HeadPosition;
+    ViewRotation = HUDOwner.Bridge.NativeHeadRotation;
     ViewDir = vector(ViewRotation);
 
     // Poll authoritative monster damage history for local hits
     PollNearbyMonsters(ViewLocation, ViewDir);
 
     // Update, billboard, and fade active popup slots
-    FadeStart = DefaultLifetime * 0.55;
+    FadeStart = DefaultLifetime * 0.5;
     for (I = 0; I < MaxPopups; ++I)
     {
         if (!Slots[I].bActive) continue;
 
-        Slots[I].Age += ActualDelta;
+        Slots[I].Age = FMax(0, WorldInfo.TimeSeconds - Slots[I].Started);
         if (Slots[I].Age >= Slots[I].Lifetime)
         {
             Slots[I].bActive = false;
@@ -281,12 +283,18 @@ simulated function UpdatePopups(optional float DeltaTime = 0.0)
             continue;
         }
 
-        // Float in world space
-        Slots[I].WorldPos += Slots[I].Velocity * ActualDelta;
+        At = Slots[I].WorldPos + Slots[I].Velocity * Slots[I].Age;
+        At.Z += 150.0 * Square(Slots[I].Age);
+        if ((ViewDir dot (At - ViewLocation)) <= 0)
+        { Slots[I].Panel.Hide(); continue; }
 
-        // Face the headset viewpoint
-        BillboardRot = rotator(ViewLocation - Slots[I].WorldPos);
-        Slots[I].Panel.SetPlacement(Slots[I].WorldPos, BillboardRot, MeshScale);
+        // The cube display front is -X, as on the other world HUD markers.
+        BillboardRot = rotator(At - ViewLocation);
+        // Constant ~2.5 degree glyph height: readable above a Zed at 10-20 ft
+        // (150-300 UU), and never shrinking below its near size.
+        Size = FClamp(VSize(At - ViewLocation) / 150.0, 1.0, 12.0);
+        Scale = MeshScale * Size;
+        Slots[I].Panel.SetPlacement(At, BillboardRot, Scale);
 
         // Opacity fade-out towards end of lifetime
         if (Slots[I].Age > FadeStart)
@@ -335,12 +343,15 @@ defaultproperties
     bProjTarget=false
     TickGroup=TG_PostUpdateWork
 
-    HeadshotColor=(R=255,G=48,B=48,A=255)
-    HighDamageColor=(R=255,G=170,B=32,A=255)
-    MedDamageColor=(R=255,G=235,B=80,A=255)
-    LowDamageColor=(R=240,G=240,B=240,A=255)
-    FireColor=(R=255,G=110,B=10,A=255)
-    ToxicColor=(R=60,G=255,B=60,A=255)
-    EmpColor=(R=64,G=200,B=255,A=255)
-    FreezeColor=(R=140,G=225,B=255,A=255)
+    HeadshotColor=(R=0,G=100,B=255,A=255)
+    HighDamageColor=(R=0,G=206,B=0,A=255)
+    MedDamageColor=(R=206,G=206,B=0,A=255)
+    LowDamageColor=(R=206,G=64,B=64,A=255)
+    FireColor=(R=206,G=103,B=0,A=255)
+    ToxicColor=(R=58,G=232,B=0,A=255)
+    EmpColor=(R=122,G=64,B=189,A=255)
+    FreezeColor=(R=0,G=183,B=236,A=255)
+    BleedColor=(R=255,G=100,B=100,A=255)
+    FlashbangColor=(R=195,G=195,B=195,A=255)
+    UnspecifiedColor=(R=150,G=150,B=150,A=255)
 }

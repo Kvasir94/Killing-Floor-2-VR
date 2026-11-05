@@ -54,7 +54,9 @@ bool ParseDlssMode(std::wstring_view text, DlssMode& mode) noexcept {
     for (auto ch:text) if (ch!=L' ' && ch!=L'_' && ch!=L'-') lower+=static_cast<wchar_t>(std::towlower(ch));
     if (lower.empty() || lower==L"off" || lower==L"0") { mode=DlssMode::Off; return true; }
     if (lower==L"dlaa") { mode=DlssMode::Dlaa; return true; }
-    if (lower==L"quality") { mode=DlssMode::Quality; return true; }
+    // Auto asks for Quality; a GPU or driver without DLSS fails initialisation
+    // and the eye passes fall back to ordinary rendering.
+    if (lower==L"quality" || lower==L"auto") { mode=DlssMode::Quality; return true; }
     if (lower==L"balanced") { mode=DlssMode::Balanced; return true; }
     if (lower==L"performance") { mode=DlssMode::Performance; return true; }
     if (lower==L"ultraperformance") { mode=DlssMode::UltraPerformance; return true; }

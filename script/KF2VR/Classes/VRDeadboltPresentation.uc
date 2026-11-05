@@ -396,11 +396,7 @@ simulated function bool InSpans(array<HiddenSpan> Spans, float T, float End)
 // Applied every frame, so it also holds before the component's bone visibility exists.
 simulated function ShowBone(name Bone, bool bShow)
 {
-    local int Index;
-    Index = Rig.MatchRefBone(Bone);
-    if (Index == INDEX_NONE || Index >= Rig.BoneVisibilityStates.Length || Rig.IsBoneHidden(Index) != bShow) return;
-    if (bShow) Rig.UnHideBone(Index);
-    else Rig.HideBone(Index, PBO_None);
+    class'VRBoneVisibility'.static.SetVisible(Rig, Bone, bShow);
 }
 
 static function LinearColor HeatTint(float H, LinearColor Cool, LinearColor Neutral, LinearColor Hot)

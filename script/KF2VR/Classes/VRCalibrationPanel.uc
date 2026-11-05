@@ -2,6 +2,9 @@
 // preview rendering uses the live firearm and the tracked inspection result.
 class VRCalibrationPanel extends Object;
 
+// Ordinary recenter producers use 1; only this panel owns capture requests.
+const BASELINE_CAPTURE_REQUEST = 2;
+
 var VRHandsBridge Bridge;
 var bool bPracticeShown;
 var KFWeapon PendingWeapon;
@@ -23,7 +26,7 @@ var int WristPreviewSeenMask, WristPreviewHand;
 // controller tick performs it, so report the achieved baseline once the native
 // calibration epoch moves rather than claiming success at the button press.
 var int PendingCaptureEpoch;
-var bool bCaptureSeatedPosture;
+var bool bCaptureSeatedPosture, bCapturePreviousSeatedPlay;
 var float PendingCaptureUntil;
 // Practice() used to sweep every actor in the level on every frame of ordinary
 // play, because the "has practice started yet" poll never stops while practice
@@ -33,8 +36,7 @@ var float NextPracticeScan;
 // HOLSTER FIT, Arizona Sunshine 2's belt calibration: the menu closes, the
 // player drops both hands to the hips, and a steady half second of that pose
 // sets the sidearm holsters (docs/re/ARIZONA_SUNSHINE_2_RIG.md).
-var bool bHolsterFitPending;
-var float HolsterFitUntil, HolsterFitSince;
+
 var int SandboxZedIndex, SandboxCount;
 var name PendingSandboxWeapon;
 var float PendingSandboxUntil;
@@ -71,7 +73,7 @@ function UpdateSandboxGrant()
     if (!SandboxActive() || Bridge.Human == None || Bridge.Human != PendingSandboxPawn
         || Bridge.Human.Health <= 0 || Bridge.WorldInfo.RealTimeSeconds > PendingSandboxUntil)
     {
-        Bridge.PC.ClientMessage("Sandbox weapon request ended without VR readiness; check server message or equip the owned weapon again.");
+        Bridge.PC.ClientMessage("That weapon couldn't be handed out. Check the server message or equip it again.");
         PendingSandboxWeapon = ''; PendingSandboxPawn = None;
         return;
     }
@@ -259,7 +261,6 @@ function Update()
 
     UpdateWristInspection(0.016);
     UpdateBaselineCapture();
-    UpdateHolsterFit();
 
     // The preview deliberately closed the menu; bring the page back with the
     // result whether or not a wrist was ever seen, so there is no dead end.
@@ -351,79 +352,10 @@ function StartWristPreview(VRHandSelector S)
     WristInspectingMask = 0;
     DisarmTriggers();
     if (Bridge.PC != None)
-        Bridge.PC.ClientMessage("Wrist HUD preview: the menu closes for 8 seconds. Lower a hand and turn the palm toward you.");
+        Bridge.PC.ClientMessage("Watch preview: the menu hides for 8 seconds. Turn a palm toward you.");
 }
 
-function StartHolsterFit(VRHandSelector S)
-{
-    if (Bridge == None || Bridge.WorldInfo == None) return;
-    // ReopenCalibration returns to the hand that asked, as for the wrist preview.
-    WristPreviewHand = (S != None) ? Clamp(S.Hand, 0, 1) : 1 - Clamp(Bridge.MovementHand, 0, 1);
-    bHolsterFitPending = true;
-    HolsterFitSince = -1;
-    HolsterFitUntil = Bridge.WorldInfo.RealTimeSeconds + 8.0;
-    DisarmTriggers();
-    if (Bridge.PC != None)
-        Bridge.PC.ClientMessage("Holster fit: the menu closes. Stand normally and rest both hands at your hips.");
-}
 
-// Body-frame hand positions, accepted as a hip pose only when both hands are
-// well below the head, level with each other, not far apart and one at each
-// side: the same test Arizona Sunshine 2 applies before its belt fit.
-function bool HolsterFitPose(out vector Left, out vector Right)
-{
-    local rotator Torso;
-    local vector Pivot;
-    if ((Bridge.NativeValidMask & 3) != 3 || Bridge.NativeHeadTracked == 0) return false;
-    Torso = Bridge.BodyYaw(); Pivot = Bridge.BodyPivot();
-    Left = (Bridge.Hands[0].Position - Pivot) << Torso;
-    Right = (Bridge.Hands[1].Position - Pivot) << Torso;
-    return Left.Z < -30 && Right.Z < -30 && Abs(Left.Z - Right.Z) <= 20
-        && VSize(Left - Right) <= 150 && Left.Y < -10 && Right.Y > 10;
-}
-
-function UpdateHolsterFit()
-{
-    local vector Left, Right;
-    local float Now;
-    if (!bHolsterFitPending || Bridge.WorldInfo == None) return;
-    Now = Bridge.WorldInfo.RealTimeSeconds;
-    if (HolsterFitPose(Left, Right))
-    {
-        if (HolsterFitSince < 0) HolsterFitSince = Now;
-        if (Now - HolsterFitSince < 0.5) return;
-        bHolsterFitPending = false;
-        ApplyHolsterFit(Left, Right);
-        ReopenCalibration(2);
-        return;
-    }
-    HolsterFitSince = -1;
-    if (Now < HolsterFitUntil) return;
-    bHolsterFitPending = false;
-    if (Bridge.PC != None) Bridge.PC.ClientMessage("Holsters unchanged: no steady hands-at-hips pose within 8 seconds.");
-    ReopenCalibration(2);
-}
-
-// Sets both sidearm holsters at the measured hips, mirrored, and keeps the
-// other slots wherever they already were.
-function ApplyHolsterFit(vector Left, vector Right)
-{
-    local vector Offsets[5], Hip;
-    local int I;
-    for (I = 0; I < 5; ++I)
-        Offsets[I] = Bridge.BodyHolsterOffset(I, class'VRBodySlots'.default.DefaultOffsets[I]);
-    Hip.X = (Left.X + Right.X) * 0.5;
-    Hip.Y = (Right.Y - Left.Y) * 0.5;
-    Hip.Z = (Left.Z + Right.Z) * 0.5;
-    Offsets[2] = Hip; Offsets[2].Y = -Hip.Y;
-    Offsets[3] = Hip;
-    Bridge.BodyHolsterOffsets.Length = 5;
-    for (I = 0; I < 5; ++I) Bridge.BodyHolsterOffsets[I] = Offsets[I];
-    Bridge.SaveConfig();
-    if (Bridge.PC != None)
-        Bridge.PC.ClientMessage("Holsters fitted " $ int(-Hip.Z) $ " cm below the neck, " $ int(Hip.Y)
-            $ " cm to each side." $ (Bridge.bBodySlotsEnabled ? "" : " Turn on BODY HOLSTERS to use them."));
-}
 
 // Reopens this page on the hand that asked for the preview, using the same
 // route the practice auto-open uses. Any missing piece simply ends the preview;
@@ -473,24 +405,24 @@ function EditPlacement(int Axis, float Step, optional bool bReset)
         Bridge.SpatialMenuDistance = Distance;
         Bridge.SpatialMenuHeight = Height;
         Bridge.SpatialMenuScale = Scale;
-        Bridge.SaveConfig();
+        Bridge.SavePreferences();
     }
 }
 
 function string WristTileLabel()
 {
     if (bWristPreviewPending)
-        return "HUD: WATCHING " $ (Bridge.WorldInfo != None
+        return "WATCH: LOOKING " $ (Bridge.WorldInfo != None
             ? int(FMax(0.0, WristPreviewUntil - Bridge.WorldInfo.RealTimeSeconds)) : 0) $ "s";
     if (bWristPreviewDone)
     {
-        if (WristPreviewSeenMask == 3) return "HUD: SAW BOTH WRISTS";
-        if (WristPreviewSeenMask == 1) return "HUD: SAW LEFT WRIST";
-        if (WristPreviewSeenMask == 2) return "HUD: SAW RIGHT WRIST";
-        return "HUD: NOT DETECTED";
+        if (WristPreviewSeenMask == 3) return "WATCH: SEEN ON BOTH WRISTS";
+        if (WristPreviewSeenMask == 1) return "WATCH: SEEN ON LEFT WRIST";
+        if (WristPreviewSeenMask == 2) return "WATCH: SEEN ON RIGHT WRIST";
+        return "WATCH: NOT SEEN, TRY AGAIN";
     }
-    if (IsWristInspecting(0) || IsWristInspecting(1)) return "HUD: INSPECT ACTIVE";
-    return "HUD: TEST WRIST POSE";
+    if (IsWristInspecting(0) || IsWristInspecting(1)) return "WATCH: SHOWING";
+    return "TEST THE WATCH";
 }
 
 // The baseline tiles only raise NativeRecenterRequested; the controller tick
@@ -499,46 +431,74 @@ function string WristTileLabel()
 function bool RequestBaselineCapture(bool bSeated, bool bRecenterOnly)
 {
     if (Bridge == None) return false;
-    if (Bridge.NativeHeadTracked == 0)
+    CancelBaselineCapture();
+    if (Bridge.NativeHeadTracked == 0 || Bridge.WorldInfo == None)
     {
         if (Bridge.PC != None)
-            Bridge.PC.ClientMessage("Headset not tracked: baseline unchanged.");
+            Bridge.PC.ClientMessage("Headset lost tracking: height unchanged. Try again.");
         return false;
     }
     Bridge.NativeRecenterRequested = 1;
     if (!bRecenterOnly)
     {
         bCaptureSeatedPosture = bSeated;
+        bCapturePreviousSeatedPlay = Bridge.bSeatedPlay;
         // Before the recenter lands, so the new reference is floor-matched
         // (standing) or fixed-eye (seated) from its first frame.
         Bridge.bSeatedPlay = bSeated;
-        Bridge.SaveConfig();
+        Bridge.RefreshEyeBase();
+        Bridge.NativeRecenterRequested = BASELINE_CAPTURE_REQUEST;
         PendingCaptureEpoch = Bridge.NativeCalibrationEpoch;
-        PendingCaptureUntil = (Bridge.WorldInfo != None ? Bridge.WorldInfo.RealTimeSeconds : 0.0) + 3.0;
+        PendingCaptureUntil = Bridge.WorldInfo.RealTimeSeconds + 3.0;
     }
     if (Bridge.PC != None)
         Bridge.PC.ClientMessage(bRecenterOnly ? "Recentering." :
-            ("Capturing " $ (bSeated ? "seated" : "standing") $ " baseline - hold the posture."));
+            ("Calibrating " $ (bSeated ? "seated" : "standing") $ " height: hold still as you play."));
     return true;
+}
+
+function FinishBaselineCapture(bool bSucceeded)
+{
+    PendingCaptureUntil = 0.0;
+    if (Bridge == None) return;
+    if (Bridge.NativeRecenterRequested == BASELINE_CAPTURE_REQUEST)
+        Bridge.NativeRecenterRequested = 0;
+    Bridge.bSeatedPlay = bSucceeded ? bCaptureSeatedPosture : bCapturePreviousSeatedPlay;
+    Bridge.RefreshEyeBase();
+    Bridge.SavePreferences();
+}
+
+// Context loss and replacement requests settle a capture already accepted by
+// native before rolling back an unaccepted one. No WorldInfo is needed here.
+function CancelBaselineCapture()
+{
+    if (PendingCaptureUntil <= 0.0) return;
+    FinishBaselineCapture(Bridge != None && Bridge.NativeCalibrationEpoch != PendingCaptureEpoch);
 }
 
 // Confirms from the real native numbers, not from the fact a button was pressed.
 function UpdateBaselineCapture()
 {
-    if (PendingCaptureUntil <= 0.0 || Bridge == None || Bridge.WorldInfo == None) return;
+    if (PendingCaptureUntil <= 0.0) return;
+    if (Bridge == None) { CancelBaselineCapture(); return; }
     if (Bridge.NativeCalibrationEpoch != PendingCaptureEpoch)
     {
-        PendingCaptureUntil = 0.0;
+        FinishBaselineCapture(true);
         if (Bridge.PC != None)
-            Bridge.PC.ClientMessage((bCaptureSeatedPosture ? "Seated" : "Standing") $ " baseline set at "
-                $ int(Bridge.NativeStandingHeight * 100) $ "cm (epoch " $ Bridge.NativeCalibrationEpoch $ ").");
+            Bridge.PC.ClientMessage((bCaptureSeatedPosture ? "Seated" : "Standing") $ " height set: "
+                $ int(Bridge.NativeStandingHeight * 100) $ " cm.");
         return;
     }
-    if (Bridge.WorldInfo.RealTimeSeconds > PendingCaptureUntil)
+    if (Bridge.NativeRecenterRequested != BASELINE_CAPTURE_REQUEST || Bridge.WorldInfo == None)
     {
-        PendingCaptureUntil = 0.0;
+        CancelBaselineCapture();
+        return;
+    }
+    if (Bridge.WorldInfo.RealTimeSeconds >= PendingCaptureUntil)
+    {
+        FinishBaselineCapture(false);
         if (Bridge.PC != None)
-            Bridge.PC.ClientMessage("Baseline capture did not complete - the headset was not tracked.");
+            Bridge.PC.ClientMessage("Headset lost tracking: height unchanged. Try again.");
     }
 }
 
@@ -562,33 +522,32 @@ function string Subtitle(VRHandSelector S, int H, int Row)
     if (S.MenuPage == 10)
     {
         if (Row == 0) return "UNRANKED / NO XP";
-        if (Row == 1) return "ZED TYPE (EXACT CLASS)";
-        if (Row == 2) return "COUNT 1-6 / MAX 12 LIVE";
+        if (Row == 1) return "ZED TYPE";
+        if (Row == 2) return "SPAWN 1-6 / UP TO 12 AT ONCE";
         if (Row == 3) return "BOSSES: ONE PER PRESS";
-        if (Row == 4) return "SESSION MONEY REFILLS";
-        return H == 0 ? "AUTHORED VR WEAPONS" : "CLEAR ALL / RESET";
+        if (Row == 4) return "MONEY REFILLS THIS SESSION";
+        return H == 0 ? "VR-READY WEAPONS" : "CLEAR ALL / RESET";
     }
     if (S.MenuPage == 9)
     {
         if (Row == 0) return H == 0 ? "LOWER 1 CM" : "RAISE 1 CM";
-        if (Row == 1) return H == 0 ? "STOCK PAWN EYE" : "HOLD SEATED POSTURE";
-        if (Row == 2) return H == 0 ? "HOLD STANDING POSTURE" : "ORIENTATION";
-        if (Row == 3) return "SAVED SEATED OFFSET (CM)";
-        if (Row == 4) return "CAPTURED PHYSICAL HEIGHT (CM)";
+        if (Row == 1) return H == 0 ? "DEFAULT HEIGHT" : "SIT AS YOU PLAY";
+        if (Row == 2) return H == 0 ? "STAND AS YOU PLAY" : "FACE FORWARD";
+        if (Row == 3) return "SEATED MODE";
+        if (Row == 4) return "YOUR MEASURED HEIGHT";
         return H == 0 ? "CLOSE (AUTO-SAVED)" : "NAVIGATION";
     }
     if (S.MenuPage == 8)
     {
-        if (Row <= 2) return H == 0 ? "NUDGE -0.5" : "NUDGE +0.5";
-        if (Row == 3) return H == 0 ? "PROFILE DEFAULT" : "DEBUG VIEW";
-        if (Row == 4) return "WRIST FROM GRIP (UU)";
+        if (Row <= 2) return H == 0 ? "NUDGE -0.5 CM" : "NUDGE +0.5 CM";
+        if (Row == 3) return H == 0 ? "HEADSET DEFAULT" : "SHOW HAND ALIGNMENT";
+        if (Row == 4) return "HAND POSITION ON GRIP (CM)";
         return H == 0 ? "CLOSE (AUTO-SAVED)" : "NAVIGATION";
     }
-    if (S.MenuPage == 7)
+    if (S.MenuPage == 7 || S.MenuPage == 12)
     {
-        if (Row == 0) return "FOLLOW BEHAVIOR";
-        if (Row <= 3) return H == 0 ? "DECREASE (-)" : "INCREASE (+)";
-        if (Row == 4) return H == 0 ? "RESET DEFAULT" : "RECENTER";
+        if (Row <= 4) return H == 0 ? "DECREASE (-)" : "INCREASE (+)";
+        if (Row == 3) return H == 0 ? "RESET FIT ONLY" : "POSITION / ROTATION";
         return H == 0 ? "CLOSE (AUTO-SAVED)" : "NAVIGATION";
     }
     if (S.MenuPage == 6)
@@ -601,18 +560,18 @@ function string Subtitle(VRHandSelector S, int H, int Row)
     if (S.MenuPage == 1)
     {
         if (Row <= 2) return H == 0 ? "DECREASE (-)" : "INCREASE (+)";
-        if (Row == 3) return H == 0 ? "PROFILE DEFAULT" : "PAGE NAVIGATION";
-        if (Row == 4) return H == 0 ? "TARGET RANGE" : "PAGE NAVIGATION";
+        if (Row == 3) return H == 0 ? "HEADSET DEFAULT" : "HEIGHT, HANDS, POUCH, WATCH";
+        if (Row == 4) return H == 0 ? "TARGET RANGE" : "MENU POSITION";
         return H == 0 ? "CLOSE (AUTO-SAVED)" : "NAVIGATION";
     }
     if (S.MenuPage == 2)
     {
-        if (Row == 0) return "HMD BASELINE";
-        if (Row == 1) return H == 0 ? "ORIENTATION" : "SEATED VIEW HEIGHT";
-        if (Row == 2) return H == 0 ? "DROP " $ int((Bridge.NativeStandingHeight - Bridge.NativeHeadHeight)*100)
-            $ " / BASE " $ int(Bridge.NativeStandingHeight * 100) : "DEBUG VIEW";
-        if (Row == 3) return H == 0 ? "AMMO REACH" : "HANDS AT HIPS";
-        if (Row == 4) return H == 0 ? "CHEST GRENADE" : "WRIST HUD";
+        if (Row == 0) return "STAND OR SIT AS YOU PLAY";
+        if (Row == 1) return H == 0 ? "FACE FORWARD" : "SEATED HEIGHT";
+        if (Row == 2) return H == 0 ? "CROUCHED " $ int((Bridge.NativeStandingHeight - Bridge.NativeHeadHeight)*100)
+            $ " OF " $ int(Bridge.NativeStandingHeight * 100) $ " CM" : "SHOW HAND ALIGNMENT";
+        if (Row == 3) return H == 0 ? "AMMO REACH" : "SIZES AND LINKED POUCHES";
+        if (Row == 4) return H == 0 ? "HOLD THE HAND AT YOUR CHEST" : "WRISTWATCH";
         return H == 0 ? "CLOSE" : "NAVIGATION";
     }
     if (S.MenuPage == 3)
@@ -626,10 +585,10 @@ function string Subtitle(VRHandSelector S, int H, int Row)
     {
         if (Row == 0) return "TARGET SPAWN";
         if (Row == 1) return "FRIENDLY PATIENT";
-        if (Row == 2) return H == 0 ? "TARGETS + PATIENT" : "TARGET MANAGEMENT";
+        if (Row == 2) return H == 0 ? "TARGETS + PATIENT" : "TARGETS";
         if (Row == 3) return H == 0 ? "WEAPONS" : "AMMUNITION";
         if (Row == 4) return H == 0 ? "CALIBRATION" : "RESUME WAVES";
-        return H == 0 ? "INVULNERABILITY" : "EQUIPMENT";
+        return H == 0 ? "TAKING DAMAGE" : "EQUIPMENT";
     }
     if (S.MenuPage == 5)
     {
@@ -674,10 +633,10 @@ function string Label(VRHandSelector S, int H, int Row)
     {
         switch (Row)
         {
-        case 0: return H == 0 ? (SandboxActive() ? "END SANDBOX" : "START / ACCEPT NO XP") : "CLOSE PANEL";
+        case 0: return H == 0 ? (SandboxActive() ? "END SANDBOX" : "START (NO XP)") : "CLOSE PANEL";
         case 1: return (H == 0 ? "< " : "> ") $ Mid(class'VRPracticeRange'.static.SandboxZedName(SandboxZedIndex), 7);
         case 2: return (H == 0 ? "COUNT - " : "COUNT + ") $ Max(1, SandboxCount);
-        case 3: return H == 0 ? "SPAWN PASSIVE" : "SPAWN ATTACKERS";
+        case 3: return H == 0 ? "SPAWN IDLE ZEDS" : "SPAWN ATTACKERS";
         case 4: return H == 0 ? "REFILL MONEY" : "OPEN TRADER";
         default: return H == 0 ? "VR ARMORY" : "CLEAR TARGETS";
         }
@@ -689,8 +648,8 @@ function string Label(VRHandSelector S, int H, int Row)
         case 0: return "PITCH" $ Sign $ int(Bridge.FirearmAimPitchDegrees);
         case 1: return "YAW" $ Sign $ int(Bridge.FirearmAimYawDegrees);
         case 2: return "ROLL" $ Sign $ int(Bridge.FirearmAimRollDegrees);
-        case 3: return H == 0 ? "RESET PROFILE FIT" : "PLAYER / HUD";
-        case 4: return H == 0 ? ("TARGET DIST " $ int((DownrangeTargetDistance <= 0.0 ? 500.0 : DownrangeTargetDistance) * 0.02) $ "m") : "MENU PLACEMENT";
+        case 3: return H == 0 ? "RESET GUN FIT" : "MORE CALIBRATION";
+        case 4: return H == 0 ? ("TARGET AT " $ int((DownrangeTargetDistance <= 0.0 ? 500.0 : DownrangeTargetDistance) * 0.02) $ "m") : "MENU POSITION";
         default: return H == 0 ? "CLOSE (AUTO-SAVED)" : "BACK (AUTO-SAVED)";
         }
     }
@@ -698,12 +657,24 @@ function string Label(VRHandSelector S, int H, int Row)
     {
         switch (Row)
         {
-        case 0: return H == 0 ? "CAPTURE STANDING" : "CAPTURE SEATED";
+        case 0: return H == 0 ? "CALIBRATE STANDING" : "CALIBRATE SEATED";
         case 1: return H == 0 ? "RECENTER" : "SEATED HEIGHT";
-        case 2: return H == 0 ? "HAND FIT" : (Bridge.bAlignmentMarkers ? "ALIGN MARKERS: ON" : "ALIGN MARKERS: OFF");
-        case 3: return H == 0 ? "POUCH FIT" : "HOLSTER FIT";
-        case 4: return H == 0 ? "CHEST ZONE HERE" : WristTileLabel();
-        default: return H == 0 ? "CLOSE" : "BACK TO FIT";
+        case 2: return H == 0 ? "CALIBRATE HANDS" : (Bridge.bAlignmentMarkers ? "ALIGNMENT: ON" : "ALIGNMENT: OFF");
+        case 3: return H == 0 ? "CALIBRATE POUCH" : "POUCH AND GRENADE ZONES";
+        case 4: return H == 0 ? "GRENADE ZONE HERE" : WristTileLabel();
+        default: return H == 0 ? "CLOSE" : "CALIBRATE GUN";
+        }
+    }
+    if (S.MenuPage == 13)
+    {
+        switch (Row)
+        {
+            case 0: return "GRENADE ZONE HERE";
+            case 1: return "LINKED POUCHES HERE";
+            case 2: return "GRENADE SIZE" $ Sign $ int(Bridge.GrenadeZoneScale * 100) $ "%";
+            case 3: return "POUCH SIZE" $ Sign $ int(Bridge.AmmoPouchScale * 100) $ "%";
+            case 4: return H == 0 ? "RESET GRENADE ZONE" : "RESET POUCHES";
+            default: return H == 0 ? "CLOSE" : "POUCH FINE TUNING";
         }
     }
     if (S.MenuPage == 11)
@@ -713,8 +684,8 @@ function string Label(VRHandSelector S, int H, int Row)
         case 0: return (H == 0 ? "BACK " : "FORWARD ") $ int(Bridge.AmmoPouchAdjustment.X) $ "cm";
         case 1: return (H == 0 ? "NARROWER " : "WIDER ") $ int(Bridge.AmmoPouchAdjustment.Y) $ "cm";
         case 2: return (H == 0 ? "LOWER " : "RAISE ") $ int(Bridge.AmmoPouchAdjustment.Z) $ "cm";
-        case 3: return "ADJUSTMENT FROM DEFAULT";
-        case 4: return "RESET POUCH FIT";
+        case 3: return "ZONE SIZE" $ Sign $ int(Bridge.AmmoPouchScale * 100) $ "%";
+        case 4: return H == 0 ? "RESET POUCH FIT" : "PLACE POUCH HERE";
         default: return H == 0 ? "CLOSE (AUTO-SAVED)" : "BACK (AUTO-SAVED)";
         }
     }
@@ -723,8 +694,8 @@ function string Label(VRHandSelector S, int H, int Row)
         switch (Row)
         {
         case 0: return (H == 0 ? "LOWER " : "RAISE ") $ int(Bridge.SeatedEyeOffset) $ "cm";
-        case 1: return H == 0 ? "RESET HEIGHT" : "CAPTURE SEATED";
-        case 2: return H == 0 ? "CAPTURE STANDING" : "RECENTER";
+        case 1: return H == 0 ? "RESET HEIGHT" : "CALIBRATE SEATED";
+        case 2: return H == 0 ? "CALIBRATE STANDING" : "RECENTER";
         case 3: return "MODE: " $ (Bridge.bSeatedPlay ? "SEATED" : "STANDING");
         case 4: return "BASE " $ int(Bridge.NativeStandingHeight * 100) $ "cm";
         default: return H == 0 ? "CLOSE (AUTO-SAVED)" : "BACK (AUTO-SAVED)";
@@ -737,8 +708,8 @@ function string Label(VRHandSelector S, int H, int Row)
         case 0: return "DISTANCE" $ Sign $ PlacementValue('Distance') @ "m";
         case 1: return "HEIGHT" $ Sign $ PlacementValue('Height') @ "m";
         case 2: return "SCALE" $ Sign $ PlacementValue('Scale');
-        case 3: return "RECENTER MENUS";
-        case 4: return H == 0 ? "RESET MENU FIT" : "WEAPON READOUT";
+        case 3: return "RECENTER";
+        case 4: return H == 0 ? "RESET MENU POSITION" : "AMMO COUNTER";
         default: return H == 0 ? "CLOSE (AUTO-SAVED)" : "BACK (AUTO-SAVED)";
         }
     }
@@ -759,26 +730,27 @@ function string Label(VRHandSelector S, int H, int Row)
     {
         switch (Row)
         {
-        case 0: return Bridge.bWeaponAmmoReadouts ? "READOUT: ON" : "READOUT: OFF";
+        case 0: return Bridge.bWeaponAmmoReadouts ? "AMMO COUNTER: ON" : "AMMO COUNTER: OFF";
         case 1: return "SCALE " $ int(FClamp(Bridge.WeaponAmmoReadoutScale, 0.5, 2.0) * 100.0 + 0.5) $ "%";
         case 2: return "FORWARD " $ int(FClamp(Bridge.WeaponAmmoReadoutForward, -12.0, 12.0));
         case 3: return "HEIGHT " $ int(FClamp(Bridge.WeaponAmmoReadoutHeight, -12.0, 12.0));
-        case 4: return H == 0 ? "RESET READOUT" : "TOP HUD";
+        case 4: return H == 0 ? "RESET AMMO COUNTER" : "CALIBRATE WATCH";
         default: return H == 0 ? "CLOSE (AUTO-SAVED)" : "BACK (AUTO-SAVED)";
         }
     }
-    if (S.MenuPage == 7)
+    if (S.MenuPage == 7 || S.MenuPage == 12)
     {
         switch (Row)
         {
-        case 0: return Bridge.TopHudFollowMode == 1 ? "TOP HUD: SCREEN-STABLE" : "TOP HUD: SOFT ANCHOR";
-        case 1: return "DISTANCE" $ Sign $ Bridge.TopHudDistance @ "m";
-        case 2: return "HEIGHT" $ Sign $ Bridge.TopHudHeight @ "m";
-        case 3: return "SCALE" $ Sign $ Bridge.TopHudScale;
-        case 4: return H == 0 ? "RESET TOP HUD" : "RECENTER TOP HUD";
-        default: return H == 0 ? "CLOSE (AUTO-SAVED)" : "BACK TO READOUT";
+        case 0: return (S.MenuPage == 7 ? "FORWARD" $ Sign $ Tenths(Bridge.WristwatchOffset.X) : "PITCH" $ Sign $ int(Bridge.WristwatchRotation.Pitch * UnrRotToDeg));
+        case 1: return (S.MenuPage == 7 ? "SIDE" $ Sign $ Tenths(Bridge.WristwatchOffset.Y) : "YAW" $ Sign $ int(Bridge.WristwatchRotation.Yaw * UnrRotToDeg));
+        case 2: return (S.MenuPage == 7 ? "HEIGHT" $ Sign $ Tenths(Bridge.WristwatchOffset.Z) : "ROLL" $ Sign $ int(Bridge.WristwatchRotation.Roll * UnrRotToDeg));
+        case 3: return H == 0 ? "RESET WATCH FIT" : (S.MenuPage == 7 ? "ROTATION" : "POSITION");
+        case 4: return "SIZE" $ Sign $ int(Bridge.WristwatchScale * 100) $ "%";
+        default: return H == 0 ? "CLOSE" : "BACK TO AMMO COUNTER";
         }
     }
+
     if (S.MenuPage == 4)
     {
         switch (Row)
@@ -813,7 +785,7 @@ function string Label(VRHandSelector S, int H, int Row)
         WeaponName = Bridge.WeaponProfiles[Index].WeaponClassName;
         switch (Row)
         {
-        case 0: return H == 0 ? "PREV WEAPON" : "NEXT WEAPON";
+        case 0: return H == 0 ? "PREVIOUS WEAPON" : "NEXT WEAPON";
         case 1:
             Inv = KFInventoryManager(Bridge.Human.InvManager);
             W = None;
@@ -838,7 +810,7 @@ function string Label(VRHandSelector S, int H, int Row)
 function SyncAimDegrees()
 {
     local int N;
-    if (Bridge != None) Bridge.SaveConfig();
+    if (Bridge != None) Bridge.SavePreferences();
     if (Bridge == None || Bridge.HandInventory == None || Bridge.HandInventory.Registry == None) return;
     for (N = 0; N < Bridge.HandInventory.Registry.Items.Length; ++N)
         if (Bridge.HandInventory.Registry.Items[N].Presenter != None)
@@ -872,15 +844,37 @@ function bool Activate(VRHandSelector S, int H, int Row)
     local VRDualHandInput Input;
 
     Step = H == 0 ? -1 : 1;
+    if (S.MenuPage == 13)
+    {
+        if (Row == 0 && Bridge.HandInventory != None && Bridge.HandInventory.Input != None)
+        {
+            Grenade = Bridge.HandInventory.Input.Grenade;
+            if (Grenade != None && Grenade.HandTracked(S.Hand))
+            {
+                Bridge.ChestGrenadeOffset = (Grenade.GrabPoint(S.Hand) - Grenade.ChestOrigin()) << Grenade.Torso;
+                Bridge.bChestGrenadeCentered = true;
+            }
+        }
+        if (Row == 1) PlacePouchAtHand(S.Hand);
+        if (Row == 2) Bridge.GrenadeZoneScale = FClamp(Bridge.GrenadeZoneScale + Step * 0.05, 0.5, 1.5);
+        if (Row == 3) Bridge.AmmoPouchScale = FClamp(Bridge.AmmoPouchScale + Step * 0.05, 0.5, 1.5);
+        if (Row == 4 && H == 0) { Bridge.ChestGrenadeOffset = vect(10.5,9.5,6.0); Bridge.bChestGrenadeCentered = true; Bridge.GrenadeZoneScale = 1; }
+        if (Row == 4 && H == 1) { Bridge.AmmoPouchAdjustment = vect(0,0,0); Bridge.AmmoPouchScale = 1; }
+        if (Row <= 4) { Bridge.SavePreferences(); return false; }
+        if (H == 1) { S.MenuPage = 11; return false; }
+        DisarmTriggers(); S.MenuPage = 0; S.bUtilities = false; return true;
+    }
     if (S.MenuPage == 11)
     {
         if (Row == 0) Bridge.AmmoPouchAdjustment.X = FClamp(Bridge.AmmoPouchAdjustment.X + Step, -15, 20);
         if (Row == 1) Bridge.AmmoPouchAdjustment.Y = FClamp(Bridge.AmmoPouchAdjustment.Y + Step, -3, 25);
         if (Row == 2) Bridge.AmmoPouchAdjustment.Z = FClamp(Bridge.AmmoPouchAdjustment.Z + Step, -20, 20);
-        if (Row == 4) Bridge.AmmoPouchAdjustment = vect(0,0,0);
+        if (Row == 3) Bridge.AmmoPouchScale = FClamp(Bridge.AmmoPouchScale + Step * 0.05, 0.5, 1.5);
+        if (Row == 4 && H == 0) { Bridge.AmmoPouchAdjustment = vect(0,0,0); Bridge.AmmoPouchScale = 1; }
+        if (Row == 4 && H == 1) PlacePouchAtHand(S.Hand);
         if (Row <= 2 || Row == 4)
         {
-            Bridge.SaveConfig();
+            Bridge.SavePreferences();
             if (S.Display != None) S.Display.bNeedsUpdate = true;
             Input = Bridge.HandInventory != None ? Bridge.HandInventory.Input : None;
             if (Input != None)
@@ -963,7 +957,7 @@ function bool Activate(VRHandSelector S, int H, int Row)
         if (Row == 2 && H == 0) { S.MenuPage = 8; Bridge.bAlignmentMarkers = true; return false; }
         if (Row == 2 && H == 1) { Bridge.bAlignmentMarkers = !Bridge.bAlignmentMarkers; return false; }
         if (Row == 3 && H == 0) { S.MenuPage = 11; return false; }
-        if (Row == 3 && H == 1) { StartHolsterFit(S); return true; }
+        if (Row == 3 && H == 1) { S.MenuPage = 13; return false; }
         if (Row == 4 && H == 0)
         {
             if (Bridge.HandInventory != None && Bridge.HandInventory.Input != None && Bridge.HandInventory.Input.Grenade != None
@@ -972,10 +966,10 @@ function bool Activate(VRHandSelector S, int H, int Row)
                 Grenade = Bridge.HandInventory.Input.Grenade;
                 Bridge.ChestGrenadeOffset = (Grenade.GrabPoint(S.Hand) - Grenade.ChestOrigin()) << Grenade.Torso;
                 Bridge.bChestGrenadeCentered = true;
-                Bridge.SaveConfig();
-                Bridge.PC.ClientMessage("Chest grenade zone saved from the " $ (S.Hand == 0 ? "left" : "right") $ " hand.");
+                Bridge.SavePreferences();
+                Bridge.PC.ClientMessage("Grenade zone saved where your " $ (S.Hand == 0 ? "left" : "right") $ " hand is.");
             }
-            else if (Bridge.PC != None) Bridge.PC.ClientMessage("Chest zone unchanged: track the selecting hand and try again.");
+            else if (Bridge.PC != None) Bridge.PC.ClientMessage("Grenade zone unchanged: keep the hand in view of the headset and try again.");
             return false;
         }
         // Closing the selector is what makes the preview real: native
@@ -995,18 +989,18 @@ function bool Activate(VRHandSelector S, int H, int Row)
         {
             if (!Bridge.bSeatedPlay)
             {
-                if (Bridge.PC != None) Bridge.PC.ClientMessage("Capture seated before adjusting seated view height.");
+                if (Bridge.PC != None) Bridge.PC.ClientMessage("Calibrate seated first, then adjust the seated view height.");
                 return false;
             }
             Bridge.SeatedEyeOffset = FClamp(Bridge.SeatedEyeOffset + Step, -40.0, 12.0);
             Bridge.RefreshEyeBase();
-            Bridge.SaveConfig();
+            Bridge.SavePreferences();
             return false;
         }
         if (Row == 1)
         {
             if (H == 1) RequestBaselineCapture(true, false);
-            else { Bridge.SeatedEyeOffset = 0; Bridge.RefreshEyeBase(); Bridge.SaveConfig(); }
+            else { Bridge.SeatedEyeOffset = 0; Bridge.RefreshEyeBase(); Bridge.SavePreferences(); }
             return false;
         }
         if (Row == 2) { RequestBaselineCapture(false, H == 1); return false; }
@@ -1040,18 +1034,17 @@ function bool Activate(VRHandSelector S, int H, int Row)
     {
         if (S.MenuPage == 6)
         {
-            if (Row == 0) { Bridge.bWeaponAmmoReadouts = !Bridge.bWeaponAmmoReadouts; Bridge.SaveConfig(); return false; }
-            if (Row == 1) { Bridge.WeaponAmmoReadoutScale = FClamp(Bridge.WeaponAmmoReadoutScale + Step*0.1, 0.5, 2.0); Bridge.SaveConfig(); return false; }
-            if (Row == 2) { Bridge.WeaponAmmoReadoutForward = FClamp(Bridge.WeaponAmmoReadoutForward + Step, -12.0, 12.0); Bridge.SaveConfig(); return false; }
-            if (Row == 3) { Bridge.WeaponAmmoReadoutHeight = FClamp(Bridge.WeaponAmmoReadoutHeight + Step, -12.0, 12.0); Bridge.SaveConfig(); return false; }
+            if (Row == 0) { Bridge.bWeaponAmmoReadouts = !Bridge.bWeaponAmmoReadouts; Bridge.SavePreferences(); return false; }
+            if (Row == 1) { Bridge.WeaponAmmoReadoutScale = FClamp(Bridge.WeaponAmmoReadoutScale + Step*0.1, 0.5, 2.0); Bridge.SavePreferences(); return false; }
+            if (Row == 2) { Bridge.WeaponAmmoReadoutForward = FClamp(Bridge.WeaponAmmoReadoutForward + Step, -12.0, 12.0); Bridge.SavePreferences(); return false; }
+            if (Row == 3) { Bridge.WeaponAmmoReadoutHeight = FClamp(Bridge.WeaponAmmoReadoutHeight + Step, -12.0, 12.0); Bridge.SavePreferences(); return false; }
             if (Row == 4)
             {
                 if (H == 1) { S.MenuPage = 7; return false; }
-                Bridge.bWeaponAmmoReadouts = true;
                 Bridge.WeaponAmmoReadoutScale = 1.0;
                 Bridge.WeaponAmmoReadoutForward = 0.0;
                 Bridge.WeaponAmmoReadoutHeight = 0.0;
-                Bridge.SaveConfig();
+                Bridge.SavePreferences();
                 return false;
             }
             if (Row == 5)
@@ -1066,14 +1059,14 @@ function bool Activate(VRHandSelector S, int H, int Row)
         {
             // Nudges the saved adjustment on top of the profile's wrist offset,
             // in the right hand's aim frame; the left hand mirrors it.
-            if (Row == 0) { Bridge.HandWristAdjust.X = FClamp(Bridge.HandWristAdjust.X + Step * 0.5, -10, 10); Bridge.SaveConfig(); return false; }
-            if (Row == 1) { Bridge.HandWristAdjust.Y = FClamp(Bridge.HandWristAdjust.Y + Step * 0.5, -10, 10); Bridge.SaveConfig(); return false; }
-            if (Row == 2) { Bridge.HandWristAdjust.Z = FClamp(Bridge.HandWristAdjust.Z + Step * 0.5, -10, 10); Bridge.SaveConfig(); return false; }
+            if (Row == 0) { Bridge.HandWristAdjust.X = FClamp(Bridge.HandWristAdjust.X + Step * 0.5, -10, 10); Bridge.SavePreferences(); return false; }
+            if (Row == 1) { Bridge.HandWristAdjust.Y = FClamp(Bridge.HandWristAdjust.Y + Step * 0.5, -10, 10); Bridge.SavePreferences(); return false; }
+            if (Row == 2) { Bridge.HandWristAdjust.Z = FClamp(Bridge.HandWristAdjust.Z + Step * 0.5, -10, 10); Bridge.SavePreferences(); return false; }
             if (Row == 3)
             {
                 if (H == 1) { Bridge.bAlignmentMarkers = !Bridge.bAlignmentMarkers; return false; }
                 Bridge.HandWristAdjust = vect(0,0,0);
-                Bridge.SaveConfig();
+                Bridge.SavePreferences();
                 return false;
             }
             if (Row == 5)
@@ -1085,20 +1078,28 @@ function bool Activate(VRHandSelector S, int H, int Row)
             }
             return false;
         }
-        if (S.MenuPage == 7)
+        if (S.MenuPage == 7 || S.MenuPage == 12)
         {
-            if (Row == 0) { Bridge.TopHudFollowMode = Bridge.TopHudFollowMode == 1 ? 0 : 1; Bridge.SaveConfig(); return false; }
-            if (Row == 1) { Bridge.TopHudDistance = FClamp(Bridge.TopHudDistance + Step*0.1, 1.1, 2.5); Bridge.SaveConfig(); return false; }
-            if (Row == 2) { Bridge.TopHudHeight = FClamp(Bridge.TopHudHeight + Step*0.05, 0.12, 0.75); Bridge.SaveConfig(); return false; }
-            if (Row == 3) { Bridge.TopHudScale = FClamp(Bridge.TopHudScale + Step*0.1, 0.65, 1.6); Bridge.SaveConfig(); return false; }
-            if (Row == 4)
+            if (S.MenuPage == 7)
             {
-                if (H == 1) { Bridge.NativeRecenterRequested = 1; return false; }
-                Bridge.TopHudFollowMode = 0; Bridge.TopHudDistance = 1.65;
-                Bridge.TopHudHeight = 0.40; Bridge.TopHudScale = 1.0;
-                Bridge.SaveConfig();
-                return false;
+                if (Row == 0) Bridge.WristwatchOffset.X = FClamp(Bridge.WristwatchOffset.X + Step * 0.5, -12, 12);
+                if (Row == 1) Bridge.WristwatchOffset.Y = FClamp(Bridge.WristwatchOffset.Y + Step * 0.5, -12, 12);
+                if (Row == 2) Bridge.WristwatchOffset.Z = FClamp(Bridge.WristwatchOffset.Z + Step * 0.5, -12, 12);
             }
+            else
+            {
+                if (Row == 0) Bridge.WristwatchRotation.Pitch += int(Step * 5 * DegToUnrRot);
+                if (Row == 1) Bridge.WristwatchRotation.Yaw += int(Step * 5 * DegToUnrRot);
+                if (Row == 2) Bridge.WristwatchRotation.Roll += int(Step * 5 * DegToUnrRot);
+                Bridge.WristwatchRotation = Normalize(Bridge.WristwatchRotation);
+            }
+            if (Row == 3)
+            {
+                if (H == 1) { S.MenuPage = S.MenuPage == 7 ? 12 : 7; return false; }
+                Bridge.WristwatchOffset = vect(0,0,0); Bridge.WristwatchRotation = rot(0,0,0); Bridge.WristwatchScale = 1;
+            }
+            if (Row == 4) Bridge.WristwatchScale = FClamp(Bridge.WristwatchScale + Step * 0.05, 0.5, 2);
+            if (Row <= 4) Bridge.SavePreferences();
             if (Row == 5)
             {
                 DisarmTriggers();
@@ -1173,7 +1174,7 @@ function bool Activate(VRHandSelector S, int H, int Row)
                 }
                 if (W == None && Bridge.NetworkPracticeAvailable())
                 {
-                    Bridge.PC.ClientMessage("Network armory equips owned weapons only. Buy or pick up this weapon first.");
+                    Bridge.PC.ClientMessage("Online you can only equip weapons you own. Buy or pick this one up first.");
                     return false;
                 }
                 if (W == None)
@@ -1242,11 +1243,37 @@ function Preview(VRHandSelector S)
         CrouchPreview(S);
         WristPreview(S);
         ChestPreview(S);
+        PouchFitPreview();
     }
     else if (S.MenuPage == 3)
         MenuPlacementPreview(S);
     else if (S.MenuPage == 11)
         PouchFitPreview();
+    else if (S.MenuPage == 13)
+    { ChestPreview(S); PouchFitPreview(); }
+}
+
+function bool WatchFitActive()
+{
+    local int H;
+    if (Bridge == None || Bridge.HandInventory == None || Bridge.HandInventory.Input == None) return false;
+    for (H = 0; H < 2; ++H)
+        if (Bridge.HandInventory.Input.IsSelectorOpen(H) && Bridge.HandInventory.Input.Selectors[H] != None
+            && (Bridge.HandInventory.Input.Selectors[H].MenuPage == 7 || Bridge.HandInventory.Input.Selectors[H].MenuPage == 12)) return true;
+    return false;
+}
+function PlacePouchAtHand(int Hand)
+{
+    local vector Existing, Delta, Forward, Right;
+    local rotator Torso;
+    if (Hand < 0 || Hand > 1 || (Bridge.NativeValidMask & (1 << Hand)) == 0) return;
+    Torso = Bridge.BodyYaw();
+    Forward = vector(Torso); Right = Normal(vect(0,0,1) cross Forward);
+    Existing = Bridge.AmmoPouchPosition(Hand, class'VRInteractiveReload'.default.BeltOffset);
+    Delta = Bridge.PalmPosition(Hand) - Existing;
+    Bridge.AmmoPouchAdjustment.X = FClamp(Bridge.AmmoPouchAdjustment.X + (Delta dot Forward), -15, 20);
+    Bridge.AmmoPouchAdjustment.Y = FClamp(Bridge.AmmoPouchAdjustment.Y + (Hand == 0 ? -1 : 1) * (Delta dot Right), -3, 25);
+    Bridge.AmmoPouchAdjustment.Z = FClamp(Bridge.AmmoPouchAdjustment.Z + Delta.Z, -20, 20);
 }
 
 function PouchFitPreview()
@@ -1258,7 +1285,7 @@ function PouchFitPreview()
     for (H = 0; H < 2; ++H)
     {
         Center = Bridge.AmmoPouchPosition(H, class'VRInteractiveReload'.default.BeltOffset);
-        Bridge.DrawDebugBox(Center, vect(2,2,2), 60, 220, 255, false);
+        Bridge.DrawDebugSphere(Center, class'VRInteractiveReload'.default.BeltRadius * FClamp(Bridge.AmmoPouchScale, 0.5, 1.5), 32, 60, 220, 255, false);
     }
 }
 
@@ -1354,7 +1381,7 @@ function ChestPreview(VRHandSelector S)
         && Bridge.HandInventory.Input.Grenade != None)
     {
         ChestPos = Bridge.HandInventory.Input.Grenade.ChestGrabPosition();
-        Bridge.DrawDebugBox(ChestPos, vect(4, 4, 4), 255, 128, 0, false);
+        Bridge.DrawDebugSphere(ChestPos, Bridge.HandInventory.Input.Grenade.ChestGrabRadius(), 32, 255, 128, 0, false);
     }
 }
 

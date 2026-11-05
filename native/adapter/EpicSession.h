@@ -94,7 +94,7 @@ inline bool Root(std::string_view utf8,std::wstring& root) {
     return true;
 }
 inline bool GraphicsOptions(std::string_view mode,std::string_view sharp,std::string_view bile,std::string_view blood="1") {
-    if(mode!="off" && mode!="dlaa" && mode!="quality" && mode!="balanced" && mode!="performance" && mode!="ultraperformance") return false;
+    if(mode!="off" && mode!="auto" && mode!="dlaa" && mode!="quality" && mode!="balanced" && mode!="performance" && mode!="ultraperformance") return false;
     if(sharp.empty() || sharp.size()>3 || sharp.find_first_not_of("0123456789")!=sharp.npos) return false;
     unsigned value=0;for(char c:sharp)value=value*10+static_cast<unsigned>(c-'0');
     return value<=100 && (bile=="0" || bile=="1") && (blood=="0" || blood=="1");

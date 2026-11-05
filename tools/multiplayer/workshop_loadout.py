@@ -2,6 +2,7 @@
 from pathlib import Path
 import hashlib
 import json
+import settings_registry
 import re
 import shutil
 import subprocess
@@ -11,9 +12,9 @@ import msvcrt
 from vr_config import profile_root
 from workshop_map import MAP_NAME
 
-DIFFICULTY_NAMES = ("normal", "hard", "suicidal", "hellonearth")
-LENGTH_NAMES = ("short", "medium", "long")
-VR_QUALITIES = ("quality", "balanced", "performance")
+DIFFICULTY_NAMES = settings_registry.DIFFICULTIES
+LENGTH_NAMES = settings_registry.GAME_LENGTHS
+VR_QUALITIES = settings_registry.VR_QUALITIES
 # Provisional PC workload starting points, not certified headset performance.
 # Quest models share the streamed-PC family; actual OpenXR sizes vary by runtime.
 HEADSET_PRESETS = {
@@ -26,16 +27,9 @@ HEADSET_PRESETS = {
 
 
 def apply_headset_preset(args):
-    name = getattr(args, "headset_preset", None)
-    if not name:
-        return
-    quality, scale = HEADSET_PRESETS[name]
-    # Explicit individual settings win; the bundle wins over saved preferences.
-    if getattr(args, "vr_quality_requested", None) is None:
-        args.vr_quality = quality
-        args.vr_quality_requested = quality
-    if getattr(args, "eye_render_percent", None) is None:
-        args.eye_render_percent = scale
+    # Retired compatibility input. Existing resolved quality and scale stay untouched.
+    return
+
 
 
 # Names, dependency IDs and Load* parameters are from the authors' Workshop
@@ -58,7 +52,10 @@ MAPS = {
     "KF-BikiniAtoll": "643383080",
 }
 LEGACY_MODS = list(MODS)
-DEFAULT_MODS = []
+DEFAULT_MODS = settings_registry.default("mods")
+# Keys older launchers saved for retired choices; dropped on the next save.
+RETIRED_KEYS = ("multiplayer_grabs", "standing_holds", "breacher", "zed_defense", "portal_gun",
+                "flex", "headset_preset")
 REQUIRED_PACKAGES = {
     "2875147606": {"UnofficialKFPatch.u", "UnofficialKFPatch_LevelTransition.u", "FriendlyHudExt.u"},
     **{item: {filename} for item, filename in zip(
@@ -93,8 +90,38 @@ def parse_mods(value):
 # launch, and only a profile with nothing in it falls back to the shipped
 # default. Saved play mode applies to Host and Solo; a friend joining still gets the
 # flat screen unless they ask for --vr.
-DLSS_MODES = ("off", "dlaa", "quality", "balanced", "performance", "ultraperformance")
-KF2VR_WORKSHOP_ID = "3815925510"
+DLSS_MODES = settings_registry.DLSS_MODES
+FLEX_MODES = settings_registry.FLEX_MODES
+# Shipped defaults for anything a profile has not saved.
+D = settings_registry.default
+SPAWN_KEYS = ("max_zeds", "wave_zeds_percent", "spawn_rate_percent")
+
+
+def ukfp_spawn_settings(args):
+    """Spawn overrides as Unofficial KF2 Patch settings (stock KF2 has none).
+
+    Unset choices give UKFP's own stock values, so a session copy never inherits
+    an override from an earlier launch.
+    """
+    value = lambda key: getattr(args, key, None) if getattr(args, key, None) is not None else D(key)
+    return {"MaxMonsters": str(int(value("max_zeds"))),
+            "WaveCountMultiplier": f"{value('wave_zeds_percent') / 100:.6f}",
+            "SpawnRateMultiplier": f"{value('spawn_rate_percent') / 100:.6f}"}
+
+
+def spawn_overrides_set(args):
+    return any(getattr(args, key, None) not in (None, D(key)) for key in SPAWN_KEYS)
+
+
+def require_ukfp_for_spawns(args):
+    """A spawn override needs UKFP, as its dependent mods already do; Solo loads only UKFP."""
+    mods = list(getattr(args, "mods", None) or [])
+    if spawn_overrides_set(args) and "ukfp" not in mods:
+        args.mods = parse_mods(",".join(["ukfp"] + mods))
+# The full item also exposes the game packages for desktop players joining a host.
+KF2VR_WORKSHOP_ID = "3817663661"
+KF2VR_FULL_WORKSHOP_ID = KF2VR_WORKSHOP_ID
+KF2VR_FULL_WORKSHOP_URL = "https://steamcommunity.com/sharedfiles/filedetails/?id=" + KF2VR_FULL_WORKSHOP_ID
 
 
 def _read_preferences(path, *, strict=False):
@@ -140,81 +167,121 @@ def load_preferences(args):
         saved = {}
     if (not scenario and (getattr(args, "host", False) or getattr(args, "solo", False))
             and not getattr(args, "mode_requested", False)):
-        args.vr = bool(saved.get("vr", True))
+        args.vr = bool(saved.get("vr", D("vr")))
+    mode = "solo" if getattr(args, "solo", False) else "host"
+    match = saved.get(mode + "_match", {})
+    if not isinstance(match, dict): match = {}
+    saved_match = match
+    match = {key: match.get(key, saved.get(key, D(key))) for key in ("map", "difficulty", "game_length")}
     if getattr(args, "map", None) is None:
-        args.map = str(saved.get("map", "KF-BurningParis"))
+        args.map = str(match["map"])
         if not re.fullmatch(r"KF-[A-Za-z0-9_-]+", args.map):
-            args.map = "KF-BurningParis"
+            args.map = D("map")
     args.test_map = bool(getattr(args, "test_map", False)) or args.map == MAP_NAME
     if getattr(args, "difficulty", None) is None:
-        args.difficulty = saved.get("difficulty") if saved.get("difficulty") in DIFFICULTY_NAMES else "normal"
+        args.difficulty = match.get("difficulty") if match.get("difficulty") in DIFFICULTY_NAMES else D("difficulty")
     if getattr(args, "game_length", None) is None:
-        args.game_length = saved.get("game_length") if saved.get("game_length") in LENGTH_NAMES else "short"
+        args.game_length = match.get("game_length") if match.get("game_length") in LENGTH_NAMES else D("game_length")
+    # Spawn overrides are remembered per mode, like the rest of the match.
+    for key in SPAWN_KEYS:
+        if getattr(args, key, None) is None:
+            option, value = settings_registry.option(key), saved_match.get(key)
+            setattr(args, key, value if type(value) is int and option.minimum <= value <= option.maximum else D(key))
     apply_headset_preset(args)
     if getattr(args, "vr_quality", None) is None:
-        args.vr_quality = saved.get("vr_quality") if saved.get("vr_quality") in VR_QUALITIES else "performance"
+        args.vr_quality = saved.get("vr_quality") if saved.get("vr_quality") in VR_QUALITIES else D("vr_quality")
     if getattr(args, "inventory_focus", None) is None:
-        args.inventory_focus = bool(saved.get("inventory_focus", False))
-    if getattr(args, "multiplayer_grabs", None) is None:
-        args.multiplayer_grabs = saved.get("multiplayer_grabs", False) is True
-    if getattr(args, "breacher", None) is None:
-        args.breacher = (saved.get("breacher", False) is True) if (getattr(args, "host", False) or getattr(args, "solo", False)) else False
-    if scenario:
-        args.breacher = False
-    if getattr(args, "portal_gun", None) is None:
-        args.portal_gun = saved.get("portal_gun", False) is True
-    if getattr(args, "threaded_render", None) is None:
-        args.threaded_render = saved.get("threaded_render", False) is True
+        args.inventory_focus = bool(saved.get("inventory_focus", D("inventory_focus")))
+    # Rendering modes are fixed, not options (Kvasir94, 11-05, #200): the
+    # separate render thread and single-pass stereo always, on Steam and Epic.
+    # DLSS blurred distant detail in two-pass stereo.
+    args.threaded_render = True
+    args.single_pass = True
     for key in ("workshop_desktop", "open_server"):
         if getattr(args, key, None) is None:
-            setattr(args, key, saved.get(key, False) is True if getattr(args, "host", False) else False)
-    for key in ("single_pass", "hbao", "reflections"):
+            setattr(args, key, saved.get(key, D(key)) is True if getattr(args, "host", False) else False)
+    # Host permissions for VR interactions; on unless the host turned them off.
+    for key in ("zed_grabs", "gravity_grab"):
         if getattr(args, key, None) is None:
-            value = saved.get(key, True) is True
-            # A saved Steam preference must not enable unsupported Epic stereo.
-            if key == "single_pass" and getattr(args, "store", "auto") == "epic":
-                value = False
+            setattr(args, key, saved.get(key, D(key)) is not False)
+    for key in ("hbao", "reflections"):
+        if getattr(args, key, None) is None:
+            value = saved.get(key, D(key)) is True
             setattr(args, key, value)
+    args.flex = "off"
     if getattr(args, "dlss", None) is None:
-        mode = saved.get("dlss", "off")
-        args.dlss = mode if mode in DLSS_MODES else "off"
+        mode = saved.get("dlss", D("dlss"))
+        args.dlss = mode if mode in DLSS_MODES else D("dlss")
     if getattr(args, "hide_bile_lens", None) is None:
-        args.hide_bile_lens = saved.get("hide_bile_lens", True) is not False
+        args.hide_bile_lens = saved.get("hide_bile_lens", D("hide_bile_lens")) is not False
     if getattr(args, "hide_blood_lens", None) is None:
-        args.hide_blood_lens = saved.get("hide_blood_lens", True) is not False
+        args.hide_blood_lens = saved.get("hide_blood_lens", D("hide_blood_lens")) is not False
     if getattr(args, "dlss_sharpness", None) is None:
-        value = saved.get("dlss_sharpness", 0)
-        args.dlss_sharpness = value if type(value) is int and 0 <= value <= 100 else 0
+        value = saved.get("dlss_sharpness", D("dlss_sharpness"))
+        args.dlss_sharpness = value if type(value) is int and 0 <= value <= 100 else D("dlss_sharpness")
     if scenario or getattr(args, "solo", False):
         args.mods = []
         args.damage_popups = False
         args.test_map_players = 0
         if getattr(args, "solo", False):
             args.inventory_focus = False
-            args.multiplayer_grabs = False
         return
     if args.mods is None:
         args.mods = parse_mods(",".join(saved.get("mods", DEFAULT_MODS)) or "none") if args.vr else []
     if args.damage_popups is None:
-        args.damage_popups = bool(saved.get("damage_popups", True))
+        args.damage_popups = bool(saved.get("damage_popups", D("damage_popups")))
     if args.test_map_players is None:
-        args.test_map_players = int(saved.get("test_map_players", 6))
+        args.test_map_players = int(saved.get("test_map_players", D("test_map_players")))
     if args.test_map_players not in (0, 6):
         raise ValueError("Saved test map players must be 0 or 6")
 
 
 @_preference_transaction
+def _update_preferences(args):
+    root = getattr(args, "profile_root", None) or profile_root()
+    path = root / "launcher.json"
+    saved = _read_preferences(path, strict=True)
+    for key in RETIRED_KEYS:
+        saved.pop(key, None)
+    saved.update({key: value for key, value in args.values.items() if key not in RETIRED_KEYS})
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(saved, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def update_preferences(values, profile_root=None):
+    """Store individual choices from the Settings page without a launch."""
+    from types import SimpleNamespace
+    _update_preferences(SimpleNamespace(profile_root=profile_root, values=dict(values)))
+
+
+def last_session(profile_root_override=None):
+    """"solo" or "host": what the one-click Play button repeats."""
+    saved = _read_preferences((profile_root_override or profile_root()) / "launcher.json")
+    return saved.get("last_session") if saved.get("last_session") in ("solo", "host") else "solo"
+
+
+@_preference_transaction
 def save_dlss_preferences(args):
-    # A join takes the host's match settings, but DLSS is the player's own.
+    # A join takes the host's match settings, but graphics are the player's own.
     root = getattr(args, "profile_root", None) or profile_root()
     root.mkdir(parents=True, exist_ok=True)
     path = root / "launcher.json"
     saved = _read_preferences(path, strict=True)
-    saved.update({"dlss": getattr(args, "dlss", None) or "off",
+    for key in RETIRED_KEYS:
+        saved.pop(key, None)
+    # Join can explicitly choose the same preset as Solo/Host. An omitted
+    # choice keeps the saved preset and headset edits without overwriting a
+    # newer preference with a value resolved when this window first opened.
+    if getattr(args, "vr_quality_requested", None) in VR_QUALITIES:
+        saved["vr_quality"] = args.vr_quality_requested
+    saved.update({"flex": "off",
+                  "dlss": getattr(args, "dlss", None) or "off",
                   "dlss_sharpness": int(getattr(args, "dlss_sharpness", None) or 0),
                   "hide_bile_lens": getattr(args, "hide_bile_lens", True) is not False,
                   "hide_blood_lens": getattr(args, "hide_blood_lens", True) is not False})
     temporary = path.with_suffix(".json.tmp")
+    saved.pop("flex",None)
     temporary.write_text(json.dumps(saved, indent=2), encoding="utf-8")
     temporary.replace(path)
 
@@ -229,22 +296,31 @@ def save_preferences(args):
     # the in-headset preferences in the profile KFGame.ini, and two owners for
     # one setting is how they start disagreeing.
     saved = _read_preferences(path, strict=True)
+    for key in RETIRED_KEYS:
+        saved.pop(key, None)
+    saved["last_session"] = "solo" if getattr(args, "solo", False) else "host"
     saved.update({"vr": bool(getattr(args, "vr", True)),
         "map": (saved.get("map", "KF-BurningParis")
                 if getattr(args, "solo", False) and getattr(args, "test_map", False)
                 else MAP_NAME if getattr(args, "test_map", False) else getattr(args, "map", "KF-BurningParis")),
         "difficulty": getattr(args, "difficulty", "normal"),
-        "game_length": getattr(args, "game_length", "short"),
+        "game_length": getattr(args, "game_length", D("game_length")),
         "vr_quality": getattr(args, "vr_quality", "performance"),
-        "threaded_render": bool(getattr(args, "threaded_render", False)),
+        "hbao": bool(getattr(args, "hbao", D("hbao"))),
+        "reflections": bool(getattr(args, "reflections", D("reflections"))),
         "single_pass": bool(getattr(args, "single_pass", True)),
-        "hbao": bool(getattr(args, "hbao", True)),
-        "reflections": bool(getattr(args, "reflections", True)),
+        "threaded_render": bool(getattr(args, "threaded_render", True)),
+        "flex": "off",
         "dlss": getattr(args, "dlss", None) or "off",
         "dlss_sharpness": int(getattr(args, "dlss_sharpness", None) or 0),
         "hide_bile_lens": getattr(args, "hide_bile_lens", True) is not False,
-        "hide_blood_lens": getattr(args, "hide_blood_lens", True) is not False,
-        "breacher": bool(getattr(args, "breacher", False))})
+        "hide_blood_lens": getattr(args, "hide_blood_lens", True) is not False})
+    mode = "solo" if getattr(args,"solo",False) else "host"
+    if not (mode == "solo" and getattr(args,"test_map",False)):
+        saved[mode + "_match"] = {key: saved[key] for key in ("map","difficulty","game_length")}
+        saved[mode + "_match"].update({key: int(getattr(args, key, None) if getattr(args, key, None) is not None else D(key))
+                                       for key in SPAWN_KEYS})
+    saved.pop("flex",None)
     # Solo applies no hosted loadout. Remember its common choices without
     # erasing the mods and host settings the next hosted session will use.
     if not getattr(args, "solo", False):
@@ -253,10 +329,10 @@ def save_preferences(args):
             "damage_popups": args.damage_popups, "test_map_players": args.test_map_players,
             "inventory_focus": bool(getattr(args, "inventory_focus", False)),
             "open_server": bool(getattr(args, "open_server", False)),
-            "workshop_desktop": bool(getattr(args, "workshop_desktop", False)),
-            "multiplayer_grabs": bool(getattr(args, "multiplayer_grabs", False))})
-    if getattr(args, "solo", False):
-        saved["portal_gun"] = bool(getattr(args, "portal_gun", False))
+            "zed_grabs": getattr(args, "zed_grabs", None) is not False,
+            "gravity_grab": getattr(args, "gravity_grab", None) is not False,
+            "workshop_desktop": bool(getattr(args, "workshop_desktop_session_off", False)
+                                     or getattr(args, "workshop_desktop", D("workshop_desktop")))})
     temporary.write_text(json.dumps(saved, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
 
@@ -363,16 +439,14 @@ def ensure_item(item_id, game, cache, steam_root, *, download):
             raise RuntimeError(f"Workshop {item_id} is missing. Subscribe/download in Steam or launch once without -PrepareOnly.")
         executable = Path(steam_root) / "steamcmd.exe"
         if not executable.is_file():
+            from dependencies import extract_verified
+            Path(steam_root).mkdir(parents=True, exist_ok=True)
+            extract_verified("steamcmd.zip", Path(steam_root) / "steamcmd.zip", Path(steam_root))
+        if not executable.is_file():
             raise RuntimeError("SteamCMD is missing. Install the local server or subscribe to the item in Steam first.")
-        log = Path(steam_root) / f"workshop-{item_id}.log"
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = 0
-        with log.open("wb") as output:
-            result = subprocess.run([str(executable), "+login", "anonymous", "+workshop_download_item",
-                "232090", item_id, "validate", "+quit"], cwd=steam_root, startupinfo=startup,
-                stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, timeout=600)
-        if result.returncode or not _packages(source):
+        from dependencies import workshop_download
+        downloaded, log = workshop_download(steam_root, item_id, lambda: bool(_packages(source)))
+        if not downloaded:
             raise RuntimeError(f"Workshop {item_id} download failed; see {log}")
     # Publish a receipt only after the entire copy validates. A partial previous
     # copy is never accepted as an installed dependency.
@@ -385,12 +459,35 @@ def ensure_item(item_id, game, cache, steam_root, *, download):
 
 
 def prepare_content(args, game, steam_root):
-    ids = [value[1] for value in MODS.values()] if "ukfp" in args.mods else []
-    if args.map in MAPS:
+    from installed_map_catalog import catalog
+    installed = catalog(game).get(args.map)
+    args.installed_map_paths = []
+    if installed is not None and installed[0] == Path(game) / "KFGame/BrewedPC":
+        # A custom map may have been installed alongside stock maps. A local
+        # host needs the same map and companion packages even if its dedicated
+        # installation lacks them. Mount paths; never copy/hash the whole game.
+        args.installed_map_paths = sorted({str(p.parent) for p in _packages(installed[0])})
+    ukfp = MODS["ukfp"][1]
+    solo = getattr(args, "solo", False)
+    ids = ([ukfp] if solo else [value[1] for value in MODS.values()]) if "ukfp" in args.mods else []
+    if args.map in MAPS and installed is None:
         ids.append(MAPS[args.map])
     roots = {}
     for item_id in dict.fromkeys(ids):
-        roots[item_id] = ensure_item(item_id, game, args.cache_root, steam_root, download=not args.prepare_only)
+        try:
+            # Solo uses UKFP only for spawn overrides and never downloads it.
+            roots[item_id] = ensure_item(item_id, game, args.cache_root, steam_root,
+                                         download=not args.prepare_only and not (solo and item_id == ukfp))
+        except RuntimeError as error:
+            if solo and item_id == ukfp:
+                raise RuntimeError("Solo zed spawn overrides need the Unofficial KF2 Patch, which is not on this PC. "
+                                   f"Subscribe to Workshop item {ukfp} in Steam (or host once so the launcher caches it), "
+                                   "or set the spawn options back to stock.") from error
+            raise
+    # A selected installed custom map mounts its complete content directory,
+    # including companion packages, in both client and local host configs.
+    if installed is not None and installed[0] != Path(game) / "KFGame/BrewedPC":
+        roots[installed[1] or "local-map"] = installed[0]
     names = {}
     receipt = []
     for item_id, root in roots.items():
@@ -406,21 +503,24 @@ def prepare_content(args, game, steam_root):
 
 
 def configure_content(configs, args, *, server):
-    from session import read_ini, set_ini
+    from launch_support import read_ini, set_ini
     content = getattr(args, "workshop_content", [])
+    installed_paths = getattr(args, "installed_map_paths", [])
     offer_mod = server and getattr(args, "workshop_desktop", False) is True
     if offer_mod and not getattr(args, "workshop_desktop_verified", False):
         raise RuntimeError("Workshop desktop content has not been verified against this package. Use the matching KF2-VR ZIP.")
-    if not content and not offer_mod:
+    if not content and not offer_mod and not installed_paths:
         return
     path = Path(configs) / "KFEngine.ini"
     text = read_ini(path)
-    if content:
+    if content or installed_paths:
         section = re.search(r"(?ims)^\[Core\.System\][^\n]*\n(.*?)(?=^\[|\Z)", text)
         if not section:
             raise RuntimeError("Missing Core.System for Workshop content")
-        directories = sorted({str((Path(item["root"]) / name).parent) for item in content for name in item["files_sha256"]})
-        values = {key: directories + re.findall(r"(?im)^" + key + r"=([^\r\n]*)", section[1])
+        directories = sorted(set(installed_paths) | {str((Path(item["root"]) / name).parent) for item in content for name in item["files_sha256"]})
+        # Keep the selected release and stock packages ahead of custom content;
+        # stale development scripts in Unpublished must not shadow this build.
+        values = {key: re.findall(r"(?im)^" + key + r"=([^\r\n]*)", section[1]) + directories
                   for key in ("Paths", "ScriptPaths", "SeekFreePCPaths", "BrewedPCPaths")}
         localization = [str(Path(item["root"]) / "Localization") for item in content
                         if (Path(item["root"]) / "Localization").is_dir()]
@@ -428,7 +528,7 @@ def configure_content(configs, args, *, server):
         text = set_ini(text, "Core.System", values)
     if server:
         text = set_ini(text, "OnlineSubsystemSteamworks.KFWorkshopSteamworks", {
-            "ServerSubscribedWorkshopItems": [item["workshop_id"] for item in content] + ([KF2VR_WORKSHOP_ID] if offer_mod else [])})
+            "ServerSubscribedWorkshopItems": [item["workshop_id"] for item in content if item["workshop_id"].isdecimal()] + ([KF2VR_WORKSHOP_ID] if offer_mod else [])})
     net = re.search(r"(?ims)^\[IpDrv\.TcpNetDriver\][^\n]*\n(.*?)(?=^\[|\Z)", text)
     managers = re.findall(r"(?im)^DownloadManagers=([^\r\n]*)", net[1]) if net else []
     workshop_manager = "OnlineSubsystemSteamworks.SteamWorkshopDownload"
@@ -437,11 +537,22 @@ def configure_content(configs, args, *, server):
     path.write_text(text, encoding="utf-16")
 
 
+def desktop_workshop_availability(release, cache):
+    """Read cached compatibility for the Host form; launch still verifies actual packages."""
+    try:
+        manifest=json.loads((Path(release)/"release.json").read_text(encoding="utf-8-sig"))
+        published=json.loads((Path(cache)/KF2VR_WORKSHOP_ID/"content.json").read_text(encoding="utf-8-sig"))
+        local=manifest.get("script_build",{}).get("packages_sha256",{})
+        remote=published.get("files_sha256",{})
+        if not local or not remote:return None
+        identities=lambda entries:{Path(name).name.lower():value.upper() for name,value in entries.items() if Path(name).suffix.lower() in (".u",".upk",".kfm")}
+        return identities(local)==identities(remote)
+    except (OSError,ValueError,TypeError,AttributeError):return None
+
+
 def verify_desktop_workshop(args, game, steam_root, release):
     """Offer only matching packages; never mount published scripts over local ones."""
     args.workshop_desktop_verified = False
-    if getattr(args, "breacher", False):
-        raise RuntimeError("Workshop desktop joining cannot supply the optional Breacher package. Use the matching KF2-VR ZIP.")
     root = ensure_item(KF2VR_WORKSHOP_ID, game, args.cache_root, steam_root, download=not args.prepare_only)
     published = package_hashes(root, KF2VR_WORKSHOP_ID)
     local = package_hashes(Path(release) / "Packages", KF2VR_WORKSHOP_ID)
@@ -450,11 +561,11 @@ def verify_desktop_workshop(args, game, steam_root, release):
         for name, digest in files.items():
             key = Path(name).name.lower()
             if key in names:
-                raise RuntimeError("Ambiguous Workshop package names. Use the matching KF2-VR ZIP.")
+                raise RuntimeError("Its package names are ambiguous.")
             names[key] = digest
         return names
     if identities(local) != identities(published):
-        raise RuntimeError("Workshop desktop packages differ from this KF2-VR build. Disable Workshop desktop joining and send the matching KF2-VR ZIP.")
+        raise RuntimeError("Its packages differ from this KF2-VR build.")
     args.workshop_desktop_verified = True
 
 
@@ -467,7 +578,7 @@ def configure_mod_settings(role, args, game, user):
     """
     if "ukfp" not in (getattr(args, "mods", None) or []):
         return
-    from session import read_ini, set_ini, set_ini_defaults, config_hashes
+    from launch_support import read_ini, set_ini, set_ini_defaults, config_hashes
     configs = Path(role["config_root"])
     subdir = Path("KF2VR") / configs.parent.parent.name / role["role"]
     install = (args.server_root if role["role"] == "server" else Path(game)) / "KFGame/Config"
@@ -510,6 +621,9 @@ def configure_mod_settings(role, args, game, user):
         text = read_ini(path) if path.exists() else ""
         text = set_ini(text, "UnofficialKFPatch.UKFPHUDInteraction", {
             "bDisableDamagePopups": "False" if damage_popups_enabled(args) else "True"})
+        # The game that runs the match: the dedicated server, or the Solo client.
+        if role["role"] == "server" or getattr(args, "solo", False):
+            text = set_ini(text, "UnofficialKFPatch.UKFPReplicationInfo", ukfp_spawn_settings(args))
         path.write_text(text, encoding="utf-16")
         destinations.append({"root": str(destination.resolve()), "files_sha256": config_hashes(destination)})
     role["args"].append(f"-CONFIGSUBDIR={subdir}")

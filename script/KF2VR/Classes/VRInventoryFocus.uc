@@ -14,6 +14,7 @@ struct LocalCompensation
 var VRHandsBridge Bridge;
 var bool bFocusActive;
 var config float FocusSimulationSpeed;
+var config bool bEnabled;
 var array<LocalCompensation> LocalActors;
 var KFPlayerController FeedbackPC;
 var bool bFeedbackActive;
@@ -43,7 +44,7 @@ function bool IsZedTimeActive()
 
 function bool CanFocus()
 {
-    return Bridge != None && !Bridge.bDeleteMe && Bridge.WorldInfo != None
+    return bEnabled && Bridge != None && !Bridge.bDeleteMe && Bridge.WorldInfo != None
         && Bridge.WorldInfo.NetMode == NM_Standalone
         && Bridge.WorldInfo.Pauser == None && Bridge.WorldInfo.TimeDilation == 1.0
         && !IsZedTimeActive() && Bridge.PC != None && Bridge.PC.IsLocalController()

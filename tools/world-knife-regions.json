@@ -1,0 +1,17 @@
+{
+  "frame": "RW_Weapon; unscaled world-mesh local coordinates",
+  "edge_radius": 0.25,
+  "tip_radius": 0.75,
+  "profiles": {
+    "Commando": {"blade_min_z": 7.0, "edge_sides": 2},
+    "Gunslinger": {"blade_min_z": 5.5, "edge_sides": 2},
+    "Firebug": {"blade_min_z": 7.0, "edge_sides": 2},
+    "Survivalist": {"blade_min_z": 9.0, "edge_sides": 2},
+    "Sharpshooter": {"blade_min_z": 7.0, "edge_sides": 2},
+    "Berserker": {"blade_min_z": 7.2, "edge_sides": 2},
+    "Support": {"blade_min_z": 9.5, "edge_sides": 3},
+    "FieldMedic": {"blade_min_z": 9.0, "edge_sides": 2},
+    "SWAT": {"blade_min_z": 5.0, "edge_sides": 2},
+    "Demolitionist": {"blade_min_z": 11.0, "edge_sides": 2}
+  }
+}

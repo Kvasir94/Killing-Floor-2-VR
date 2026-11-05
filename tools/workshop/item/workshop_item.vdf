@@ -1,0 +1,11 @@
+"workshopitem"
+{
+    "appid"             "232090"
+    "publishedfileid"   "3817663661"
+    "contentfolder"     "__CONTENT__"
+    "previewfile"       "__PREVIEW__"
+    "visibility"        "0"
+    "title"             "KF2VR"
+    "description"       "[h1]Killing Floor 2 VR[/h1]Fan-made OpenXR adaptation by Kvasir94 and optimumbox, unaffiliated with Tripwire Interactive.[h2]Steam VR setup[/h2][olist][*]Subscribe and press Play on ordinary KF2 once, then quit at the menu. Wait for Steam to finish downloading KF2VR.[*]Browse your Steam library folder: steamapps/workshop/content/232090/3817663661.[*]Exit Steam normally, run Setup KF2VR, and select your Steam account.[*]Reopen Steam. Press Play on KF2 for the Play in VR / Play normally choice.[/olist]Run setup again to restore your previous Launch Options. Setup changes only the selected account. For manual setup, save your previous Launch Options and enter the quoted full path to this item's Play.cmd followed by a space and %command%.[h2]Desktop friends[/h2]Hosts can offer this item to ordinary Steam desktop players. Matching compiled packages are required. Desktop players can join through the ordinary server browser; VR players use the full launcher. Epic desktop players need the matching companion pack. Use custom VAC-off servers. Source, controls, limitations and releases: https://github.com/Kvasir94/Killing-Floor-2-VR . Workshop distribution adapted from optimumbox/Killing-Floor-2-VR."
+    "changenote"        "__CHANGENOTE__"
+}

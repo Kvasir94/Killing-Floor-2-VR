@@ -1,4 +1,5 @@
 #include "HeadAim.h"
+#include "WeaponFan.h"
 #include <DirectXMath.h>
 #include <cmath>
 #include <limits>
@@ -48,6 +49,31 @@ int main() {
         Check(Near(v.y,1), "positive native yaw aims right");
         v=NativeActorRotation({0,0,16384}).Rotate({0,1,0});
         Check(Near(v.z,-1), "native roll sign");
+
+        {
+            constexpr float degree=3.14159265358979323846f/180.f;
+            for (bool horizontal : {false,true}) {
+                const float width=(horizontal ? 15.f : 7.f)*degree;
+                const float step=width/8.f;
+                const float start=-width/2.f;
+                const auto first=WeaponFanDirection({}, {}, start,step,0,horizontal);
+                const auto last=WeaponFanDirection({}, {}, start,step,7,horizontal);
+                const float firstAngle=horizontal ? std::atan2(first.y,first.x) : -std::atan2(first.z,first.x);
+                const float lastAngle=horizontal ? std::atan2(last.y,last.x) : -std::atan2(last.z,last.x);
+                Check(Near(firstAngle,-width/2.f) && Near(lastAngle,width*3.f/8.f),
+                    "stock eight-pellet offsets keep their original asymmetric endpoints");
+                Check(horizontal ? (first.y<0 && Near(first.z,0)) : (first.z>0 && Near(first.y,0)),
+                    "stock fan uses native right/up axes and signed offsets");
+                for (std::uint8_t pellet=0;pellet<8;++pellet) {
+                    const auto direction=WeaponFanDirection({}, {}, start,step,pellet,horizontal);
+                    Check(Near(direction.Length(),1),"each fan pellet remains a unit direction");
+                }
+            }
+            const auto rolled=WeaponFanDirection({0,0,16384}, {}, -7*degree,0,0,false);
+            Check(rolled.y>0 && Near(rolled.z,0),"rolling the gun rotates the vertical fan plane");
+            const auto recoiled=WeaponFanDirection({0,65000,0}, {0,536+16384,0},0,0,0,false);
+            Check(Near(recoiled.x,0) && Near(recoiled.y,1),"accepted recoil is added once with native wrap");
+        }
 
         {
             // Floor match: a 1.75 m standing eye in STAGE space renders at its
@@ -190,22 +216,22 @@ int main() {
             applied.reference,latest,residual,error,applied.cameraRotation),"aim residual");
         for(int eye=0;eye<2;++eye) { Equal(baseline[eye].view,residual[eye].view); Equal(baseline[eye].projection,residual[eye].projection); }
 
-        // A portal changes the engine camera's whole frame, including roll.
-        // Rebase the prior applied HMD component without shifting either eye.
-        HeadAim transported=aim;
-        const pinned::NativeRotator exitCamera{4500,-11000,9000};
-        const auto exitWorld=Rotation(NativeCameraRotation(exitCamera))*translation;
-        Check(BuildStereoMatrices(Matrix(dx::XMMatrixInverse(nullptr,exitWorld)),projection,
-            applied.reference,latest,baseline,error,applied.cameraRotation),"mapped portal camera baseline");
-        Check(transported.RebasePortal(controller,current,latest),"portal tracking rebase");
-        AppliedHeadAim exitAim;
-        Check(transported.RenderState(controller,exitCamera,exitAim),"portal render reference");
-        Check(BuildStereoMatrices(Matrix(dx::XMMatrixInverse(nullptr,exitWorld)),projection,
-            exitAim.reference,latest,residual,error,exitAim.cameraRotation),"rebased portal eye matrices");
-        for(int eye=0;eye<2;++eye) Equal(baseline[eye].view,residual[eye].view);
-        auto afterPortal=latest; ++afterPortal.poseSampleId;
-        Check(transported.Prepare(controller,exitCamera,afterPortal,request)==HeadAimStatus::NoChange,
-            "stationary head does not repeat pre-portal rotation");
+        // Tabletop board: eye separation and head motion scale with it.
+        std::array<EyeMatrices,2> board;
+        Check(BuildStereoMatrices(Matrix(dx::XMMatrixInverse(nullptr,bodyWorld)),projection,
+            applied.reference,latest,board,error,{},{},30.f),"tabletop matrices");
+        const auto eyeOf=[](const EyeMatrices& e) {
+            dx::XMFLOAT4X4 m; std::memcpy(&m,e.view.m,sizeof(m));
+            dx::XMFLOAT3 p; dx::XMStoreFloat3(&p,dx::XMMatrixInverse(nullptr,dx::XMLoadFloat4x4(&m)).r[3]); return p;
+        };
+        const auto separation=[&](const std::array<EyeMatrices,2>& pair) {
+            const auto a=eyeOf(pair[0]),b=eyeOf(pair[1]);
+            return std::sqrt((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y)+(a.z-b.z)*(a.z-b.z));
+        };
+        Check(separation(baseline)>0.f && std::abs(separation(board)-30.f*separation(baseline))<0.01f*separation(board),
+            "tabletop scale multiplies eye separation");
+        Check(SanitiseWorldScale(0.5f)==1.f && SanitiseWorldScale(500.f)==1.f && SanitiseWorldScale(40.f)==40.f
+            && SanitiseWorldScale(std::numeric_limits<float>::quiet_NaN())==1.f,"world scale sanitised");
 
         // Failure consumes no tracked delta; a newer pose includes the missed
         // change rather than accumulating the full absolute orientation twice.

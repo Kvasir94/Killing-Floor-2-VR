@@ -7,6 +7,7 @@
 #include "FocusTiming.h"
 #include "VRSessionInput.h"
 #include "RingsideBell.h"
+#include "GsaIsolation.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
@@ -16,6 +17,7 @@
 #include <share.h>
 #include <MinHook.h>
 #include <atomic>
+#include <chrono>
 #include <array>
 #include <cstdarg>
 #include <cstdio>
@@ -30,8 +32,11 @@
 #include "kf2vr/xr/OpenXrD3D11Backend.h"
 #include "AtlasBlit.h"
 #include "LoadingPlate.h"
+#include "LoadingPlateArt.h"
 #include "StereoViews.h"
 #include "StereoReflections.h"
+#include "ReflectionCoverage.h"
+#include "ObjectMotion.h"
 #include "StereoAmbientOcclusion.h"
 #include "Dlss.h"
 #include "XrGamepad.h"
@@ -41,6 +46,9 @@
 #include "PresentHandoff.h"
 #include "GameScript.h"
 #include "VampireReloadGuard.h"
+#include "PhysicalReloadTimerGuard.h"
+#include "SecondaryReloadGuard.h"
+#include "BowReleaseDispatch.h"
 #include "EpicSession.h"
 #include "include/kf2vr/adapter/GameBuild.h"
 #include "ScriptField.h"
@@ -50,9 +58,9 @@
 #include "RenderPassReadback.h"
 #include "EyeResolution.h"
 #include "GpuFrameTiming.h"
-#include "../portal/PortalCapture.h"
-#include "../portal/PortalHitscan.h"
 #include "WeaponIsolation.h"
+#include "WorldDropGuard.h"
+#include "WeaponBlockDispatch.h"
 #include "WeaponContext.h"
 #include "WeaponHandling.h"
 #include "PerkContext.h"
@@ -76,6 +84,7 @@
 #include "SpatialHud.h"
 #include "SpatialHudStockDraw.h"
 #include "ForegroundDepth.h"
+#include "OpticCaptureVisibility.h"
 #include "HudTextAlpha.h"
 #include "RenderCommand.h"
 #include "kf2vr/Basis.h"
@@ -111,6 +120,7 @@ namespace xr=kf2vr::xr;
 namespace adapter=kf2vr::adapter;
 namespace menuNative=kf2vr::adapter::menu_native;
 adapter::RenderCommandQueue renderQueue;
+adapter::OpticCaptureVisibility opticVisibility;
 // DLSS Super Resolution (KF2VR_DLSS). Configured once at startup; the game
 // thread sizes and jitters each eye pass, eye snapshot commands evaluate it.
 adapter::DlssUpscaler dlss;
@@ -118,7 +128,7 @@ bool dlssRenderActive=false; // Game-thread viewport decision, stable throughout
 std::uint32_t dlssPhase=0;            // Game thread: one jitter phase per stereo pair.
 adapter::DlssJitter dlssJitter{};     // Game thread: this pair's sample offset.
 std::uint64_t dlssSkips=0,dlssFailures=0,dlssFrames=0;
-// -kf2vr-single-pass (Steam build only): both eyes in one scene family, side
+// -kf2vr-single-pass: both eyes in one scene family, side
 // by side in a double-width target, so the game thread draws the viewport and
 // the renderer builds visibility/shadows once per frame instead of per eye.
 // KF2's world lighting only takes its special path for exactly one view
@@ -149,6 +159,7 @@ bool leftQueryConstantsReady=false;
 std::uint64_t queryConstantWrites=0;
 adapter::StereoAmbientOcclusion stereoAmbientOcclusion;
 adapter::StereoReflections stereoReflections;
+adapter::ReflectionCoverage reflectionCoverage;
 const std::byte* ssrEyeView=nullptr;
 bool ssrPairFailed=false;
 struct HbaoPendingPair {
@@ -164,7 +175,7 @@ struct HbaoPendingPair {
     std::byte inputBytes[0x70]{}; // Known HBAO depth input through the SRV.
 } hbaoPending;
 void ResetStereoRenderResources() {
-    stereoAmbientOcclusion.Reset(); stereoReflections.Reset();
+    stereoAmbientOcclusion.Reset(); stereoReflections.Reset(); reflectionCoverage.Reset();
     ssrEyeView=nullptr; ssrPairFailed=false; hbaoPending={};
     leftOcclusionTests=false; leftQueryConstantsPending=false; leftQueryConstantsReady=false;
 }
@@ -176,11 +187,11 @@ void SplitBeforeEye(unsigned eye);
 void SplitAfterEye(unsigned eye);
 // KF2VR_HIDE_BILE_LENS=1: skip the Bloat bile camera-lens particles, a
 // full-view translucent emitter whose overdraw is very costly per VR eye.
-bool hideBileLens=false;
+std::atomic<bool> hideBileLens{false};
 std::uint64_t bileLensSkipped=0;
 // KF2VR_HIDE_BLOOD_LENS=1: likewise skip the hit blood-splatter lens particles.
 // The red damage tint is a separate post-process effect and stays.
-bool hideBloodLens=false;
+std::atomic<bool> hideBloodLens{false};
 std::uint64_t bloodLensSkipped=0;
 // Everything Present needs from the game side for one frame. The game thread
 // fills it after the frame's last draw and hands it over through renderQueue,
@@ -205,8 +216,6 @@ struct RenderSide {
     bool fault=false; // A command for the next packet failed.
     ComPtr<ID3D11Texture2D> sceneDepth; // DLSS: the HDR scene's depth target, as last bound.
     std::array<ComPtr<ID3D11Texture2D>,2> eyeDepth; // Split-submit diagnostic depth copies.
-    std::array<ComPtr<ID3D11Texture2D>,2> sourceEyes;
-    std::array<bool,2> dlssSucceeded{};
     std::array<ComPtr<ID3D11Texture2D>,2> dlssOutput; // DLSS: per-eye output-size images.
 };
 // The game thread owns the rest, except the fields marked atomic; -onethread
@@ -253,11 +262,17 @@ struct DemoRuntime {
     // Static head-locked LOADING quad (LoadingPlate.h): submitted wherever the
     // game has no world to show, including from the loading movie's thread.
     std::atomic<bool> loadingPlate{false};
+    // The loading movie mirrored onto its own head-locked quad (backend
+    // SubmitMirrorQuadFrame); the plate remains the fallback.
+    std::atomic<bool> movieMirror{false};
     std::uint64_t loadingPlateLogged=0;
     std::atomic<unsigned> width{0},height{0}; // Desktop backbuffer.
     std::atomic<std::uint64_t> resizeGeneration{0};
     std::uint64_t atlasDrops=0;
     bool captureAttempted=false;
+    // The XR eye capture waits until SnapshotEye has saved this frame's DLSS
+    // inputs (pre-DLSS colour, depth, object motion) for both eyes.
+    std::atomic<bool> captureInputsReady{false};
     std::array<kf2vr::adapter::RenderPassReadback,2> renderPasses{};
     std::array<bool,11> nativeKeys{};
     void* nativeInputClient=nullptr;
@@ -271,6 +286,8 @@ struct DemoRuntime {
     std::atomic<bool> travelling{false};
     adapter::SessionMenuInput sessionMenuInput;
     adapter::SnapTurnInput snapTurn;
+    adapter::SmoothTurnInput smoothTurn;
+    LARGE_INTEGER smoothTurnLast{};
     float turnAxis=0;
     std::uint64_t sessionInputSample=0;
     void* controlledController=nullptr;
@@ -315,26 +332,45 @@ bool GameOwnsXr() {
 }
 bool stereoRequested=false;
 // -kf2vr-threaded-render without -onethread: UE3's render thread draws frame N
-// while the game thread ticks N+1. Stereo only; replay and portals stay serial.
+// while the game thread ticks N+1. Stereo only; replay stays serial.
 bool threadedRender=false;
 bool networkRequested=false;
 bool handReplayRequested=false;
 bool inputReplayRequested=false;
+bool inputReplayWaitReady=false;
+bool inputReplayRealtime=false;
+bool replaySuiteRequested=false;
+int replaySuiteCase=0;
+bool reloadCaseRequested=false;
+bool reloadGeometryRequested=false;
 adapter::ReplayInput replayInput;
 static adapter::motion::Runtime motionRuntime;
 using ProcessExit=void(WINAPI*)(UINT);
 ProcessExit originalProcessExit=nullptr;
 static kf2vr::localtest::Bridge localTestControl;
 bool localDiagnosticRequested=false;
-bool portalRequested=false;
 bool singleViewDiagnostic=false;
 wchar_t stopRequestPath[32768]{};
 wchar_t captureRootPath[32768]{};
+// Each armed capture set goes in its own folder: the first (the automatic one
+// after 120 frames) in the root, later ones (an 'arm' file dropped into the
+// root, consumed when taken) in set-1, set-2, ...
+std::filesystem::path captureSetPath;
+unsigned captureSet=0;
+std::filesystem::path CaptureDir() { return captureSetPath.empty() ? std::filesystem::path(captureRootPath) : captureSetPath; }
 wchar_t playablePath[32768]{};
 PresentationCapture presentationCapture;
 // Owned by the thread that executes render commands. Game-side code changes
 // them only through renderQueue, so each change lands between the same draws.
 adapter::ForegroundDepth foregroundDepth;
+// DLSS object motion from KF2's velocity pass; hooks below HookSsrCompute.
+adapter::ObjectMotion objectMotion;
+std::atomic<bool> objectMotionWanted{false}, blurSuppressed{false};
+std::uint64_t objectMotionPasses=0;
+using RenderVelocitiesFn=void(*)(void*,std::uint32_t);
+RenderVelocitiesFn originalRenderVelocities=nullptr, originalPrimeVelocities=nullptr;
+using MotionBlurFn=void(*)(void*,void*);
+MotionBlurFn originalTileMaxBlur=nullptr, originalLegacyBlur=nullptr;
 std::vector<adapter::ForegroundDepth> foregroundDepthStack;
 adapter::HudTextAlpha hudTextAlpha;
 bool OnRenderCommandThread() { return GetCurrentThreadId()==renderQueue.ExecutingThread(); }
@@ -398,9 +434,6 @@ using Present=HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*,UINT,UINT);
 using Resize=HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*,UINT,UINT,UINT,DXGI_FORMAT,UINT);
 CalcView originalCalc=nullptr;
 SubmitScene originalSubmit=nullptr;
-// Engine portal captures of VRPortal actors; idle unless one renders.
-kf2vr::portal::PortalCapture portalCapture;
-kf2vr::portal::PortalHitscan portalHitscan;
 Present originalPresent=nullptr;
 Resize originalResize=nullptr;
 using ViewportDraw=void(*)(void*,void*,void*);
@@ -600,7 +633,21 @@ std::uint64_t SupplyHands(void* bridge) {
             demo->replayBody=adapter::NativeActorRotation({0,current.yaw,0});
         }
         aim.reference={}; aim.bodyRotation=demo->replayBody;
-        frame=replayInput.Next(reinterpret_cast<uintptr_t>(bridge),reinterpret_cast<uintptr_t>(demo->controlledPawn));
+        if (replaySuiteRequested) {
+            const int nextCase=script.Read<int>(bridge,L"NativeReplayCase");
+            if (nextCase!=replaySuiteCase) {
+                const bool accepted=replayInput.BeginCase(reinterpret_cast<uintptr_t>(bridge),
+                    reinterpret_cast<uintptr_t>(demo->controlledPawn),nextCase);
+                Log("ReplayInputCase index=%d accepted=%d",nextCase,accepted);
+                replaySuiteCase=nextCase;
+                if (!accepted) { demo->handsValid=false; demo->failureRequested.store(true,std::memory_order_release); }
+            }
+        }
+        frame=inputReplayRealtime
+            ? replayInput.Realtime(reinterpret_cast<uintptr_t>(bridge),reinterpret_cast<uintptr_t>(demo->controlledPawn),
+                std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                !inputReplayWaitReady || script.Read<int>(bridge,L"NativeReplayReady")==1)
+            : replayInput.Next(reinterpret_cast<uintptr_t>(bridge),reinterpret_cast<uintptr_t>(demo->controlledPawn));
         demo->frame=frame;
         Log("ReplayInput sample=%llu time=%.6f epoch=%llu focused=%d synced=%d finished=%d left=%.3f right=%.3f active=%d,%d valid=%d,%d",
             static_cast<unsigned long long>(frame.poseSampleId),frame.predictedDisplayTime,
@@ -633,6 +680,18 @@ std::uint64_t SupplyHands(void* bridge) {
         frame.handLeft.gripAxis=frame.handRight.gripAxis=0;
         frame.handLeft.triggerAxis=frame.handRight.triggerAxis=0;
         frame.handLeft.primaryPressed=frame.handLeft.secondaryPressed=false;
+        if (networkRequested && wcsstr(GetCommandLineW(),L"-kf2vr-sharing-replay")) {
+            // Explicit dedicated sharing replay: active, neutral controls use
+            // normal tracking ingress. No production input gates are bypassed.
+            frame.poseSampleId=GetTickCount64();
+            const auto neutral=[](auto& h) {
+                h.aim.pos=h.grip.pos; h.aimPoseTracked=true;
+                h.triggerAxis=h.gripAxis=h.stickX=h.stickY=0;
+                h.primaryPressed=h.secondaryPressed=h.stickPressed=h.menuPressed=h.menuHoldPressed=false;
+                h.triggerActive=h.gripActive=h.stickActive=h.primaryActive=h.secondaryActive=h.stickClickActive=h.menuActive=true;
+            };
+            neutral(frame.handLeft); neutral(frame.handRight);
+        }
         if(wcsstr(GetCommandLineW(),L"-kf2vr-motion-fixture")) {
             // Explicit non-XR validation publishes the SAME authored input sample.
             frame.poseSampleId=GetTickCount64();
@@ -657,7 +716,104 @@ std::uint64_t SupplyHands(void* bridge) {
             demo->frame=frame;demo->sampleTick=GetTickCount64();
         }
     }
-    if ((inputReplayRequested && (frame.state!=xr::SessionState::Focused || !frame.actionsSynced || !frame.headPoseValid)) ||
+    const bool sharingReplayGoals = networkRequested && handReplayRequested
+        && wcsstr(GetCommandLineW(),L"-kf2vr-sharing-replay");
+    if ((reloadCaseRequested || sharingReplayGoals) && (!reloadGeometryRequested || script.Read<int>(bridge,L"ReloadCaseEnabled")!=0)) {
+        // One owned explicit diagnostic. Script publishes goals, never bridge
+        // inputs; all samples still pass through the ordinary tracking ingress.
+        static void* owner=nullptr;
+        static void* pawn=nullptr;
+        static int serial=0;
+        static ULONGLONG changedAt=0;
+        static bool stopped=false;
+        const int enabled=script.Read<int>(bridge,L"ReloadCaseEnabled");
+        const int sample=script.Read<int>(bridge,L"ReloadCaseSample");
+        const auto now=GetTickCount64();
+        if (sample!=serial) { serial=sample; changedAt=now; }
+        if (enabled>0 && !owner) { owner=bridge; pawn=demo->controlledPawn; }
+        // A stale goal stream stops the diagnostic for good, except scripted
+        // replays (v3): a long frame (an asset load, a screenshot) only blanks
+        // the hands until the next fresh goal from the same owner and pawn.
+        const bool stale=now-changedAt>250;
+        const bool scripted=reloadGeometryRequested && script.Read<int>(bridge,L"ReloadCaseControlVersion")==3;
+        // A scripted replay follows its own bridge across a respawn or a new
+        // pawn (a case reset, a pickup scene) instead of stopping for good.
+        if (scripted && enabled>0 && owner && !stopped && (owner!=bridge || pawn!=demo->controlledPawn)) {
+            Log("ReloadCase rebind reason=%s", owner!=bridge ? "bridge" : "pawn");
+            owner=bridge; pawn=demo->controlledPawn;
+        }
+        if (enabled<0 || (owner && (owner!=bridge || pawn!=demo->controlledPawn || (stale && !scripted)))) {
+            if (!stopped) Log("ReloadCase stopped enabled=%d owner=%d pawn=%d stale=%d", enabled,
+                owner!=bridge ? 0 : 1, pawn!=demo->controlledPawn ? 0 : 1, stale ? 1 : 0);
+            stopped=true;
+        }
+        const auto hand=[&](auto& h,unsigned index) {
+            h.triggerAxis=h.gripAxis=h.stickX=h.stickY=0;
+            h.primaryPressed=h.secondaryPressed=h.stickPressed=h.menuPressed=h.menuHoldPressed=false;
+            h.triggerActive=h.gripActive=h.stickActive=h.primaryActive=h.secondaryActive=h.stickClickActive=h.menuActive=true;
+            h.grip.rot=h.aim.rot;
+            if (enabled<=0 || stopped) return;
+            // Version 3 (scripted replays) adds sticks and a head goal to version 2.
+            const int control=script.Read<int>(bridge,L"ReloadCaseControlVersion");
+            if (reloadGeometryRequested && control!=2 && control!=3) {
+                stopped=true; return;
+            }
+            const auto world=script.Read<kf2vr::Vec3>(bridge,index==0?L"ReloadCaseLeftPosition":L"ReloadCaseRightPosition");
+            const auto rotation=adapter::NativeActorRotation(script.Read<pinned::NativeRotator>(bridge,
+                index==0?L"ReloadCaseLeftRotation":L"ReloadCaseRightRotation"));
+            const auto local=aim.bodyRotation.Inverse().Rotate(world-eyeBase);
+            if (!std::isfinite(local.LengthSq()) || local.LengthSq()>250.f*250.f) {
+                // A scripted replay's goal can trail a teleport for a frame:
+                // drop that hand for the frame instead of ending the stream.
+                if (scripted && std::isfinite(local.LengthSq())) {
+                    static bool logged=false;
+                    if (!logged) { logged=true; Log("ReloadCase goal-out-of-range hand=%u distance=%.1f", index, std::sqrt(local.LengthSq())); }
+                    h.poseValid=h.poseTracked=h.aimPoseValid=h.aimPoseTracked=false;
+                    return;
+                }
+                stopped=true; return;
+            }
+            const auto localQ=(aim.bodyRotation.Inverse()*rotation).Normalized();
+            h.grip.pos=kf2vr::BasisUnrealToXr(adapter::GripFromWrist(local,localQ,
+                script.Read<kf2vr::Vec3>(bridge,L"NativeWristOffset"),index))*(1.f/kf2vr::kProvisionalUnrealUnitsPerMetre);
+            h.aim.pos=h.grip.pos;
+            h.aim.rot=h.grip.rot=kf2vr::BasisUnrealToXr(localQ);
+            if (reloadGeometryRequested) {
+                const auto bit=1<<index;
+                const auto buttons=script.Read<int>(bridge,index==0?L"ReloadCaseLeftButtons":L"ReloadCaseRightButtons");
+                const bool valid=(script.Read<int>(bridge,L"ReloadCaseValidMask") & bit)!=0;
+                h.poseValid=h.poseTracked=h.aimPoseValid=h.aimPoseTracked=valid;
+                h.triggerAxis=(script.Read<int>(bridge,L"ReloadCaseTriggerMask") & bit)?1.f:0.f;
+                h.gripAxis=(script.Read<int>(bridge,L"ReloadCaseGripMask") & bit)?1.f:0.f;
+                h.primaryPressed=(buttons&1)!=0; h.secondaryPressed=(buttons&2)!=0;
+                h.stickPressed=(buttons&4)!=0; h.menuPressed=(buttons&8)!=0;
+                if (control==3) {
+                    const auto stick=script.Read<kf2vr::Vec3>(bridge,index==0?L"ReloadCaseLeftStick":L"ReloadCaseRightStick");
+                    if (std::isfinite(stick.x) && std::isfinite(stick.y)) {
+                        h.stickX=std::clamp(stick.x,-1.f,1.f); h.stickY=std::clamp(stick.y,-1.f,1.f);
+                    }
+                }
+            } else if (!sharingReplayGoals) {
+                h.triggerAxis=index==1 && script.Read<int>(bridge,L"ReloadCaseTrigger")==1 ? 1.f : 0.f;
+                h.primaryPressed=index==1 && script.Read<int>(bridge,L"ReloadCaseButton")==1;
+                h.gripAxis=index==0 && script.Read<int>(bridge,L"ReloadCaseGrip")==1 ? 1.f : 0.f;
+            }
+            if (sharingReplayGoals)
+                h.gripAxis=index==0 && script.Read<int>(bridge,L"ReloadCaseGrip")==1 ? 1.f : 0.f;
+        };
+        hand(frame.handLeft,0); hand(frame.handRight,1);
+        if (reloadGeometryRequested && enabled>0 && !stopped && script.Read<int>(bridge,L"ReloadCaseControlVersion")==3) {
+            // Body-relative head goal; the tape keeps supplying head position.
+            const auto head=adapter::NativeActorRotation(script.Read<pinned::NativeRotator>(bridge,L"ReloadCaseHeadRotation"));
+            frame.head.rot=kf2vr::BasisUnrealToXr(head).Normalized();
+            demo->sampleTick=now; // fresh authored sample: the locomotion pump may use it
+        }
+        frame.poseSampleId=now; frame.predictedDisplayTime=double(now)/1000.;
+        frame.predictedDisplayPeriod=1./120.;
+        if (stopped || stale) { frame.actionsSynced=false; frame.headPoseValid=false; }
+        demo->frame=frame;
+    }
+    if (((inputReplayRequested || reloadCaseRequested || sharingReplayGoals) && (frame.state!=xr::SessionState::Focused || !frame.actionsSynced || !frame.headPoseValid)) ||
         (!handReplayRequested && (!demo->ready || demo->failed || !demo->sampleTick || GetTickCount64()-demo->sampleTick>250 ||
         demo->headAim.SpaceChanged(frame) ||
         !demo->headAim.RenderState(reinterpret_cast<uintptr_t>(demo->controlledController),current,aim) ||
@@ -665,6 +821,7 @@ std::uint64_t SupplyHands(void* bridge) {
         writes.Write(L"NativeConnection",handReplayRequested?2:1);
         writes.Write(L"NativeHeadTracked",0);
         writes.Write(L"NativeValidMask",0);
+        writes.Write(L"NativeRoomMotionMask",0);
         writes.Write(L"NativeGripMask",0);
         writes.Write(L"NativeTriggerMask",0);
         writes.Write(L"NativeGripActiveMask",0);
@@ -739,6 +896,15 @@ std::uint64_t SupplyHands(void* bridge) {
         grip.pos=referenceInverse.Rotate(grip.pos-aim.reference.pos);
         grip.rot=(referenceInverse*hand.aim.rot).Normalized();
         const auto local=kf2vr::ToUnreal(grip);
+        // Receiver inertia uses absolute XR tracking coordinates. Head/room
+        // shifts and stick turns are presentation,
+        // not controller acceleration. Keep the established wrist convention.
+        auto roomGrip=hand.grip;
+        roomGrip.rot=hand.aim.rot.Normalized();
+        const auto roomLocal=kf2vr::ToUnreal(roomGrip);
+        writes.Write(index==0?L"NativeRoomLeftPosition":L"NativeRoomRightPosition",
+            adapter::WristFromGrip(roomLocal.pos,roomLocal.rot,wristOffset,index));
+        writes.Write(index==0?L"NativeRoomLeftRotation":L"NativeRoomRightRotation",RotationFromQuat(roomLocal.rot));
         // OpenXR's grip origin is the palm centroid; every script consumer of
         // this position expects the wrist joint the drawn hand hangs from.
         const auto position=eyeBase+aim.bodyRotation.Rotate(
@@ -796,6 +962,8 @@ std::uint64_t SupplyHands(void* bridge) {
     writes.Write(L"NativeConnection",handReplayRequested?2:1);
     writes.Write(L"NativeDepthSupported",1);
     writes.Write(L"NativeValidMask",valid); writes.Write(L"NativeGripMask",grips);
+    writes.Write(L"NativeRoomMotionMask",valid);
+    writes.Write(L"NativeRoomSpaceEpoch",int(frame.referenceSpaceEpoch & 0x7fffffffULL));
     writes.Write(L"NativeTriggerMask",triggers);
     writes.Write(L"NativeGripActiveMask",gripActive);
     writes.Write(L"NativeTriggerActiveMask",triggerActive);
@@ -829,6 +997,7 @@ std::uint64_t SupplyHands(void* bridge) {
     const int clickMask=(frame.handLeft.stickPressed?1:0) | (frame.handRight.stickPressed?2:0);
     writes.Write(L"NativeStickClickActiveMask",clickActive);
     writes.Write(L"NativeStickClickMask",clickMask&clickActive);
+    demo->backend.SetHapticStrength(script.Read<float>(bridge,L"HapticStrength"));
     const int hapticMask=script.Read<int>(bridge,L"NativeHapticMask");
     const int handHapticMask=script.Read<int>(bridge,L"NativeHandHapticMask");
     // Drain both request lanes even during replay/menu suppression. Old
@@ -850,36 +1019,11 @@ std::uint64_t SupplyHands(void* bridge) {
         if (!handReplayRequested) adapter::PlayRingsideBell(bell);
     }
     const auto owningHand=script.Read<int>(bridge,L"WeaponHand");
-    adapter::SpatialHudSettings hudSettings;
-    hudSettings.followMode=script.Read<int>(bridge,L"TopHudFollowMode");
-    hudSettings.distance=script.Read<float>(bridge,L"TopHudDistance");
-    hudSettings.height=script.Read<float>(bridge,L"TopHudHeight");
-    hudSettings.scale=script.Read<float>(bridge,L"TopHudScale");
-    hudSettings.yawDeadZoneDegrees=script.Read<float>(bridge,L"TopHudYawDeadZoneDegrees");
-    hudSettings.pitchDeadZoneDegrees=script.Read<float>(bridge,L"TopHudPitchDeadZoneDegrees");
-    hudSettings.translationDeadZone=script.Read<float>(bridge,L"TopHudTranslationDeadZone");
-    hudSettings.detailLookDegrees=script.Read<float>(bridge,L"TopHudDetailLookDegrees");
-    demo->hud.Update(frame,script.Read<int>(bridge,L"PreferredWeaponHand"),script.Read<int>(bridge,L"HudWeaponMask"),!demo->menuVisible,
-        script.Read<int>(bridge,L"NativeHudSuppressMask"),script.Read<int>(bridge,L"NativeSelectorCapture")!=0,hudSettings);
-    constexpr const wchar_t* hudPositions[]{L"HudStatusPosition",L"HudLeftAmmoPosition",L"HudRightAmmoPosition",L"HudSessionPosition",L"HudAlertPosition"};
-    constexpr const wchar_t* hudRotations[]{L"HudStatusRotation",L"HudLeftAmmoRotation",L"HudRightAmmoRotation",L"HudSessionRotation",L"HudAlertRotation"};
-    constexpr const wchar_t* hudSizes[]{L"HudStatusSize",L"HudLeftAmmoSize",L"HudRightAmmoSize",L"HudSessionSize",L"HudAlertSize"};
-    int hudMask=0;
-    for (unsigned i=0;i<5;++i) {
-        const auto& p=demo->hud.Panels()[i];
-        if (!p.valid) continue;
-        auto pose=frame.head;
-        pose.pos=referenceInverse.Rotate(p.center-aim.reference.pos);
-        pose.rot=referenceInverse*p.rotation;
-        const auto local=kf2vr::ToUnreal(pose);
-        const kf2vr::Vec3 size{p.width*kf2vr::kProvisionalUnrealUnitsPerMetre,
-            p.height*kf2vr::kProvisionalUnrealUnitsPerMetre,0};
-        if (writes.Write(hudPositions[i],eyeBase+aim.bodyRotation.Rotate(local.pos)) &&
-            writes.Write(hudRotations[i],RotationFromQuat(aim.bodyRotation*local.rot)) &&
-            writes.Write(hudSizes[i],size)) hudMask|=1<<i;
-    }
-    writes.Write(L"NativeHudMask",hudMask);
-    writes.Write(L"NativeHudDetail",demo->hud.DetailVisible()?1:0);
+    // Retired top HUD. The wristwatch, weapon readouts and world damage numbers
+    // have their own presentation paths and remain available.
+    demo->hud.Reset();
+    writes.Write(L"NativeHudMask",0);
+    writes.Write(L"NativeHudDetail",0);
     if (!commitWrites()) return 0;
     script.Invoke(bridge,script.FindFunction(bridge,L"RecordHUDSample"),nullptr);
     SupplyLockTargets(bridge);
@@ -927,11 +1071,33 @@ void ForwardProcessInternal(void* object,void* stack,void* result) {
     adapter::timing::Scope timing(adapter::timing::ScriptBody);
     originalProcessInternal(object,stack,result);
 }
+bool EmptyHandFavoriteWeaponDialog(void* object,void* function,const void* locals) {
+    auto& script=demo->script;
+    if ((!stereoRequested && !handReplayRequested) || !demo->controlledPawn ||
+        adapter::GameScript::ObjectName(adapter::GameScript::ObjectClass(object))!=script.Intern(L"KFDialogManager") ||
+        script.FindFunction(object,L"CheckKilledWithFavoriteWeaponDialog")!=function ||
+        !script.IsClass(demo->controlledPawn,L"KFPawn_Human") ||
+        script.Read<void*>(demo->controlledController,L"Pawn")!=demo->controlledPawn ||
+        script.Read<void*>(demo->controlledPawn,L"Controller")!=demo->controlledController) return false;
+    void* killer=nullptr;
+    if (!adapter::ReadScriptLocal(function,locals,script.Intern(L"Killer"),killer) ||
+        killer!=demo->controlledPawn) return false;
+    adapter::ScriptField weaponField{};
+    void* weapon=nullptr;
+    if (!adapter::FindScriptField(adapter::GameScript::ObjectClass(killer),script.Intern(L"Weapon"),weaponField) ||
+        weaponField.size!=sizeof(weapon) ||
+        !adapter::GuardedCopy(&weapon,static_cast<const std::byte*>(killer)+weaponField.offset,sizeof(weapon))) return false;
+    // Stock dereferences Killer.Weapon.Class while offering this one dialog
+    // option. Empty VR hands have no favorite weapon. This void callback's
+    // out option count/choice stay untouched; its caller continues every
+    // other kill dialog, and damage/stats/perk processing is unchanged.
+    return weapon==nullptr;
+}
 void HookProcessInternal(void* object,void* stack,void* result) {
     adapter::timing::VmSampleScope sample;
     adapter::timing::Scope timing(adapter::timing::ScriptDispatch);
     // Reuse only within this invocation. Each At/ObjectName validates memory;
-    // rereading both for session, portal and weapon dispatch doubled that work
+    // rereading both for session and weapon dispatch doubled that work
     // for virtually every VM call. No identity survives a callback or GC.
     void* function=nullptr;
     adapter::GameScript::Name name=0;
@@ -957,6 +1123,13 @@ void HookProcessInternal(void* object,void* stack,void* result) {
     }
     const bool worldThread=GetCurrentThreadId()==worldDrawThread.load(std::memory_order_acquire);
     if (!demo || !worldThread || !demo->controlledController) {
+        // A reliable marker can outlive VR tracking or the bridge actor. Its
+        // reserved payload must never fall through to stock ammo assignment.
+        static thread_local adapter::GameScript markerLookup(gameBase);
+        if (!function) function=adapter::GameScript::At<void*>(stack,0x14);
+        const auto* locals=adapter::GameScript::At<void*>(stack,0x2c);
+        if (adapter::ConsumeWeaponBarrier(markerLookup,nullptr,nullptr,object,function,locals) ||
+            adapter::ConsumeWeaponReceipt(markerLookup,nullptr,nullptr,object,function,locals)) return;
         ForwardProcessInternal(object,stack,result); return;
     }
     auto& script=demo->script;
@@ -964,7 +1137,70 @@ void HookProcessInternal(void* object,void* stack,void* result) {
         function=adapter::GameScript::At<void*>(stack,0x14);
         name=adapter::GameScript::ObjectName(function);
     }
+    if (name==script.Intern(L"CheckKilledWithFavoriteWeaponDialog") &&
+        EmptyHandFavoriteWeaponDialog(object,function,adapter::GameScript::At<void*>(stack,0x2c))) return;
+    if (name==script.Intern(L"NativeAllocateWeaponActionSerial") && object==demo->handsBridge && result &&
+        demo->controlledPawn && script.Read<void*>(demo->controlledController,L"Pawn")==demo->controlledPawn &&
+        script.IsClass(object,L"VRHandsBridge") && script.Read<void*>(object,L"PC")==demo->controlledController &&
+        script.Read<void*>(object,L"Human")==demo->controlledPawn &&
+        script.FindFunction(object,L"NativeAllocateWeaponActionSerial")==function) {
+        // Survives script actor, connection and pawn replacement. Old reliable
+        // markers can never alias a new physical action in this process.
+        static std::atomic<std::int64_t> nextSerial{1};
+        const auto serial=nextSerial.fetch_add(1,std::memory_order_relaxed);
+        const std::int32_t value=(serial>0 && serial<INT_MAX) ? static_cast<std::int32_t>(serial) : 0;
+        std::memcpy(result,&value,sizeof(value));
+        return;
+    }
+    if (name==script.Intern(L"NativeWorldDropUpdate") && object==demo->handsBridge &&
+        demo->controlledPawn && script.Read<void*>(demo->controlledController,L"Pawn")==demo->controlledPawn &&
+        script.IsClass(object,L"VRHandsBridge") && script.Read<void*>(object,L"PC")==demo->controlledController &&
+        script.Read<void*>(object,L"Human")==demo->controlledPawn &&
+        script.FindFunction(object,L"NativeWorldDropUpdate")==function) {
+        ForwardProcessInternal(object,stack,result);
+        script.Write<int>(object,L"NativeWorldDropVersion",9);
+        return;
+    }
+    if (name==script.Intern(L"HolderDied") || name==script.Intern(L"OwnerDied"))
+        adapter::PublishDeathWorldDrops(script,object,function,demo->handsBridge);
+    if (adapter::IsWorldDropAction(script,name) || name==script.Intern(L"RemoveFromInventory")
+        || name==script.Intern(L"ClientForceAmmoUpdate")) {
+        const bool currentPawn=demo->controlledPawn &&
+            script.Read<void*>(demo->controlledController,L"Pawn")==demo->controlledPawn;
+        auto* worldDropLedger=(currentPawn && demo->handsBridge) ? script.Read<void*>(demo->handsBridge,L"HeldInventory") : nullptr;
+        if (adapter::ConsumeWeaponReceipt(script,worldDropLedger,demo->controlledPawn,object,function,
+                adapter::GameScript::At<void*>(stack,0x2c))) return;
+        auto* barrierLedger=worldDropLedger;
+        auto* barrierPawn=demo->controlledPawn;
+        if (name==script.Intern(L"SyncCurrentAmmoCount") && script.Read<unsigned char>(object,L"Role")==3) {
+            auto* ownerPawn=script.Read<void*>(object,L"Instigator");
+            if (auto* authorityLedger=adapter::NetworkAuthorityLedger(script,ownerPawn)) {
+                barrierLedger=authorityLedger;
+                barrierPawn=ownerPawn;
+            }
+        }
+        if (adapter::ConsumeWeaponBarrier(script,barrierLedger,barrierPawn,object,function,
+                adapter::GameScript::At<void*>(stack,0x2c))) return;
+        if (worldDropLedger && script.Read<void*>(worldDropLedger,L"Human")==demo->controlledPawn &&
+            script.Read<void*>(worldDropLedger,L"PC")==demo->controlledController) {
+            if (adapter::WorldDropSuppresses(script,worldDropLedger,demo->controlledPawn,object,function)) return;
+            adapter::NotifyWorldDropRemoval(script,worldDropLedger,demo->controlledPawn,object,function,
+                adapter::GameScript::At<void*>(stack,0x2c));
+        }
+    }
+    adapter::WeaponBlockScope weaponBlock(script,object,function,adapter::GameScript::At<void*>(stack,0x2c));
+    if (weaponBlock.Suppressed()) return;
+    adapter::BowReleaseDispatchScope bowRelease(script,object,function,
+        adapter::GameScript::At<void*>(stack,0x2c),result,demo->handsBridge);
+    if (bowRelease.Suppressed()) return;
     if (adapter::RouteVampireReloadGuard(script,object,function,demo->handsBridge)) return;
+    if (adapter::RouteSecondaryReloadPayment(script,object,function,
+            adapter::GameScript::At<void*>(stack,0x2c),result,demo->handsBridge,
+            demo->controlledPawn,demo->controlledController)) return;
+    if (adapter::RoutePhysicalReloadTimer(script,object,function,demo->handsBridge,
+                                         demo->controlledPawn,demo->controlledController)) return;
+    adapter::AutomaticReloadPaymentScope automaticReloadPayment(script,object,function,demo->handsBridge,
+                                                                demo->controlledPawn,demo->controlledController);
     adapter::SwipeDispatchScope swipeDispatch(script,object,function,adapter::GameScript::At<void*>(stack,0x2c));
     if (adapter::RouteHeldSwipeContact(script,object,function,adapter::GameScript::At<void*>(stack,0x2c))) return;
     adapter::RadiusDamageScope radiusDamage(script,object,function);
@@ -1009,12 +1245,36 @@ void HookProcessInternal(void* object,void* stack,void* result) {
         ForwardProcessInternal(object,stack,result);return;
     }
 
+    // Stock projects the door overlay into a single screen-space Canvas.
+    // Suppress only this local HUD's door after its stereo panel is visible.
+    if (name==script.Intern(L"DrawDoorHUD") && script.IsClass(object,L"KFDoorActor")) {
+        auto* locals=adapter::GameScript::At<void*>(stack,0x2c);
+        void* hud=nullptr;
+        auto* inventory=script.Read<void*>(demo->handsBridge,L"HandInventory");
+        auto* input=script.Read<void*>(inventory,L"Input");
+        auto* welding=script.Read<void*>(input,L"Welding");
+        auto* prompt=script.Read<void*>(welding,L"Prompt");
+        auto* replaces=script.FindFunction(prompt,L"ReplacesDoor");
+        adapter::ScriptField doorField{},returnField{};
+        struct DoorParameters { void* door; std::int32_t replaced; } parameters{object,0};
+        if (adapter::ReadScriptLocal(function,locals,script.Intern(L"HUD"),hud) &&
+            script.Read<void*>(hud,L"PlayerOwner")==demo->controlledController &&
+            script.IsClass(prompt,L"VRDoorWeldPrompt") &&
+            adapter::FindScriptField(replaces,script.Intern(L"D"),doorField) &&
+            doorField.offset==0 && doorField.size==sizeof(void*) &&
+            adapter::FindScriptField(replaces,script.Intern(L"ReturnValue"),returnField) &&
+            returnField.offset==offsetof(DoorParameters,replaced) && returnField.size==sizeof(std::int32_t) &&
+            script.Invoke(prompt,replaces,&parameters) && parameters.replaced) return;
+    }
     const auto positionName=*reinterpret_cast<const std::uint64_t*>(gameBase+adapter::build::Rva(0x22340d8));
     using Vm=adapter::VmCallbackFilter;
     using Callback=Vm::Callback;
     static thread_local Vm callbackFilter;
     const auto callback=callbackFilter.Lookup(name,positionName,[&](const wchar_t* text) { return script.Intern(text); });
     if (callback==Callback::Unrelated) {
+        bowRelease.Forwarded();
+        adapter::ObserveAuthorityReloadStart(script,object,function);
+        automaticReloadPayment.Forwarded();
         ForwardProcessInternal(object,stack,result); return;
     }
     if (callback==Callback::AddCameraLensEffect && (hideBileLens || hideBloodLens)) {
@@ -1043,14 +1303,44 @@ void HookProcessInternal(void* object,void* stack,void* result) {
             return;
         }
     }
-    if (portalRequested && callback==Callback::NativePortalShotsUpdate &&
-        script.IsClass(object,L"VRWeap_PortalGun") &&
-        script.FindFunction(object,L"NativePortalShotsUpdate")==function)
-        portalHitscan.Refresh(lastLocalPlayer,object);
-    if (portalRequested && callback==Callback::CalcWeaponFire && portalHitscan.Route(object,stack,result)) return;
-    if (portalRequested && callback==Callback::HitWall && portalHitscan.ProjectileWall(object,stack)) return;
     const auto groups=Vm::Groups(callback);
     auto* locals=adapter::GameScript::At<void*>(stack,0x2c);
+    if (callback==Callback::ProcessAimCorrection && object==demo->controlledController &&
+        LocalComfortActive() && locals && demo->session && script.IsClass(object,L"KFPlayerController") &&
+        script.FindFunction(object,L"ProcessAimCorrection")==function) {
+        auto* settings=script.Read<void*>(demo->session,L"WeaponAssist");
+        auto* handler=script.FindFunction(settings,L"ProcessCustomCorrection");
+        auto* aimOut=adapter::RPGOutParameter(function,stack,script.Intern(L"AimRot"),sizeof(pinned::NativeRotator));
+        // Invoke on the local settings object, with a separate argument block;
+        // the VM's out reference may point to the caller rather than locals.
+        struct CorrectionParameters {
+            void* target;
+            void* weapon;
+            kf2vr::Vec3 start;
+            pinned::NativeRotator aim;
+            std::int32_t handled;
+        } parameters{};
+        static_assert(offsetof(CorrectionParameters,handled)==40);
+        const auto matches=[&](const wchar_t* fieldName,std::size_t offset,std::size_t size) {
+            adapter::ScriptField field{};
+            return adapter::FindScriptField(handler,script.Intern(fieldName),field) && field.offset==offset && field.size==size;
+        };
+        if (handler && aimOut && script.Read<void*>(settings,L"Controller")==object &&
+            matches(L"Target",offsetof(CorrectionParameters,target),sizeof(parameters.target)) &&
+            matches(L"W",offsetof(CorrectionParameters,weapon),sizeof(parameters.weapon)) &&
+            matches(L"StartLoc",offsetof(CorrectionParameters,start),sizeof(parameters.start)) &&
+            matches(L"AimRot",offsetof(CorrectionParameters,aim),sizeof(parameters.aim)) &&
+            matches(L"ReturnValue",offsetof(CorrectionParameters,handled),sizeof(parameters.handled)) &&
+            adapter::ReadScriptLocal(function,locals,script.Intern(L"Target"),parameters.target) &&
+            adapter::ReadScriptLocal(function,locals,script.Intern(L"W"),parameters.weapon) &&
+            adapter::ReadScriptLocal(function,locals,script.Intern(L"StartLoc"),parameters.start) &&
+            adapter::GuardedCopy(&parameters.aim,aimOut,sizeof(parameters.aim))) {
+            if (script.Invoke(settings,handler,&parameters) && parameters.handled==1) {
+                adapter::GuardedCopy(aimOut,&parameters.aim,sizeof(parameters.aim));
+                return;
+            }
+        }
+    }
     if (callback==Callback::TakeDamage)
         adapter::ObserveCorpseDamage(script,object,function,locals);
     adapter::LiveDamageScope liveDamage(script,callback==Callback::TakeDamage ? object : nullptr,function,locals);
@@ -1063,22 +1353,26 @@ void HookProcessInternal(void* object,void* stack,void* result) {
         adapter::RouteMagazineFeedEvent(script,demo->handsBridge,demo->controlledPawn,object,function,locals,result)) return;
     if (callback==Callback::RenderDisplay && demo->handsBridge) {
         const bool panel=script.IsClass(object,L"VRHUDPanel");
-        const bool selector=!panel && script.IsClass(object,L"VRHandSelector");
-        if(panel || selector) {
+        const bool popup=!panel && script.IsClass(object,L"VRDamagePopupPanel");
+        const bool selector=!panel && !popup && script.IsClass(object,L"VRHandSelector");
+        if(panel || popup || selector) {
             const auto canvas=adapter::GameScript::At<void*>(locals,0);
             const auto width=script.Read<float>(canvas,L"ClipX"),height=script.Read<float>(canvas,L"ClipY");
-            const void* owner=nullptr;const void* expected=nullptr;int index=-1,slot=-1;
+            const void* owner=nullptr;const void* expected=nullptr;int index=-1;
             if(panel) {
-                index=slot=script.Read<int>(object,L"PanelIndex");
+                index=script.Read<int>(object,L"PanelIndex");
                 owner=script.Read<void*>(object,L"DisplayOwner");
                 expected=script.Read<void*>(demo->handsBridge,L"SpatialHUD");
+            } else if(popup) {
+                index=script.Read<int>(object,L"PanelIndex");
+                owner=script.Read<void*>(object,L"DisplayOwner");
+                const auto hud=script.Read<void*>(demo->handsBridge,L"SpatialHUD");
+                expected=script.Read<void*>(hud,L"DamagePopups");
             } else {
                 const auto inventory=script.Read<void*>(demo->handsBridge,L"HandInventory");
                 expected=script.Read<void*>(inventory,L"Input");
                 index=script.Read<int>(object,L"Hand");
                 owner=script.Read<void*>(object,L"InputOwner");
-                if(index>=0 && index<static_cast<int>(adapter::HudTextAlpha::SelectorCount))
-                    slot=static_cast<int>(adapter::HudTextAlpha::PanelCount)+index;
             }
             // Pinned Steam/Epic CheckUpdate (0x3136b0/0x313fe0) installs
             // FCanvas at UCanvas+0x98 with its render target at FCanvas+8.
@@ -1116,12 +1410,13 @@ void HookProcessInternal(void* object,void* stack,void* result) {
                     }
                 }
                 const bool registered=panel ? hudTextAlpha.RegisterPanel(index,owner,expected,width,height,context.Get(),target.Get()) :
-                    hudTextAlpha.RegisterSelector(index,owner,expected,width,height,context.Get(),target.Get());
-                if(selectorDiagnostics && !panel && selectorRegistrations++<16)
+                    (popup ? hudTextAlpha.RegisterPopup(index,owner,expected,width,height,context.Get(),target.Get()) :
+                    hudTextAlpha.RegisterSelector(index,owner,expected,width,height,context.Get(),target.Get()));
+                if(selectorDiagnostics && selector && selectorRegistrations++<16)
                     Log("KF2VR_SELECTOR_REGISTER hand=%d owner=%p expected=%p canvas=%.0fx%.0f registered=%d",
                         index,owner,expected,width,height,registered);
                 if (Interesting(++hudAlphaTargets)) Log("HUD text alpha target=%llu registered=%d kind=%s slot=%d",
-                    static_cast<unsigned long long>(hudAlphaTargets),registered,panel?"panel":"selector",slot);
+                    static_cast<unsigned long long>(hudAlphaTargets),registered,panel?"panel":(popup?"damage":"selector"),index);
             });
         }
     }
@@ -1277,6 +1572,9 @@ void HookProcessInternal(void* object,void* stack,void* result) {
     if (groups & Vm::Effects) effectsScope.Enter(demo->handsBridge,demo->controlledPawn,object,function,locals);
     // Innermost, so stock perk code sees the acting item and its grip while
     // the outer item scopes still own aim, handling and effect receipts.
+    if (callback==Callback::Init && script.IsClass(object,L"KFProjectile"))
+        adapter::RecordPerkProjectile(script,demo->handsBridge,demo->controlledPawn,
+                                      script.Read<void*>(object,L"Owner"),object);
     adapter::PerkScope perkScope(script);
     if (groups & Vm::Perk) adapter::EnterLocalPerk(script,perkScope,demo->handsBridge,demo->controlledPawn,
                             object,function,locals);
@@ -1306,8 +1604,13 @@ void HookProcessInternal(void* object,void* stack,void* result) {
             script.Invoke(demo->handsBridge,script.FindFunction(demo->handsBridge,L"BeforeReloadAnimation"),&reloadParameters);
         }
     }
-    const bool portalEffects=portalRequested && callback==Callback::WeaponFired && portalHitscan.Effects(object,stack);
-    if (!portalEffects) ForwardProcessInternal(object,stack,result);
+    bowRelease.Forwarded();
+    adapter::ObserveAuthorityReloadStart(script,object,function);
+    automaticReloadPayment.Forwarded();
+    ForwardProcessInternal(object,stack,result);
+    if (callback==Callback::SpawnProjectile && result)
+        adapter::RecordPerkProjectile(script,demo->handsBridge,demo->controlledPawn,
+                                      object,*static_cast<void**>(result));
     // Kismet HandleTeleport and Teleporter.Accept replace the controller's
     // rotation through ClientSetRotation. Remote relocation also does so in
     // ClientSetLocation, even without a requested destination-facing update.
@@ -1487,7 +1790,7 @@ void EnsureEyeResolution() {
         dlss.Active()?adapter::DlssModeName(dlss.Mode()):"Off");
 }
 bool RefreshMenuState();
-void PumpNativeInput(float delta,bool neutral=false) {
+void ProbeReplayInputIsolation(float delta) {
     if (!lastLocalViewport || !Readable(lastLocalViewport,0x4c) || !std::isfinite(delta) || delta<0) return;
     void* client=nullptr;
     std::memcpy(&client,static_cast<std::byte*>(lastLocalViewport)+0x44,sizeof(client));
@@ -1515,7 +1818,7 @@ void PumpNativeInput(float delta,bool neutral=false) {
             isolationCharPending=false;
         }
     }
-    if (handReplayRequested && !neutral && demo->controlledPawn && demo->controlledController &&
+    if (handReplayRequested && demo->controlledPawn && demo->controlledController &&
         isolationProbedController!=demo->controlledController &&
         wcsstr(GetCommandLineW(),L"-kf2vr-input-isolation-probe")) {
         auto& script=demo->script;
@@ -1551,6 +1854,21 @@ void PumpNativeInput(float delta,bool neutral=false) {
             Log("ReplayInputIsolationChar posted=%d hwnd=%p owner_pid=%lu",posted,probeWindow,probeOwner);
         }
     }
+}
+void PumpNativeInput(float delta,bool neutral=false) {
+    if (!lastLocalViewport || !Readable(lastLocalViewport,0x4c) || !std::isfinite(delta) || delta<0) return;
+    void* client=nullptr;
+    std::memcpy(&client,static_cast<std::byte*>(lastLocalViewport)+0x44,sizeof(client));
+    if (!Readable(client,sizeof(void*))) return;
+    auto** table=*reinterpret_cast<void***>(client);
+    if (!Readable(table,0x40)) return;
+    // Exact stock WinDrv dispatch at D1BAA5 and D1C27x: FName is 8 bytes
+    // by value; float axis/delta time and gamepad flag follow on the stack.
+    using AxisFn=std::int32_t(*)(void*,void*,std::int32_t,std::uint64_t,float,float,std::int32_t);
+    using KeyFn=std::int32_t(*)(void*,void*,std::int32_t,std::uint64_t,std::int32_t,float,std::int32_t);
+    const auto axis=reinterpret_cast<AxisFn>(table[0x38/8]);
+    const auto key=reinterpret_cast<KeyFn>(table[0x28/8]);
+    if (!neutral) ProbeReplayInputIsolation(delta);
     if (client!=demo->nativeInputClient) { demo->nativeKeys={}; demo->nativeInputClient=client; }
     // Input runs before Draw updates menuVisible. Query the live session too,
     // including its native shell and scoreboard, before consuming this sample.
@@ -1565,7 +1883,8 @@ void PumpNativeInput(float delta,bool neutral=false) {
         demo->menuInputBlocked=menuInput;
     }
     XINPUT_STATE state{};
-    if (!neutral) demo->gamepad.GetState(0,&state);
+    // Offline replay filters physical input; only the authored sticks move it.
+    if (!neutral && !inputReplayRequested) demo->gamepad.GetState(0,&state);
     auto& pad=state.Gamepad;
     // Session menus consume Start on their own tick, never as a stock key.
     if (demo->session) pad.wButtons &= ~XINPUT_GAMEPAD_START;
@@ -1604,13 +1923,9 @@ void PumpNativeInput(float delta,bool neutral=false) {
         if (std::isfinite(intent)) pad.sThumbLY=static_cast<SHORT>(std::clamp(intent,-1.f,1.f)*32767.f);
     }
     demo->turnAxis=pad.sThumbRX/32767.f;
-    if (demo->session) {
-        if (demo->script.Read<int>(demo->session,L"NativeSnapTurn")) pad.sThumbRX=0;
-        else {
-            const auto speed=demo->script.Read<float>(demo->session,L"SmoothTurnScale");
-            pad.sThumbRX=static_cast<SHORT>(std::lround(kf2vr::adapter::ScaleSmoothTurnAxis(pad.sThumbRX/32767.f,speed)*32767.f));
-        }
-    }
+    // Snap and smooth turn are both applied to the controller in its tick
+    // (SmoothTurnInput): stock gamepad look never sees the turn stick.
+    if (demo->session) pad.sThumbRX=0;
     const float values[]{pad.sThumbLX/32767.f,pad.sThumbLY/32767.f,pad.sThumbRX/32767.f,0.f,
         pad.bLeftTrigger/255.f,pad.bRightTrigger/255.f};
     unsigned accepted=0;
@@ -1732,7 +2047,16 @@ struct GameMenuSink final : adapter::MenuInputSink {
         auto* movie=script.Read<void*>(demo->controlledController,L"MyGFxManager");
         if (demo->session && script.Read<int>(demo->session,L"NativeScoreboardActive"))
             movie=script.Read<void*>(script.Read<void*>(demo->controlledController,L"MyGFxHUD"),L"GfxScoreBoardPlayer");
-        if (!movie || focus(interaction,0)!=movie) return Refuse("gfx-focus-movie");
+        if (!movie) return Refuse("gfx-focus-movie:no-manager");
+        if (auto* focused=focus(interaction,0); focused!=movie) {
+            // Name who holds focus, so a refused stock menu is diagnosable.
+            auto* hud=script.Read<void*>(demo->controlledController,L"MyGFxHUD");
+            if (!focused) return Refuse("gfx-focus-movie:none");
+            if (focused==hud) return Refuse("gfx-focus-movie:hud");
+            if (hud && focused==script.Read<void*>(hud,L"GfxScoreBoardPlayer")) return Refuse("gfx-focus-movie:scoreboard");
+            if (focused==script.Read<void*>(demo->controlledController,L"MyGFxManager")) return Refuse("gfx-focus-movie:manager-not-target");
+            return Refuse("gfx-focus-movie:other");
+        }
         engine=adapter::GameScript::At<void*>(reinterpret_cast<void*>(gameBase+adapter::build::Rva(menuNative::GfxEngineGlobalRva)),0);
         if (!Readable(engine,menuNative::EngineMousePosition+sizeof(menuNative::Point))) return Refuse("gfx-engine");
         viewport=adapter::GameScript::At<void*>(engine,menuNative::EngineViewport);
@@ -1844,7 +2168,13 @@ void PumpMenuPointer() {
     GameMenuSink sink;
     if (!demo->menuInput.Update(pointer,static_cast<int>(demo->width),static_cast<int>(demo->height),true,sink)) {
         demo->menu.DisarmInput();
-        if (Interesting(++demo->menuInputRefusals)) Log("SpatialMenu input refused: reason=%s triggerDisarmed=1 beamRetained=1",sink.refusal);
+        // Each new reason is logged, not only the first few refusals of the
+        // session: a later stock menu (post-game) can refuse for its own reason.
+        static std::string lastRefusal;
+        if (Interesting(++demo->menuInputRefusals) || lastRefusal!=sink.refusal) {
+            lastRefusal=sink.refusal;
+            Log("SpatialMenu input refused: reason=%s triggerDisarmed=1 beamRetained=1",sink.refusal);
+        }
     }
 }
 bool BeginDemoFrame(xr::FrameState& frame);
@@ -1951,7 +2281,7 @@ bool PrepareOwnerAfterMovie() {
     // pre-load frame can be balanced with zero layers, never reused as an atlas.
     demo->gamepad.Cancel();
     CancelMenuPointer(); demo->menu.CancelInput();
-    demo->sessionMenuInput.Reset(); demo->snapTurn.Reset();
+    demo->sessionMenuInput.Reset(); demo->snapTurn.Reset(); demo->smoothTurn.Reset();
     renderQueue.Enqueue([] { dlss.Reset();if(demo) demo->render.sceneDepth.Reset(); });
     demo->sampleTick=0; demo->renderPairLease={}; demo->renderWorldViewOffset={};
     demo->pending=false; demo->atlasReady=false; demo->menuFrame=false; demo->eyePass=-1;
@@ -1969,11 +2299,12 @@ bool PrepareOwnerAfterMovie() {
     } else Log("XR movie handoff resumed generation=%llu discardedPending=0 ownerOnly=1 freshFrameRequired=1",
         static_cast<unsigned long long>(ticket));
     demo->presentHandoff.Complete(ticket);
-    const auto plateFrames=demo->backend.StaticQuadFrames();
-    if (plateFrames!=demo->loadingPlateLogged) {
-        Log("LoadingPlate movie frames=%llu failures=%llu",static_cast<unsigned long long>(plateFrames),
-            static_cast<unsigned long long>(demo->backend.StaticQuadFailures()));
-        demo->loadingPlateLogged=plateFrames;
+    const auto plateFrames=demo->backend.StaticQuadFrames(),mirrorFrames=demo->backend.MirrorQuadFrames();
+    if (plateFrames+mirrorFrames!=demo->loadingPlateLogged) {
+        Log("LoadingPlate movie frames=%llu failures=%llu mirrored=%llu mirrorFailures=%llu",static_cast<unsigned long long>(plateFrames),
+            static_cast<unsigned long long>(demo->backend.StaticQuadFailures()),static_cast<unsigned long long>(mirrorFrames),
+            static_cast<unsigned long long>(demo->backend.MirrorQuadFailures()));
+        demo->loadingPlateLogged=plateFrames+mirrorFrames;
     }
     return true;
 }
@@ -1997,11 +2328,15 @@ void UpdateSession(void* session) {
     worldDrawThread.compare_exchange_strong(expected,thread,std::memory_order_acq_rel);
     if (worldDrawThread.load(std::memory_order_acquire)!=thread) return;
     demo->session=session; demo->sessionRegistered.store(true,std::memory_order_release);
+    // Close test-world authority even while XR movie ownership is unavailable.
+    // Rendering still waits for its existing owner/context handoff below.
+    if (script.Read<int>(session,L"NativeTravelPending"))
+        localTestControl.BeginTravel(script,script.Read<void*>(demo->controlledController,L"WorldInfo"));
     if (!PrepareOwnerAfterMovie()) return;
     if (script.Read<int>(session,L"NativeTravelPending")) {
         if (!demo->travelling.exchange(true,std::memory_order_acq_rel)) {
             promoLog.BeginTravel();
-            CancelMenuPointer(); demo->gamepad.Cancel(); demo->sessionMenuInput.Reset(); demo->snapTurn.Reset();
+            CancelMenuPointer(); demo->gamepad.Cancel(); demo->sessionMenuInput.Reset(); demo->snapTurn.Reset(); demo->smoothTurn.Reset();
             demo->menu.Reset(); demo->headAim.Reset(); demo->renderPairLease={};
             demo->handsBridge=nullptr; demo->heldWeapon=nullptr; demo->handsValid=false;
             demo->controlledPawn=nullptr; demo->controlledController=nullptr;
@@ -2041,6 +2376,20 @@ void UpdateSession(void* session) {
     if (requestedPercent>=50 && requestedPercent<=100) eyeRenderPercent=static_cast<unsigned>(requestedPercent);
     EnsureEyeResolution();
     if (demo->failed) return;
+    hideBileLens=script.Read<int>(session,L"bBileSplatter")==0;
+    hideBloodLens=script.Read<int>(session,L"bBloodSplatter")==0;
+    script.Write(session,L"NativeDlssMode",dlss.Active()?static_cast<int>(dlss.Mode()):0);
+    // The velocity pass needs KF2's MotionBlur setting on, so object motion is
+    // offered only when every blur draw it would enable can also be skipped.
+    // Script turns MotionBlur on for NativeObjectMotion, not for DLSS alone.
+    const bool blurSkippable=originalPrimeVelocities && originalTileMaxBlur && originalLegacyBlur;
+    const bool objectMotionOn=dlss.Active() && originalRenderVelocities!=nullptr && blurSkippable;
+    script.Write(session,L"NativeObjectMotion",objectMotionOn?1:0);
+    objectMotionWanted.store(objectMotionOn,std::memory_order_release);
+    // Motion blur never draws unless the player chose cinematic motion blur,
+    // whatever turned the engine setting on.
+    blurSuppressed.store(script.Read<int>(session,L"bCinematicMotionBlur")==0,std::memory_order_release);
+    dlss.SetSharpness(static_cast<float>(script.Read<int>(session,L"DlssSharpness"))/100.f);
     script.Write(session,L"NativeEyeRenderPercent",static_cast<int>(eyeRenderPercent));
     script.Write(session,L"NativeEyeWidth",static_cast<int>(adapter::ScaledEyeExtent(demo->backend.RecommendedWidth(),eyeRenderPercent)));
     script.Write(session,L"NativeEyeHeight",static_cast<int>(adapter::ScaledEyeExtent(demo->backend.RecommendedHeight(),eyeRenderPercent)));
@@ -2048,7 +2397,7 @@ void UpdateSession(void* session) {
         demo->frame.state==xr::SessionState::Focused && demo->frame.actionsSynced &&
         demo->frame.headPoseValid && demo->frame.headPoseTracked;
     script.Write(session,L"NativeHeadTracked",int(fresh));
-    if (!fresh) { CancelMenuPointer(); demo->sessionMenuInput.Reset(); demo->snapTurn.Reset(); return; }
+    if (!fresh) { CancelMenuPointer(); demo->sessionMenuInput.Reset(); demo->snapTurn.Reset(); demo->smoothTurn.Reset(); return; }
     if (demo->sessionInputSample==demo->frame.poseSampleId) return;
     demo->sessionInputSample=demo->frame.poseSampleId;
     const auto& left=demo->frame.handLeft;
@@ -2101,6 +2450,14 @@ std::int32_t HookControllerTick(void* controller,float delta,std::int32_t tickTy
             demo->controlledController=controller;
             demo->controlledPawn=nextPawn;
             if (networkRequested && handReplayRequested && demo->handsBridge) PumpNativeInput(delta);
+            // Offline input replay owns no XR session, so it never reaches the
+            // stereo input pump. Exercise only the explicit isolation probe;
+            // do not introduce another stock gamepad/input writer.
+            // Scripted replays (geometry control v3) also walk and turn: pump the
+            // stock locomotion mapping from the scripted sticks, never the pad.
+            else if (inputReplayRequested && demo->handsBridge && reloadGeometryRequested &&
+                demo->script.Read<int>(demo->handsBridge,L"ReloadCaseControlVersion")==3) PumpNativeInput(delta);
+            else if (inputReplayRequested && demo->handsBridge) ProbeReplayInputIsolation(delta);
         }
     }
     if (GameOwnsXr() && demo->ready && !demo->failed && !demo->failureRequested.load(std::memory_order_acquire)) {
@@ -2136,6 +2493,13 @@ std::int32_t HookControllerTick(void* controller,float delta,std::int32_t tickTy
                 demo->gamepad.Cancel();
             } else {
                 const auto setRotation=reinterpret_cast<pinned::ActorSetRotationFn>(gameBase+adapter::build::Rva(pinned::kActorSetRotationRva));
+                // Expire a baseline capture before accepting the resumed pose:
+                // the script input tick may have been skipped during a hitch.
+                if (demo->handsBridge) {
+                    if (auto panel=demo->script.Read<void*>(demo->handsBridge,L"CalibrationPanel"))
+                        if (demo->script.Read<float>(panel,L"PendingCaptureUntil")>0)
+                            demo->script.Invoke(panel,demo->script.FindFunction(panel,L"UpdateBaselineCapture"),nullptr);
+                }
                 const bool explicitRecenter=(MenuOwner() && demo->script.Read<int>(MenuOwner(),L"NativeRecenterRequested")) ||
                     (demo->handsBridge && demo->script.Read<int>(demo->handsBridge,L"NativeRecenterRequested"));
                 if ((demo->headAim.SpaceChanged(demo->frame) || explicitRecenter) &&
@@ -2206,9 +2570,17 @@ std::int32_t HookControllerTick(void* controller,float delta,std::int32_t tickTy
         }
     }
     if (GameOwnsXr() && demo->session && controller==demo->controlledController) {
-        const bool allowed=pivotTurn && !demo->menuVisible && demo->sampleTick && GetTickCount64()-demo->sampleTick<=250 &&
-            demo->frame.state==xr::SessionState::Focused && demo->script.Read<int>(demo->session,L"NativeSnapTurn");
-        const int turn=demo->snapTurn.Update(demo->turnAxis,allowed,demo->script.Read<float>(demo->session,L"SnapTurnDegrees"));
+        const bool live=pivotTurn && !demo->menuVisible && demo->sampleTick && GetTickCount64()-demo->sampleTick<=250 &&
+            demo->frame.state==xr::SessionState::Focused;
+        const bool snap=demo->script.Read<int>(demo->session,L"NativeSnapTurn")!=0;
+        int turn=demo->snapTurn.Update(demo->turnAxis,live && snap,demo->script.Read<float>(demo->session,L"SnapTurnDegrees"));
+        // Real time, so Zed time and frame rate never change the turn speed.
+        LARGE_INTEGER now{},frequency{};
+        QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
+        const double seconds=demo->smoothTurnLast.QuadPart && frequency.QuadPart
+            ? static_cast<double>(now.QuadPart-demo->smoothTurnLast.QuadPart)/static_cast<double>(frequency.QuadPart) : 0.0;
+        demo->smoothTurnLast=now;
+        turn+=demo->smoothTurn.Update(demo->turnAxis,live && !snap,demo->script.Read<float>(demo->session,L"SmoothTurnScale"),seconds);
         pinned::NativeRotator current{};
         if (turn && ReadRotation(controller,current)) {
             current.yaw+=turn;
@@ -2229,21 +2601,30 @@ std::int32_t HookControllerTick(void* controller,float delta,std::int32_t tickTy
     }
     return result;
 }
-void HookPortalRender(void* probe,void* renderer) {
-    adapter::timing::Scope timing(adapter::timing::PortalCapture);
-    portalCapture.Render(probe,renderer);
-}
-kf2vr::portal::CaptureMatrix* HookPortalClip(kf2vr::portal::CaptureMatrix* out,
-    const kf2vr::portal::CaptureMatrix* projection,const kf2vr::portal::CapturePlane* plane) {
-    return portalCapture.Clip(out,projection,plane);
+void SubmitSceneWithVisibility(void* canvas,void* family,bool localScene) {
+    if (!opticVisibility.Enabled()) { originalSubmit(canvas,family);return; }
+    adapter::OpticCaptureVisibility::Snapshot snapshot{};
+    // Capture references on the game thread after final placement. They are
+    // consumed only between this renderer's ordered commands, never next frame.
+    if (localScene && GetCurrentThreadId()==worldDrawThread.load(std::memory_order_acquire) &&
+        demo && demo->ready && !demo->failed && demo->handsBridge) {
+        pinned::LocalWorldSnapshot world{};
+        if (LocalWorld(lastLocalPlayer,world) &&
+            world.controller==reinterpret_cast<uintptr_t>(demo->controlledController) &&
+            demo->script.Read<void*>(demo->controlledPawn,L"WorldInfo")==reinterpret_cast<void*>(world.worldInfo))
+            snapshot=opticVisibility.Collect(demo->script,demo->handsBridge,
+                demo->controlledPawn,demo->controlledController);
+    }
+    renderQueue.Enqueue([snapshot] { opticVisibility.Push(snapshot); });
+    originalSubmit(canvas,family);
+    renderQueue.Enqueue([] { opticVisibility.Pop(); });
 }
 void SubmitEye(void* canvas,void* family) {
     if (benchmarkFile && renderPassReadbackVerified && demo && demo->eyePass>=0 && demo->eyePass<2)
         demo->renderPasses[demo->eyePass]=adapter::ReadRenderPassSettings(gameBase);
-    // Portal captures, when a pair is open, render inside this submission.
     adapter::timing::Scope world(adapter::timing::drilldownEnabled && demo ?
         (demo->eyePass==1?adapter::timing::RightScene:adapter::timing::LeftScene):adapter::timing::WorldScene);
-    originalSubmit(canvas,family);
+    SubmitSceneWithVisibility(canvas,family,true);
 }
 // Benchmarks render one fixed, level view with neutral controllers so headset,
 // controller or desk movement cannot change the workload. Tracking, focus and
@@ -2323,7 +2704,7 @@ void HookSubmit(void* canvas,void* family) {
             Log("SpatialMenu image refused unexpected world submission");
             return;
         }
-        originalSubmit(canvas,family); return;
+        SubmitSceneWithVisibility(canvas,family,false); return;
     }
     const bool localScene=demo && lastLocalFamily==family &&
         reinterpret_cast<uintptr_t>(_ReturnAddress())-gameBase==adapter::build::Rva(0x677831);
@@ -2390,7 +2771,7 @@ void HookSubmit(void* canvas,void* family) {
             RequestThreadFailure("world scene submission");
         } else if (owner) {
             if (!PrepareOwnerAfterMovie()) {
-                originalSubmit(canvas,family); return;
+                SubmitSceneWithVisibility(canvas,family,false); return;
             }
             // All non-atomic DemoRuntime fields below are owner-thread-only.
             if (demo->failureRequested.load(std::memory_order_acquire)) demo->failed=true;
@@ -2406,7 +2787,7 @@ void HookSubmit(void* canvas,void* family) {
                         demo->failed=true;
                     } else if (Interesting(count)) Log("Stereo waiting for local world status=%d",static_cast<int>(world.status));
                     finalizePresentation();
-                    originalSubmit(canvas,family);
+                    SubmitSceneWithVisibility(canvas,family,false);
                     return;
                 }
                 std::string beginError;
@@ -2501,7 +2882,7 @@ void HookSubmit(void* canvas,void* family) {
         }
     }
     finalizePresentation();
-    originalSubmit(canvas,family);
+    SubmitSceneWithVisibility(canvas,family,localScene);
 }
 bool SnapshotEye(unsigned eye,const adapter::DlssEyeInput& dlssInput={},unsigned dlssWidth=0,unsigned dlssHeight=0,bool requested=false,
                  unsigned sourceX=0,unsigned sourceWidth=0,ID3D11Texture2D* eyeDepth=nullptr) {
@@ -2535,48 +2916,39 @@ bool SnapshotEye(unsigned eye,const adapter::DlssEyeInput& dlssInput={},unsigned
         storageFormat=DXGI_FORMAT_B8G8R8X8_TYPELESS; viewFormat=DXGI_FORMAT_B8G8R8X8_UNORM_SRGB; break;
     default: return false;
     }
-    if(!requested) {
-    D3D11_TEXTURE2D_DESC atlasDesc{};
-    if (demo->eyeAtlas) demo->eyeAtlas->GetDesc(&atlasDesc);
-    if (!demo->eyeAtlas || !demo->eyeAtlasView || atlasDesc.Width!=sourceWidth*2 || atlasDesc.Height!=sourceDesc.Height || atlasDesc.Format!=storageFormat) {
-        atlasDesc=sourceDesc; atlasDesc.Width=sourceWidth*2; atlasDesc.MipLevels=1; atlasDesc.ArraySize=1;
-        atlasDesc.Format=storageFormat; atlasDesc.SampleDesc={1,0};
-        atlasDesc.Usage=D3D11_USAGE_DEFAULT; atlasDesc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
-        atlasDesc.CPUAccessFlags=0; atlasDesc.MiscFlags=0;
-        ComPtr<ID3D11Texture2D> atlas;
-        ComPtr<ID3D11ShaderResourceView> view;
-        if (FAILED(demo->backend.Device()->CreateTexture2D(&atlasDesc,nullptr,&atlas))) return false;
-        D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
-        srv.Format=viewFormat; srv.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2D; srv.Texture2D.MipLevels=1;
-        if (FAILED(demo->backend.Device()->CreateShaderResourceView(atlas.Get(),&srv,&view))) return false;
-        demo->eyeAtlasView=view;
-        demo->eyeAtlas=atlas;
-    }
-    demo->backend.Context()->CopySubresourceRegion(demo->eyeAtlas.Get(),0,eye*sourceWidth,0,0,source.Get(),0,&sourceBox);
-    return SUCCEEDED(demo->backend.Device()->GetDeviceRemovedReason());
-    }
-    // Retain the complete source eyes until both evaluations have finished.
-    // Failure selects a complete ordinary atlas for BOTH eyes; AtlasBlit fills
-    // each full XR output from it. No partial output-sized copy can escape.
-    auto& render=demo->render;
-    if(eye==0) render.dlssSucceeded={};
-    auto& saved=render.sourceEyes[eye];
-    D3D11_TEXTURE2D_DESC savedDesc{};if(saved) saved->GetDesc(&savedDesc);
-    if(!saved || savedDesc.Width!=sourceWidth || savedDesc.Height!=sourceDesc.Height || savedDesc.Format!=storageFormat) {
-        savedDesc=sourceDesc;savedDesc.Width=sourceWidth;savedDesc.Format=storageFormat;savedDesc.MipLevels=savedDesc.ArraySize=1;
-        savedDesc.Usage=D3D11_USAGE_DEFAULT;savedDesc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
-        savedDesc.CPUAccessFlags=savedDesc.MiscFlags=0;saved.Reset();
-        if(FAILED(demo->backend.Device()->CreateTexture2D(&savedDesc,nullptr,&saved))) return false;
-    }
     auto* context=demo->backend.Context();
-    context->CopySubresourceRegion(saved.Get(),0,0,0,0,source.Get(),0,&sourceBox);
-    ID3D11Texture2D* depth=eyeDepth ? eyeDepth : render.sceneDepth.Get();
-    if(!dlssInput.valid) { dlss.Fail("Missing eye matrices for DLSS pair");dlss.Reset(); }
-    if(dlssInput.valid) {
+    auto* image=source.Get();
+    unsigned imageWidth=sourceWidth,imageHeight=sourceDesc.Height;
+    // Diagnostic capture: this eye's DLSS inputs, saved before evaluation from
+    // the same frame the XR eye capture then records (#10).
+    if (captureRootPath[0] && !demo->captureAttempted && !demo->captureInputsReady.load(std::memory_order_acquire)
+        && demo->backend.Counters().submitted>=120) {
+        const auto root=CaptureDir();
+        const std::wstring suffix=eye==0?L"left.png":L"right.png";
+        std::string colourError,depthError,motionError;
+        bool colour=false,depthSaved=false,motion=false;
+        try {
+            colour=kf2vr::diagnostics::CaptureTexture(context,source.Get(),root/(L"pre-dlss-"+suffix),colourError,nullptr);
+            ID3D11Texture2D* inputDepth=eyeDepth ? eyeDepth : demo->render.sceneDepth.Get();
+            depthSaved=inputDepth && kf2vr::diagnostics::CaptureScalarTexture(context,inputDepth,root/(L"depth-"+suffix),depthError);
+            if (!inputDepth) depthError="no fresh scene depth";
+            motion=objectMotion.Frame() && kf2vr::diagnostics::CaptureScalarTexture(context,objectMotion.Frame(),root/(L"motion-"+suffix),motionError);
+            if (!objectMotion.Frame()) motionError="no object-motion frame";
+        } catch (const std::exception& error) { colourError=error.what(); }
+        catch (...) { colourError="unknown diagnostic capture exception"; }
+        Log("GameXRCaptureInputs eye=%s dlss=%d preDlss=%d depth=%d motion=%d errors=%s|%s|%s",eye==0?"left":"right",requested?1:0,
+            colour,depthSaved,motion,colourError.c_str(),depthError.c_str(),motionError.c_str());
+        if (eye==1) demo->captureInputsReady.store(true,std::memory_order_release);
+    }
+    if(requested) {
+        auto& render=demo->render;
+        ID3D11Texture2D* depth=eyeDepth ? eyeDepth : render.sceneDepth.Get();
         std::string error;
+        bool evaluated=false;
         const auto format=storageFormat==DXGI_FORMAT_R8G8B8A8_TYPELESS ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_UNKNOWN;
         auto& output=render.dlssOutput[eye];D3D11_TEXTURE2D_DESC d{};if(output) output->GetDesc(&d);
-        if(!dlssWidth || !dlssHeight || dlssWidth>8192 || dlssHeight>8192) error="DLSS output size refused";
+        if(!dlssInput.valid) error="Missing eye matrices for DLSS pair";
+        else if(!dlssWidth || !dlssHeight || dlssWidth>8192 || dlssHeight>8192) error="DLSS output size refused";
         else if(format==DXGI_FORMAT_UNKNOWN) error="DLSS requires RGBA8 eye colour";
         else if(!depth) error="Fresh scene depth not observed for this eye";
         else {
@@ -2586,30 +2958,31 @@ bool SnapshotEye(unsigned eye,const adapter::DlssEyeInput& dlssInput={},unsigned
                 output.Reset();
                 if(FAILED(demo->backend.Device()->CreateTexture2D(&d,nullptr,&output))) error="DLSS output allocation failed";
             }
-            if(error.empty()) render.dlssSucceeded[eye]=dlss.Evaluate(demo->backend.Device(),context,eye,source.Get(),depth,output.Get(),dlssInput,error);
+            if(error.empty()) evaluated=dlss.Evaluate(demo->backend.Device(),context,eye,source.Get(),depth,output.Get(),objectMotion.Frame(),dlssInput,error);
         }
-        if(!render.dlssSucceeded[eye]) {
+        render.sceneDepth.Reset(); // A previous eye/frame is never accepted as fresh depth.
+        if(!evaluated) {
             dlss.Fail(error);dlss.Reset();
-            if(Interesting(++dlssFailures)) Log("DLSS pair fallback count=%llu: %s",static_cast<unsigned long long>(dlssFailures),error.c_str());
+            if(Interesting(++dlssFailures)) Log("DLSS pair withheld count=%llu: %s",static_cast<unsigned long long>(dlssFailures),error.c_str());
+            // QueueFramePacket withholds both eyes. Active() then selects
+            // ordinary render dimensions; successful frames need no backups.
+            return false;
         }
+        image=output.Get();imageWidth=dlssWidth;imageHeight=dlssHeight;
     }
-    render.sceneDepth.Reset(); // A previous eye/frame is never accepted as fresh depth.
-    if(eye==0) return SUCCEEDED(demo->backend.Device()->GetDeviceRemovedReason());
-    const bool upscaled=render.dlssSucceeded[0] && render.dlssSucceeded[1];
-    auto& images=upscaled ? render.dlssOutput : render.sourceEyes;
-    if(!images[0] || !images[1]) return false;
-    D3D11_TEXTURE2D_DESC left{},right{};images[0]->GetDesc(&left);images[1]->GetDesc(&right);
-    if(left.Width!=right.Width || left.Height!=right.Height || left.Format!=right.Format) return false;
     D3D11_TEXTURE2D_DESC atlasDesc{};if(demo->eyeAtlas) demo->eyeAtlas->GetDesc(&atlasDesc);
-    if(!demo->eyeAtlas || !demo->eyeAtlasView || atlasDesc.Width!=left.Width*2 || atlasDesc.Height!=left.Height || atlasDesc.Format!=storageFormat) {
-        atlasDesc=left;atlasDesc.Width*=2;atlasDesc.Format=storageFormat;atlasDesc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
+    if(!demo->eyeAtlas || !demo->eyeAtlasView || atlasDesc.Width!=imageWidth*2 || atlasDesc.Height!=imageHeight || atlasDesc.Format!=storageFormat) {
+        atlasDesc=sourceDesc;atlasDesc.Width=imageWidth*2;atlasDesc.Height=imageHeight;
+        atlasDesc.MipLevels=atlasDesc.ArraySize=1;atlasDesc.SampleDesc={1,0};
+        atlasDesc.Format=storageFormat;atlasDesc.Usage=D3D11_USAGE_DEFAULT;atlasDesc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
+        atlasDesc.CPUAccessFlags=atlasDesc.MiscFlags=0;
         ComPtr<ID3D11Texture2D> atlas;ComPtr<ID3D11ShaderResourceView> view;
         if(FAILED(demo->backend.Device()->CreateTexture2D(&atlasDesc,nullptr,&atlas))) return false;
         D3D11_SHADER_RESOURCE_VIEW_DESC vd{};vd.Format=viewFormat;vd.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2D;vd.Texture2D.MipLevels=1;
         if(FAILED(demo->backend.Device()->CreateShaderResourceView(atlas.Get(),&vd,&view))) return false;
         demo->eyeAtlas=atlas;demo->eyeAtlasView=view;
     }
-    for(unsigned i=0;i<2;++i) context->CopySubresourceRegion(demo->eyeAtlas.Get(),0,i*left.Width,0,0,images[i].Get(),0,nullptr);
+    context->CopySubresourceRegion(demo->eyeAtlas.Get(),0,eye*imageWidth,0,0,image,0,requested?nullptr:&sourceBox);
     return SUCCEEDED(demo->backend.Device()->GetDeviceRemovedReason());
 }
 // The copy follows the eye's own draw commands; Present checks the result.
@@ -2631,6 +3004,7 @@ void QueueEyeSnapshot(unsigned eye) {
     const bool requested=dlssRenderActive;
     renderQueue.Enqueue([eye,input,outputWidth,outputHeight,requested] {
         demo->render.eyeCopied[eye]=SnapshotEye(eye,input,outputWidth,outputHeight,requested);
+        objectMotion.EndFrame();
         if (!demo->render.eyeCopied[eye]) Log("Eye snapshot failed: %s",eye?"right":"left");
     });
 }
@@ -2687,6 +3061,7 @@ void QueuePairSnapshot() {
             if (!demo->render.eyeCopied[eye]) Log("Single-pass eye snapshot failed: %s",eye?"right":"left");
         }
         demo->render.eyeDepth={};
+        objectMotion.EndFrame();
     });
 }
 // Hand this frame's game-side state to Present, behind every draw it describes.
@@ -2981,6 +3356,7 @@ DWORD WINAPI HookGetPadCaps(DWORD index,DWORD flags,XINPUT_CAPABILITIES* caps) {
 }
 // Gameplay half of a stop: menus, HUD, head aim and held stock input.
 void StopGameSide() {
+    opticVisibility.ResetGame();
     motionRuntime.Shutdown();
     demo->gamepad.Cancel();
     CancelMenuPointer(); demo->menu.Reset(); demo->menuVisible=false; demo->menuFrame=false;
@@ -3015,11 +3391,12 @@ void StopDemoRuntime() {
     demo->blit.Shutdown();
     demo->eyeAtlasView.Reset();
     demo->eyeAtlas.Reset();
-    demo->render.sceneDepth.Reset(); demo->render.dlssOutput={}; demo->render.sourceEyes={}; demo->render.eyeDepth={};
+    demo->render.sceneDepth.Reset(); demo->render.dlssOutput={}; demo->render.eyeDepth={};
     singlePassPairViews=nullptr; singlePassRenderer=nullptr; gameContext=nullptr; foregroundDepth.ClearEyes();
     ResetStereoRenderResources(); rightEyeLateState.store(nullptr,std::memory_order_release);
     occlusionConstantsFailed.store(false,std::memory_order_release);
     dlss.Shutdown();
+    objectMotion.Reset();
     demo->backend.Shutdown(); demo->ready=false;
     // Keep the virtual pad connected but neutral to balance held input release.
     Log("XR shutdown completed; virtual gamepad neutral; stock scene submission restored");
@@ -3106,11 +3483,24 @@ void PresentDemo(IDXGISwapChain* swapchain) {
         if (!demo->blit.Initialise(device.Get(),demo->backend.Context())) { Log("Atlas init failed: %s",demo->blit.LastError().c_str()); demo->backend.Shutdown(); demo->failed=true; return; }
         demo->ready=true;
         {
-            const auto plate=adapter::GenerateLoadingPlate(1024,512);
+            // The installed game's own splash art when present; the generated
+            // plate otherwise. Either way one static quad, baked once.
+            wchar_t executable[32768]{};
+            const DWORD executableLength=GetModuleFileNameW(nullptr,executable,32768);
+            auto plate=adapter::BrandedLoadingPlate(executableLength && executableLength<32768 ? executable : nullptr,2048,1024);
+            const bool branded=plate.width>0;
+            if (!branded) plate=adapter::GenerateLoadingPlate(1024,512);
             const bool created=plate.width>0 && demo->backend.CreateStaticQuad(plate.width,plate.height,plate.rgba.data(),1.6f,2.0f);
             demo->loadingPlate.store(created,std::memory_order_release);
-            Log("LoadingPlate ready=%d size=%ux%u quad=1.6m@2.0m%s%s",created,plate.width,plate.height,
+            Log("LoadingPlate ready=%d branded=%d size=%ux%u quad=1.6m@2.0m%s%s",created,branded,plate.width,plate.height,
                 created?"":" error=",created?"":demo->backend.LastError().c_str());
+            // The stock loading movie itself, mirrored from the backbuffer it
+            // draws into; same size and format family, so a plain GPU copy.
+            const bool mirror=desc.SampleDesc.Count==1 && demo->backend.CreateMirrorQuad(desc.BufferDesc.Width,desc.BufferDesc.Height,
+                static_cast<std::uint32_t>(desc.BufferDesc.Format),1.8f,2.0f);
+            demo->movieMirror.store(mirror,std::memory_order_release);
+            Log("LoadingMovieMirror ready=%d size=%ux%u format=%u quad=1.8m@2.0m%s%s",mirror,desc.BufferDesc.Width,desc.BufferDesc.Height,
+                static_cast<unsigned>(desc.BufferDesc.Format),mirror?"":" error=",mirror?"":demo->backend.LastError().c_str());
         }
         if (adapter::timing::enabled) {
             demo->gpuTimingReady=demo->gpuTiming.Initialise(device.Get());
@@ -3128,6 +3518,18 @@ void PresentDemo(IDXGISwapChain* swapchain) {
         bool okay=true, captureThisFrame=false;
         std::array<bool,2> captured{};
         const auto submittedBefore=demo->backend.Counters().submitted;
+        // Re-arm the diagnostic capture on demand: an 'arm' file in the root.
+        if (captureRootPath[0] && demo->captureAttempted && submittedBefore%30==0) {
+            std::error_code ignored;
+            const auto arm=std::filesystem::path(captureRootPath)/L"arm";
+            if (std::filesystem::exists(arm,ignored) && std::filesystem::remove(arm,ignored)) {
+                captureSetPath=std::filesystem::path(captureRootPath)/(L"set-"+std::to_wstring(++captureSet));
+                std::filesystem::create_directories(captureSetPath,ignored);
+                demo->captureInputsReady.store(false,std::memory_order_release);
+                demo->captureAttempted=false;
+                Log("GameXRCapture armed set=%u",captureSet);
+            }
+        }
         // A packet describes the frame it was drawn for, never a later begin.
         if (packet.frame.poseSampleId!=demo->render.begunSample) packet.atlasReady=false;
         if (packet.atlasReady && !demo->failed) {
@@ -3154,7 +3556,8 @@ void PresentDemo(IDXGISwapChain* swapchain) {
                             demo->blit.BeginFrameView(demo->eyeAtlasView.Get(),true));
                     if (okay) {
                         demo->blit.SetComfortEffects(packet.frame,packet.effects);
-                        captureThisFrame=captureRootPath[0] && !demo->captureAttempted && submittedBefore>=120;
+                        captureThisFrame=captureRootPath[0] && !demo->captureAttempted && submittedBefore>=120
+                            && demo->captureInputsReady.load(std::memory_order_acquire);
                         if (captureThisFrame) demo->captureAttempted=true;
                         okay=demo->backend.RenderEyes([&](const xr::FrameState& sample,const xr::D3D11EyeTarget& target) {
                             const bool rendered=packet.menuFrame ?
@@ -3165,7 +3568,7 @@ void PresentDemo(IDXGISwapChain* swapchain) {
                                 const unsigned eye=target.eye==xr::Eye::Left?0u:1u;
                                 std::string captureError;
                                 try {
-                                    const auto file=std::filesystem::path(captureRootPath)/(eye==0?"left.png":"right.png");
+                                    const auto file=CaptureDir()/(eye==0?"left.png":"right.png");
                                     captured[eye]=kf2vr::diagnostics::CaptureTexture(demo->backend.Context(),target.colorTexture,file,captureError,nullptr);
                                 } catch (const std::exception& error) { captureError=error.what(); }
                                 catch (...) { captureError="unknown diagnostic capture exception"; }
@@ -3222,17 +3625,28 @@ HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* swapchain,UINT interval,UI
         const auto owner=demo->ownerThread.load(std::memory_order_acquire);
         if (owner && GetCurrentThreadId()!=owner) {
             // UE3 starts its loading movie before NativeTravelPending reaches
-            // script. Only atomics and the original engine Present are legal
-            // here: skip metadata, screenshots, timers and every XR/D3D helper.
+            // script. Only atomics, the original engine Present and the movie
+            // mirror below are legal here: skip metadata, screenshots, timers
+            // and every owner XR/D3D helper.
             const bool movie=!(flags&DXGI_PRESENT_TEST) &&
                 swapchain==demo->ownerSwapchain.load(std::memory_order_acquire);
+            const bool live=movie && demo->ready.load(std::memory_order_acquire) && !demo->failed.load(std::memory_order_acquire);
             if (movie) demo->presentHandoff.BeginForeign();
+            // The backbuffer holds this movie frame only until Present. This
+            // thread drew it with the game's immediate context, so one copy
+            // here is ordered with the movie's own draws; the backend skips it
+            // whenever the owner holds a begun frame.
+            auto mirrored=xr::OpenXrD3D11Backend::QuadFrame::Unavailable;
+            if (live && demo->movieMirror.load(std::memory_order_acquire)) {
+                ComPtr<ID3D11Texture2D> backbuffer;
+                if (SUCCEEDED(swapchain->GetBuffer(0,IID_PPV_ARGS(&backbuffer))))
+                    mirrored=demo->backend.SubmitMirrorQuadFrame(backbuffer.Get());
+            }
             const HRESULT result=originalPresent(swapchain,interval,flags);
             if (movie) demo->presentHandoff.EndForeign();
-            // The movie thread is the only presenter while the owner is blocked
-            // in LoadMap. A static quad frame needs no D3D or owner state, and
-            // the backend skips it whenever the owner holds a begun frame.
-            if (movie && demo->ready.load(std::memory_order_acquire) && !demo->failed.load(std::memory_order_acquire) &&
+            // Without a mirror the movie thread still carries the static
+            // plate: no D3D or owner state, skipped while the owner is mid-frame.
+            if (live && mirrored==xr::OpenXrD3D11Backend::QuadFrame::Unavailable &&
                 demo->loadingPlate.load(std::memory_order_acquire)) demo->backend.SubmitStaticQuadFrame();
             return result;
         }
@@ -3376,10 +3790,10 @@ HRESULT STDMETHODCALLTYPE HookPresent(IDXGISwapChain* swapchain,UINT interval,UI
         adapter::timing::Scope diagnosticOutput(adapter::timing::DiagnosticOutput);
         if(elapsed>=5000) {
             using namespace adapter::timing;
-            Log("FrameTiming elapsedMs=%.3f presents=%llu otherMs=%.3f controllerMs=%.3f simulationMs=%.3f vmDispatchMs=%.3f vmCalls=%llu vmBodyMs=%.3f leftMs=%.3f rightMs=%.3f portalMs=%.3f worldMs=%.3f xrBeginMs=%.3f xrSubmitMs=%.3f presentMs=%.3f",
+            Log("FrameTiming elapsedMs=%.3f presents=%llu otherMs=%.3f controllerMs=%.3f simulationMs=%.3f vmDispatchMs=%.3f vmCalls=%llu vmBodyMs=%.3f leftMs=%.3f rightMs=%.3f worldMs=%.3f xrBeginMs=%.3f xrSubmitMs=%.3f presentMs=%.3f",
                 elapsed,t.presents,t.milliseconds[Other],t.milliseconds[Controller],t.milliseconds[Simulation],
                 t.milliseconds[ScriptDispatch],t.calls[ScriptDispatch],t.milliseconds[ScriptBody],
-                t.milliseconds[LeftView],t.milliseconds[RightView],t.milliseconds[PortalCapture],t.milliseconds[WorldScene],
+                t.milliseconds[LeftView],t.milliseconds[RightView],t.milliseconds[WorldScene],
                 t.milliseconds[XrBegin],t.milliseconds[XrSubmit],t.milliseconds[DesktopPresent]);
             auto& intervals=t.intervals;
             Log("FramePacing mode=%s intervals=%llu overflow=%llu meanMs=%.3f p50Ms=%.3f p95Ms=%.3f p99Ms=%.3f maxMs=%.3f over90=%llu over120=%llu eyeCopyMs=%.3f runtimePeriodMs=%.3f lastMenu=%d",
@@ -3479,7 +3893,7 @@ HRESULT STDMETHODCALLTYPE HookResize(IDXGISwapChain* swapchain,UINT count,UINT w
     return result;
 }
 void STDMETHODCALLTYPE HookClearDepth(ID3D11DeviceContext* context,ID3D11DepthStencilView* view,UINT flags,FLOAT depth,UINT8 stencil) {
-    if (OnRenderCommandThread() && foregroundDepth.Filter(context,view,flags,depth,stencil) &&
+    if (OnRenderCommandThread() && foregroundDepth.FilterDeviceClear(context,view,flags,depth,stencil) &&
         Interesting(++preservedForegroundDepth))
         Log("Foreground world depth preserved count=%llu",static_cast<unsigned long long>(preservedForegroundDepth));
     if (flags) originalClearDepth(context,view,flags,depth,stencil);
@@ -3497,10 +3911,12 @@ RhiClearFn originalRhiClear=nullptr;
 std::uint64_t preservedEyeDepth=0;
 void HookRhiClear(void* rhi,std::uint32_t clearColor,const float* color,std::uint32_t clearDepth,float depth,
                   std::uint32_t clearStencil,std::uint32_t stencil) {
+    bool filtered=false;
     if (clearDepth && OnRenderCommandThread() && gameContext) {
         ComPtr<ID3D11RenderTargetView> target; ComPtr<ID3D11DepthStencilView> bound;
         gameContext->OMGetRenderTargets(1,&target,&bound);
         UINT flags=D3D11_CLEAR_DEPTH|(clearStencil ? D3D11_CLEAR_STENCIL : 0u);
+        filtered=bound!=nullptr;
         const bool kept=bound && foregroundDepth.Filter(gameContext,bound.Get(),flags,depth,static_cast<UINT8>(stencil))
             && !(flags&D3D11_CLEAR_DEPTH);
         if (kept) {
@@ -3510,6 +3926,7 @@ void HookRhiClear(void* rhi,std::uint32_t clearColor,const float* color,std::uin
             if (!clearColor && !clearStencil) return;
         }
     }
+    adapter::ForegroundDepth::RhiClearScope clearScope(filtered);
     originalRhiClear(rhi,clearColor,color,clearDepth,depth,clearStencil,stencil);
 }
 void STDMETHODCALLTYPE HookClearColor(ID3D11DeviceContext* context,ID3D11RenderTargetView* view,const FLOAT* rgba) {
@@ -3608,6 +4025,12 @@ using RenderLightingFn=void(*)(void*,std::int32_t,std::uint32_t*);
 RenderLightingFn originalRenderLighting=nullptr;
 void HookRenderLighting(void* renderer,std::int32_t dpg,std::uint32_t* flags) {
     constexpr std::size_t viewsData=0x6c, viewsCount=0x74, viewStride=0x1380;
+    // The foreground base pass has now written gun depth. Remove any earlier
+    // world reflection receivers covered by that opaque geometry. TW's final
+    // DPG4 postprocess applies SSR (0x346f40 -> 0x34a950 -> 0x335fe0) after
+    // foreground; its compositor does not test the current scene depth.
+    if (OnRenderCommandThread() && renderer==singlePassRenderer && singlePassPairViews && dpg==2)
+        reflectionCoverage.Mask(gameContext);
     if (singlePass && !singlePassStockLighting && renderer && dpg==1) {
         auto* base=static_cast<std::byte*>(renderer);
         std::byte* views=nullptr;std::int32_t count=0;
@@ -3655,17 +4078,20 @@ void HookRenderScene(void* renderer) {
         void* renderer=singlePassRenderer;
         ID3D11DeviceContext* context=gameContext;
         adapter::ForegroundDepth depth=foregroundDepth;
+        adapter::ReflectionCoverage reflections=reflectionCoverage;
         const std::byte* ssrView=ssrEyeView;
         bool ssrFailed=ssrPairFailed,occlusion=leftOcclusionTests,pending=leftQueryConstantsPending,queryReady=leftQueryConstantsReady;
         std::array<std::byte,0xa0> query=leftQueryConstants;
         HbaoPendingPair aoPair=hbaoPending;
         // HiZ is incompatible with a two-eye atlas. Scope its suppression so
         // the player's settings and nested renderer's previous value survive.
-        volatile std::int32_t* hiz=reinterpret_cast<volatile std::int32_t*>(gameBase+0x1ec2398);
+        volatile std::int32_t* hiz=reinterpret_cast<volatile std::int32_t*>(gameBase+adapter::build::Rva(0x1ec2398));
         std::int32_t hizValue=*hiz;
         ~Restore() {
             singlePassPairViews=views; singlePassRenderer=renderer;
             gameContext=context; foregroundDepth=std::move(depth);
+            if (reflections.HasCapture()) reflectionCoverage=std::move(reflections);
+            else reflectionCoverage.Clear(); // Retain shaders/scratch storage across top-level frames.
             ssrEyeView=ssrView; ssrPairFailed=ssrFailed; leftOcclusionTests=occlusion;
             leftQueryConstantsPending=pending; leftQueryConstantsReady=queryReady; leftQueryConstants=query;
             hbaoPending=std::move(aoPair); *hiz=hizValue;
@@ -3674,6 +4100,7 @@ void HookRenderScene(void* renderer) {
     singlePassPairViews=nullptr;
     singlePassRenderer=renderer;
     ssrEyeView=nullptr; ssrPairFailed=false; hbaoPending={};
+    reflectionCoverage.Clear();
     leftOcclusionTests=false; leftQueryConstantsPending=false; leftQueryConstantsReady=false;
     foregroundDepth.ClearEyes();
     originalRenderScene(renderer);
@@ -3914,8 +4341,15 @@ void STDMETHODCALLTYPE HookDispatch(ID3D11DeviceContext* context,UINT x,UINT y,U
         std::int32_t rect[4]{}; std::memcpy(rect,view+0x6c,sizeof(rect));
         const float eye[4]{float(rect[0]),float(rect[1]),float(rect[2]),float(rect[3])};
         if(!ssrPairFailed && stereoReflections.Dispatch(context,eye,originalDispatch)) {
-            if(Interesting(++ssrEyeDispatches)) Log("SinglePass reflections traced per eye count=%llu",
-                static_cast<unsigned long long>(ssrEyeDispatches)); return;
+            std::int32_t rects[2][4]{};
+            bool coverage=false;
+            if (singlePassPairViews) {
+                for (int i=0;i<2;++i)
+                    std::memcpy(rects[i],singlePassPairViews+std::size_t(i)*0x1380+0x6c,sizeof(rects[i]));
+                coverage=reflectionCoverage.Capture(context,foregroundDepth.WorldDepth(),rects);
+            }
+            if(Interesting(++ssrEyeDispatches)) Log("SinglePass reflections traced per eye count=%llu coverage=%u",
+                static_cast<unsigned long long>(ssrEyeDispatches),unsigned(coverage)); return;
         }
         ssrPairFailed=true;
         ComPtr<ID3D11UnorderedAccessView> output; context->CSGetUnorderedAccessViews(0,1,&output);
@@ -3928,6 +4362,7 @@ void STDMETHODCALLTYPE HookDispatch(ID3D11DeviceContext* context,UINT x,UINT y,U
 }
 void HookSsrCompute(void* renderer) {
     if(!OnRenderCommandThread()) { originalSsrCompute(renderer); return; }
+    reflectionCoverage.Clear();
     auto* base=static_cast<std::byte*>(renderer); std::byte* views=nullptr; std::int32_t count=0;
     if(base) { std::memcpy(&views,base+0x6c,sizeof(views)); std::memcpy(&count,base+0x74,sizeof(count)); }
     ComPtr<ID3D11Device> device; if(gameContext) gameContext->GetDevice(&device);
@@ -3945,7 +4380,92 @@ void HookSsrCompute(void* renderer) {
     for(int eye=0;eye<2;++eye) {
         std::byte* view=views+std::size_t(eye)*0x1380;
         std::memcpy(base+0x6c,&view,sizeof(view)); ssrEyeView=view; originalSsrCompute(renderer);
+        if (ssrEyeView) { ssrEyeView=nullptr; ssrPairFailed=true; }
     }
+    // HiZ (0x35fac0) precedes the base pass, while SSR (0x36fae0 ->
+    // 0x3605d0) follows it. Tracked hands intentionally omit the query
+    // prepass, so reject receivers whose visible depth is now nearer than
+    // HiZ. This does not make hands occluders for shared world queries.
+    if (!ssrPairFailed) reflectionCoverage.Mask(gameContext);
+    else reflectionCoverage.Clear();
+}
+// KF2's velocity pass as DLSS object motion (ObjectMotion.h). Steam RVAs from
+// docs/re/09-velocity-pass.md. objectMotionWanted follows DLSS; the engine
+// settings it needs (MotionBlur, MotionBlurQuality 2) come from the session.
+// The blur itself never draws unless the player chose cinematic motion blur.
+using BeginVelocitiesFn=void(*)(void*,void*,void*,void*);
+BeginVelocitiesFn originalBeginVelocities=nullptr;
+using VelocityScaleFn=void(*)(void*,void*,void*,std::uint32_t,void*,std::uint32_t,float,std::int32_t);
+VelocityScaleFn originalVelocityScale=nullptr;
+using SetViewportsFn=void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*,UINT,const D3D11_VIEWPORT*);
+SetViewportsFn originalSetViewports=nullptr;
+void HookRenderVelocities(void* renderer,std::uint32_t dpg) {
+    if (!OnRenderCommandThread() || !renderer || !objectMotionWanted.load(std::memory_order_acquire)) {
+        originalRenderVelocities(renderer,dpg); return;
+    }
+    // One view at a time, each with its own rectangle (0x74 count, 0x6c views).
+    auto* base=static_cast<std::byte*>(renderer);
+    std::byte* views=nullptr; std::int32_t count=0;
+    std::memcpy(&views,base+0x6c,sizeof(views)); std::memcpy(&count,base+0x74,sizeof(count));
+    if (!views || count<1 || count>2) { originalRenderVelocities(renderer,dpg); return; }
+    struct Restore {
+        std::byte* base; std::byte* views; std::int32_t count;
+        ~Restore(){ std::memcpy(base+0x6c,&views,sizeof(views)); std::memcpy(base+0x74,&count,sizeof(count)); objectMotion.EndEye(); }
+    } restore{base,views,count};
+    const std::int32_t one=1; std::memcpy(base+0x74,&one,sizeof(one));
+    // 0x2225590 gates the pass's foreground loop (the held gun). No code ever
+    // sets it; stock would draw zero velocity there anyway (view +0x12f0 = 0),
+    // but with the forced scale it draws the gun's real motion.
+    auto* foreground=reinterpret_cast<std::int32_t*>(gameBase+adapter::build::Rva(0x2225590));
+    struct Foreground { std::int32_t* flag; std::int32_t was; ~Foreground(){ *flag=was; } } restoreForeground{foreground,*foreground};
+    *foreground=1;
+    for (std::int32_t eye=0;eye<count;++eye) {
+        std::byte* view=views+std::size_t(eye)*0x1380;
+        std::int32_t rect[4]{}; std::memcpy(rect,view+0x6c,sizeof(rect));
+        std::memcpy(base+0x6c,&view,sizeof(view));
+        objectMotion.BeginEye(rect);
+        originalRenderVelocities(renderer,dpg);
+        objectMotion.EndEye();
+    }
+    if (Interesting(++objectMotionPasses)) Log("Object motion velocity pass views=%d count=%llu",
+        count,static_cast<unsigned long long>(objectMotionPasses));
+}
+void HookBeginVelocities(void* targets,void* a,void* b,void* c) {
+    originalBeginVelocities(targets,a,b,c);
+    if (OnRenderCommandThread() && objectMotion.EyeActive() && demo && demo->ready)
+        objectMotion.Redirect(demo->backend.Context());
+}
+// FVelocityPixelShader scale (0x94e140): (shader+0x50 RHI shader, +0x1ec
+// buffer, +0x1ee base, +0x1f0 bytes) through RHI slot 0x4a8, as the original.
+void HookVelocityScale(void* shader,void* a,void* b,std::uint32_t c,void* view,std::uint32_t d,float instance,std::int32_t camera) {
+    originalVelocityScale(shader,a,b,c,view,d,instance,camera);
+    if (!OnRenderCommandThread() || !shader || !objectMotion.EyeActive()) return;
+    auto* s=static_cast<std::byte*>(shader);
+    void* rhi=nullptr; std::memcpy(&rhi,reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x21f6ed0)),sizeof(rhi));
+    std::uint16_t bytes=0; std::memcpy(&bytes,s+0x1f0,sizeof(bytes));
+    if (!rhi || !bytes) return;
+    using SetParameterFn=void(*)(void*,void*,std::uint16_t,std::uint16_t,std::uint32_t,const void*,std::int32_t);
+    void** table=*static_cast<void***>(rhi);
+    void* handle=nullptr; std::memcpy(&handle,s+0x50,sizeof(handle));
+    std::uint16_t buffer=0,offset=0; std::memcpy(&buffer,s+0x1ec,sizeof(buffer)); std::memcpy(&offset,s+0x1ee,sizeof(offset));
+    const float scale[4]{1.0f,1.0f,0.0f,0.0f}; // Object motion only, NDC y up.
+    reinterpret_cast<SetParameterFn>(table[0x4a8/8])(rhi,handle,buffer,offset,bytes<16?bytes:16u,scale,-1);
+}
+void HookPrimeVelocities(void* renderer,std::uint32_t dpg) {
+    if (OnRenderCommandThread() && blurSuppressed.load(std::memory_order_acquire)) return;
+    originalPrimeVelocities(renderer,dpg);
+}
+void HookTileMaxBlur(void* effect,void* view) {
+    if (OnRenderCommandThread() && blurSuppressed.load(std::memory_order_acquire)) return;
+    originalTileMaxBlur(effect,view);
+}
+void HookLegacyBlur(void* effect,void* view) {
+    if (OnRenderCommandThread() && blurSuppressed.load(std::memory_order_acquire)) return;
+    originalLegacyBlur(effect,view);
+}
+void STDMETHODCALLTYPE HookSetViewports(ID3D11DeviceContext* context,UINT count,const D3D11_VIEWPORT* viewports) {
+    if (OnRenderCommandThread()) objectMotion.OverrideViewport(count,viewports);
+    originalSetViewports(context,count,viewports);
 }
 // View constants (0xcd61d0: rhi, view): keep the left eye's while its occlusion
 // queries are submitted.
@@ -4005,24 +4525,24 @@ std::uint64_t HookInitViews(void* renderer) {
             foregroundDepth.SetEyes(eyes[0],eyes[1]);
             // The whole-atlas HiZ path is invalid even when left-eye query
             // culling is disabled or has fallen back. RenderScene restores it.
-            auto* hiz=reinterpret_cast<volatile std::int32_t*>(gameBase+0x1ec2398);
+            auto* hiz=reinterpret_cast<volatile std::int32_t*>(gameBase+adapter::build::Rva(0x1ec2398));
             if(*hiz) {
                 *hiz=0;
                 if(Interesting(++singlePassHiZOff)) Log("SinglePass HiZ culling disabled count=%llu",
                     static_cast<unsigned long long>(singlePassHiZOff));
             }
         } else foregroundDepth.ClearEyes();
-        const auto gateOff=*reinterpret_cast<const volatile std::int32_t*>(gameBase+0x1fbafec);
-        const auto gateOn=*reinterpret_cast<const volatile std::int32_t*>(gameBase+0x1ec2388);
+        const auto gateOff=*reinterpret_cast<const volatile std::int32_t*>(gameBase+adapter::build::Rva(0x1fbafec));
+        const auto gateOn=*reinterpret_cast<const volatile std::int32_t*>(gameBase+adapter::build::Rva(0x1ec2388));
         if (singlePassPairViews && gateOff==0 && gateOn!=0) {
             using ViewStep=void(*)(void*,void*);
             using SetStep=void(*)(void*);
             using FamilyStep=void(*)(void*);
             using Gate=std::int32_t(*)(void*);
             using Finish=std::uint64_t(*)(void*);
-            const auto visibility=reinterpret_cast<ViewStep>(gameBase+0x36b490);
-            const auto setup=reinterpret_cast<ViewStep>(gameBase+0x360a30);
-            const auto sortTranslucency=reinterpret_cast<SetStep>(gameBase+0x950320);
+            const auto visibility=reinterpret_cast<ViewStep>(gameBase+adapter::build::Rva(0x36b490));
+            const auto setup=reinterpret_cast<ViewStep>(gameBase+adapter::build::Rva(0x360a30));
+            const auto sortTranslucency=reinterpret_cast<SetStep>(gameBase+adapter::build::Rva(0x950320));
             // With left-eye occlusion, the right eye's state-free pass runs
             // first so the left eye's occlusion pass is the last to touch any
             // shared per-object visibility data before its queries render.
@@ -4075,14 +4595,14 @@ std::uint64_t HookInitViews(void* renderer) {
                 std::byte* set=views+static_cast<std::size_t>(i)*viewStride+0x7f8;
                 for (int dpg=0;dpg<4;++dpg) sortTranslucency(set+static_cast<std::size_t>(dpg)*0x70);
             }
-            reinterpret_cast<FamilyStep>(gameBase+0x904df0)(renderer);
+            reinterpret_cast<FamilyStep>(gameBase+adapter::build::Rva(0x904df0))(renderer);
             // Both views: this fills each view's per-light visibility
             // (view+0x9f8), which the per-eye lighting pass reads.
-            if (reinterpret_cast<Gate>(gameBase+0x8f95e0)(base+8))
-                reinterpret_cast<FamilyStep>(gameBase+0x949970)(renderer);
+            if (reinterpret_cast<Gate>(gameBase+adapter::build::Rva(0x8f95e0))(base+8))
+                reinterpret_cast<FamilyStep>(gameBase+adapter::build::Rva(0x949970))(renderer);
             if (Interesting(++singlePassVisibilityPairs))
                 Log("SinglePass visibility pair count=%llu kf2Path=1",static_cast<unsigned long long>(singlePassVisibilityPairs));
-            return reinterpret_cast<Finish>(gameBase+0x8c2a20)(renderer);
+            return reinterpret_cast<Finish>(gameBase+adapter::build::Rva(0x8c2a20))(renderer);
         }
     }
     return originalInitViews(renderer);
@@ -4090,7 +4610,6 @@ std::uint64_t HookInitViews(void* renderer) {
 bool InstallHooks(HINSTANCE module) {
     // The EXE hash is already verified. Refuse pre-existing detours or a
     // mismatched ABI before preparing any of this adapter's hooks.
-    if (portalRequested && !portalCapture.ValidateCode()) return false;
     const wchar_t* className=L"KF2VRPassiveDeviceDiscovery";
     WNDCLASSW wc{}; wc.lpfnWndProc=DefWindowProcW; wc.hInstance=module; wc.lpszClassName=className;
     if (!RegisterClassW(&wc)) { Log("RegisterClass failed %lu",GetLastError()); return false; }
@@ -4126,13 +4645,6 @@ bool InstallHooks(HINSTANCE module) {
             hooks.push_back({reinterpret_cast<void*>(GetProcAddress(kernel,"ExitProcess")),
                 reinterpret_cast<void*>(&HookProcessExit),reinterpret_cast<void**>(&originalProcessExit)});
         }
-        if (portalRequested) {
-            using Capture=kf2vr::portal::PortalCapture;
-            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(Capture::RenderRva)),
-                reinterpret_cast<void*>(&HookPortalRender),reinterpret_cast<void**>(&portalCapture.originalRender)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(Capture::ClipRva)),
-                reinterpret_cast<void*>(&HookPortalClip),reinterpret_cast<void**>(&portalCapture.originalClip)});
-        }
         if (stereoRequested) hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(menuNative::GetMousePositionRva)),
             reinterpret_cast<void*>(&HookGetMousePosition),reinterpret_cast<void**>(&originalGetMousePosition)});
         if (stereoRequested || handReplayRequested) {
@@ -4164,29 +4676,38 @@ bool InstallHooks(HINSTANCE module) {
             hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::consumedQuery::matchRva),
                 reinterpret_cast<void*>(&adapter::consumedQuery::Hook),reinterpret_cast<void**>(&adapter::consumedQuery::original)});
         }
-        singlePass=stereoRequested && wcsstr(GetCommandLineW(),L"-kf2vr-single-pass")!=nullptr;
-        if (singlePass && adapter::build::selected!=adapter::build::Store::Steam) {
-            Log("SinglePass refused: the multiview lighting evidence covers the Steam executable only");
-            singlePass=false;
+        // DLSS object motion from KF2's velocity pass (Steam and Epic).
+        if (stereoRequested) {
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x94d240)),reinterpret_cast<void*>(&HookRenderVelocities),reinterpret_cast<void**>(&originalRenderVelocities)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x94b270)),reinterpret_cast<void*>(&HookPrimeVelocities),reinterpret_cast<void**>(&originalPrimeVelocities)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x91be70)),reinterpret_cast<void*>(&HookBeginVelocities),reinterpret_cast<void**>(&originalBeginVelocities)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x94e140)),reinterpret_cast<void*>(&HookVelocityScale),reinterpret_cast<void**>(&originalVelocityScale)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x34a3c0)),reinterpret_cast<void*>(&HookTileMaxBlur),reinterpret_cast<void**>(&originalTileMaxBlur)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x34ad20)),reinterpret_cast<void*>(&HookLegacyBlur),reinterpret_cast<void**>(&originalLegacyBlur)});
+            hooks.push_back({contextTable[44],reinterpret_cast<void*>(&HookSetViewports),reinterpret_cast<void**>(&originalSetViewports)});
         }
+        // GeForce Experience settings never apply over the session INIs.
+        for (const auto& hook:adapter::gsa::PrepareIsolation(gameBase,&Log))
+            hooks.push_back({hook.target,hook.detour,hook.trampoline});
+        singlePass=stereoRequested && wcsstr(GetCommandLineW(),L"-kf2vr-single-pass")!=nullptr;
         if (singlePass) {
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0x90ef10),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x90ef10)),
                 reinterpret_cast<void*>(&HookRenderScene),reinterpret_cast<void**>(&originalRenderScene)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0x911620),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x911620)),
                 reinterpret_cast<void*>(&HookRenderLighting),reinterpret_cast<void**>(&originalRenderLighting)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0x909480),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x909480)),
                 reinterpret_cast<void*>(&HookInitViews),reinterpret_cast<void**>(&originalInitViews)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0x902560),reinterpret_cast<void*>(&HookBeginOcclusionTests),reinterpret_cast<void**>(&originalBeginOcclusionTests)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0xcd61d0),reinterpret_cast<void*>(&HookViewConstants),reinterpret_cast<void**>(&originalViewConstants)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0x2a50f0),reinterpret_cast<void*>(&HookFlareOcclusion),reinterpret_cast<void**>(&originalFlareOcclusion)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0xcb60e0),reinterpret_cast<void*>(&HookRhiClear),reinterpret_cast<void**>(&originalRhiClear)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0x3605d0),reinterpret_cast<void*>(&HookSsrCompute),reinterpret_cast<void**>(&originalSsrCompute)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x902560)),reinterpret_cast<void*>(&HookBeginOcclusionTests),reinterpret_cast<void**>(&originalBeginOcclusionTests)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0xcd61d0)),reinterpret_cast<void*>(&HookViewConstants),reinterpret_cast<void**>(&originalViewConstants)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x2a50f0)),reinterpret_cast<void*>(&HookFlareOcclusion),reinterpret_cast<void**>(&originalFlareOcclusion)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0xcb60e0)),reinterpret_cast<void*>(&HookRhiClear),reinterpret_cast<void**>(&originalRhiClear)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x3605d0)),reinterpret_cast<void*>(&HookSsrCompute),reinterpret_cast<void**>(&originalSsrCompute)});
             hooks.push_back({contextTable[41],reinterpret_cast<void*>(&HookDispatch),reinterpret_cast<void**>(&originalDispatch)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0x8e1bb0),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x8e1bb0)),
                 reinterpret_cast<void*>(&HookQuad),reinterpret_cast<void**>(&originalQuad)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0x935340),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x935340)),
                 reinterpret_cast<void*>(&HookShadowProjection),reinterpret_cast<void**>(&originalShadowProjection)});
-            hooks.push_back({reinterpret_cast<void*>(gameBase+0xcd03b0),
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0xcd03b0)),
                 reinterpret_cast<void*>(&HookHbaoRhi),reinterpret_cast<void**>(&originalHbaoRhi)});
         }
         singlePassSplit=singlePass && wcsstr(GetCommandLineW(),L"-kf2vr-sp-split")!=nullptr;
@@ -4216,7 +4737,19 @@ bool InstallHooks(HINSTANCE module) {
                     MH_QueueEnableHook(reinterpret_cast<void*>(gameBase+adapter::build::Rva(adapter::focus::SimulationDeltaRva)))!=MH_OK)) success=false;
                 if (success && MH_ApplyQueued()!=MH_OK) success=false;
             }
-            if (!success) { MH_DisableHook(MH_ALL_HOOKS); MH_Uninitialize(); }
+            if (!success) {
+                MH_DisableHook(MH_ALL_HOOKS);
+                MH_Uninitialize();
+            }
+            // Optional Steam-only optic exclusions fail open independently of
+            // the mandatory VR hook gate and never disable the whole adapter.
+            if (success && stereoRequested) {
+                const bool optics=opticVisibility.Install(gameBase,[] {
+                    return GetCurrentThreadId()==worldDrawThread.load(std::memory_order_acquire);
+                });
+                Log("Optic component exclusions enabled=%d store=%d",optics?1:0,
+                    static_cast<int>(adapter::build::selected));
+            }
         }
     } else Log("Discovery D3D11 WARP creation failed HRESULT=%lx",static_cast<unsigned long>(hr));
     swapchain.Reset(); context.Reset(); device.Reset();
@@ -4263,23 +4796,44 @@ DWORD WINAPI AdapterMain(void* parameter) {
         Log("Local diagnostic refused: explicit Solo live stereo/local-test-control required"); return 3;
     }
     inputReplayRequested=wcsstr(GetCommandLineW(),L"-kf2vr-input-replay")!=nullptr;
+    replaySuiteRequested=wcsstr(GetCommandLineW(),L"-kf2vr-replay-suite")!=nullptr;
+    if (replaySuiteRequested && (!inputReplayRequested || !handReplayRequested || stereoRequested || networkRequested ||
+        !wcsstr(GetCommandLineW(),L"-onethread") || wcsstr(GetCommandLineW(),L"-kf2vr-motion-fixture"))) {
+        Log("Replay suite refused: requires offline input-replay/hand-replay/onethread; no XR/network/motion fixture"); return 3;
+    }
+    reloadCaseRequested=wcsstr(GetCommandLineW(),L"-kf2vr-reload-9mm")!=nullptr;
+    reloadGeometryRequested=wcsstr(GetCommandLineW(),L"-kf2vr-reload-geometry")!=nullptr;
+    // Scripted replays (v3 goals) may also drive a network client that plays on
+    // a dedicated server (tools/replay/scripted_mp.py); still tape-driven hand
+    // replay on one thread, never stereo or a motion fixture.
+    if (reloadGeometryRequested && (!inputReplayRequested || !handReplayRequested || stereoRequested ||
+        wcsstr(GetCommandLineW(),L"-kf2vr-motion-fixture"))) {
+        Log("Reload geometry refused: requires input-replay/hand-replay/onethread, no stereo/motion fixture");
+        return 3;
+    }
+    if (reloadCaseRequested && (!networkRequested || !handReplayRequested || stereoRequested || inputReplayRequested
+        || wcsstr(GetCommandLineW(),L"-kf2vr-motion-fixture"))) {
+        Log("9mm reload case refused: requires network hand-replay/onethread, no stereo/tape/motion fixture"); return 3;
+    }
+    reloadCaseRequested=reloadCaseRequested || reloadGeometryRequested;
     if (inputReplayRequested) {
         wchar_t path[32768]{};
         const auto length=GetEnvironmentVariableW(L"KF2VR_INPUT_REPLAY",path,32768);
-        if (!handReplayRequested || stereoRequested || networkRequested || !length || length>=32768 ||
+        if (!handReplayRequested || stereoRequested || (networkRequested && !reloadGeometryRequested) || !length || length>=32768 ||
             wcsstr(GetCommandLineW(),L"-kf2vr-motion-fixture")) {
-            Log("ReplayInput refused: requires offline hand-replay/onethread and KF2VR_INPUT_REPLAY; no stereo/network/motion fixture");
+            Log("ReplayInput refused: requires hand-replay/onethread and KF2VR_INPUT_REPLAY; no stereo/motion fixture, network only with reload geometry");
             return 3;
         }
         std::ifstream input{std::filesystem::path(path)};
         std::string error;
         if (!replayInput.Load(input,error)) { Log("ReplayInput refused: %s",error.c_str()); return 3; }
-        Log("ReplayInput schema=1 seed=%llu owner=first-local-bridge clock=bridge-tick",
-            static_cast<unsigned long long>(replayInput.Seed()));
+        wchar_t option[8]{};
+        inputReplayWaitReady=GetEnvironmentVariableW(L"KF2VR_INPUT_REPLAY_WAIT_READY",option,8)==1 && option[0]==L'1';
+        inputReplayRealtime=inputReplayWaitReady || (GetEnvironmentVariableW(L"KF2VR_INPUT_REPLAY_REALTIME",option,8)==1 && option[0]==L'1');
+        if (replaySuiteRequested) inputReplayWaitReady=inputReplayRealtime=true;
+        Log("ReplayInput schema=1 seed=%llu owner=first-local-bridge clock=%s waitReady=%d",
+            static_cast<unsigned long long>(replayInput.Seed()),inputReplayRealtime?"realtime":"bridge-tick",inputReplayWaitReady);
     }
-    portalRequested=!networkRequested && wcsstr(GetCommandLineW(),L"-kf2vr-no-portals")==nullptr &&
-        (stereoRequested || wcsstr(GetCommandLineW(),L"-kf2vr-portal")!=nullptr)
-        && wcsstr(GetCommandLineW(),L"-onethread")!=nullptr;
     adapter::timing::scriptEnabled=wcsstr(GetCommandLineW(),L"-kf2vr-vm-timings")!=nullptr;
     reuseVmIdentity=wcsstr(GetCommandLineW(),L"-kf2vr-no-identity-reuse")==nullptr;
     fastVmIdentity=wcsstr(GetCommandLineW(),L"-kf2vr-fast-vm-identity")!=nullptr;
@@ -4301,7 +4855,7 @@ DWORD WINAPI AdapterMain(void* parameter) {
         const auto modeLength=GetEnvironmentVariableW(L"KF2VR_DLSS",modeText,32);
         adapter::DlssMode mode=adapter::DlssMode::Off;
         if (modeLength && (modeLength>=32 || !adapter::ParseDlssMode(modeText,mode))) {
-            Log("DLSS mode refused: expected off, dlaa, quality, balanced, performance or ultraperformance");
+            Log("DLSS mode refused: expected off, auto, dlaa, quality, balanced, performance or ultraperformance");
             mode=adapter::DlssMode::Off;
         }
         std::wstring ngxDirectory,dataDirectory;
@@ -4382,7 +4936,6 @@ DWORD WINAPI AdapterMain(void* parameter) {
         std::setvbuf(frameDrilldown.spans,nullptr,_IOFBF,1024*1024);frameDrilldown.Header();
         Log("FrameDrilldown enabled=1 revision=1 cpuCounter=GetThreadTimes perFrame=1");
     }
-    if (portalRequested) { portalCapture.Initialize(gameBase,&Log); portalHitscan.Initialise(gameBase,&Log); }
     if (stereoRequested || handReplayRequested) {
         demo=new DemoRuntime();
         // KF2 caches a disconnected XInput slot and then skips polling it.
@@ -4401,6 +4954,6 @@ DWORD WINAPI AdapterMain(void* parameter) {
         motionRuntime.Shutdown();
         Log("Hook setup failed; original game continues"); return 5;
     }
-    Log("Hooks enabled together; mode=%s portals=%d",stereoRequested?"local stereo experiment":handReplayRequested?"local hand replay; stock renderer; no XR session":portalRequested?"local portal gameplay; stock renderer; no XR session":"passive; no engine fields mutated; no XR session",portalRequested);
+    Log("Hooks enabled together; mode=%s",stereoRequested?"local stereo experiment":handReplayRequested?"local hand replay; stock renderer; no XR session":"passive; no engine fields mutated; no XR session");
     return 0;
 }

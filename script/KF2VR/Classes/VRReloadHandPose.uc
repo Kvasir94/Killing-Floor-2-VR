@@ -20,6 +20,8 @@ var array<SkelControlSingleBone> Controls;
 var array<quat> SourceReference, TargetReference, ReleaseFingers, AcquireFingers;
 var array<vector> TargetTranslation;
 var vector MeshWrist, LastWrist, ReleaseOffset, AcquireOffset;
+// Palm centre (wrist to middle knuckle) in each wrist bone's own frame.
+var vector SourcePalmLocal, TargetPalmLocal;
 var quat MeshWristQ, LastWristQ, ReleaseOffsetQ, AcquireOffsetQ;
 var int Hand;
 var string Key, FailureReason;
@@ -66,7 +68,8 @@ static function quat TransferFinger(quat SourceAnimation, quat SourceBind,
 // the wrong side of angled shells and charging handles.
 static function AnchorWrist(vector AnchorPosition, quat AnchorQ,
     vector SourcePosition, quat SourceQ, quat SourceBasis, quat TargetBasis,
-    int Mirror, out vector Position, out quat Rotation)
+    int Mirror, out vector Position, out quat Rotation, optional bool bPreserveContact,
+    optional vector SourcePalm, optional vector TargetPalm)
 {
     local vector Offset;
     local quat OffsetQ;
@@ -80,6 +83,16 @@ static function AnchorWrist(vector AnchorPosition, quat AnchorQ,
     }
     Position = -QuatRotateVector(QuatInvert(OffsetQ), Offset);
     Rotation = QuatProduct(QuatInvert(OffsetQ), TargetBasis);
+    // A fixed-side bolt/slide stays on the same outside surface whichever
+    // hand operates it. Retarget the anatomy without reflecting its physical
+    // contact through the receiver. Ammunition carry keeps its mirror.
+    // Keep the stock PALM on the part, not its wrist: the mirrored hand
+    // extends the other way from its wrist, so a kept wrist point leaves
+    // the opposite hand's palm floating beside the slide.
+    if (bPreserveContact)
+        Position = QuatRotateVector(QuatInvert(AnchorQ),
+                SourcePosition + QuatRotateVector(SourceQ, SourcePalm) - AnchorPosition)
+            - QuatRotateVector(Rotation, TargetPalm);
 }
 
 function AnimNodeSequence SetSequence(KFSkeletalMeshComponent M, Actor OwnerActor)
@@ -99,6 +112,8 @@ function AnimNodeSequence SetSequence(KFSkeletalMeshComponent M, Actor OwnerActo
 
 function Configure(KFSkeletalMeshComponent M)
 {
+    // Match other tracked hands: visible depth remains, world query depth does not.
+    M.bUseAsOccluder = false;
     M.bUpdateSkelWhenNotRendered = true;
     M.bTickAnimNodesWhenNotRendered = false;
     M.bIgnoreControllersWhenNotRendered = false;
@@ -135,7 +150,8 @@ function bool Fail(string Reason)
 function bool Cache(Actor OwnerActor, SkeletalMesh FloatingMesh,
     KFSkeletalMeshComponent GunMesh, name Anim, name AnchorBone,
     float EntryTime, float EndTime, int TargetHand, quat SourceBasis, quat TargetBasis,
-    optional bool bPreservePresentation, optional int InSourceHand)
+    optional bool bPreservePresentation, optional int InSourceHand, optional bool bPreserveContact,
+    optional bool bThumbContact)
 {
     local AnimNodeSequence Sequence, SampleSequence;
     local AnimTree Template;
@@ -150,6 +166,7 @@ function bool Cache(Actor OwnerActor, SkeletalMesh FloatingMesh,
     local array<quat> PreviousFingers;
     local vector PreviousWrist;
     local quat PreviousWristQ;
+    local int ContactFinger, ContactJoint;
 
     // Switching from the carried magazine to the stock action grip must
     // begin at the hand the player can currently see. Keep this snapshot
@@ -182,6 +199,7 @@ function bool Cache(Actor OwnerActor, SkeletalMesh FloatingMesh,
     if (Mesh == None) Mesh = new(OwnerActor) class'KFSkeletalMeshComponent';
     Mesh.DetachFromAny();
     Mesh.SetSkeletalMesh(FloatingMesh);
+    class'VRHandBounds'.static.Apply(Mesh);
     Mesh.AnimSets = GunMesh.AnimSets;
     Configure(Mesh);
     Sequence = SetSequence(Mesh, OwnerActor);
@@ -190,13 +208,29 @@ function bool Cache(Actor OwnerActor, SkeletalMesh FloatingMesh,
     if (Sequence == None) return Fail("missing-hand-sequence");
     Mesh.SetForceRefPose(true);
     Mesh.ForceSkelUpdate(); Mesh.ForceUpdate(false);
-    Mesh.UnHideBoneByName(WristBone(0)); Mesh.UnHideBoneByName(WristBone(1));
+    class'VRBoneVisibility'.static.SetVisible(Mesh, WristBone(0), true); class'VRBoneVisibility'.static.SetVisible(Mesh, WristBone(1), true);
     Mesh.ForceSkelUpdate(); Mesh.ForceUpdate(false);
     if (Mesh.MatchRefBone(WristBone(SourceHand)) < 0 || Mesh.MatchRefBone(WristBone(Hand)) < 0)
         return Fail("missing-wrist");
     SourceWristQ = Mesh.GetBoneQuaternion(WristBone(SourceHand));
     TargetWristQ = Mesh.GetBoneQuaternion(WristBone(Hand));
     if (!ValidQ(SourceWristQ) || !ValidQ(TargetWristQ)) return Fail("invalid-bind-wrist");
+    SourcePalmLocal = vect(0,0,0); TargetPalmLocal = vect(0,0,0);
+    // Only a retargeted opposite hand needs its contact: the same hand's
+    // kept wrist already keeps it. The contact is the palm centre (wrist to
+    // middle knuckle), or the thumb tip on a handle the stock hand works with
+    // its thumb: there the stock palm sits across the receiver, and keeping it
+    // carried the opposite hand over to the far side (#170).
+    ContactFinger = bThumbContact ? 0 : 2;
+    ContactJoint = bThumbContact ? 3 : 1;
+    if (MirrorSide == 1 && Mesh.MatchRefBone(class'VRHandRolePose'.static.FingerBone(SourceHand, ContactFinger, ContactJoint)) >= 0
+        && Mesh.MatchRefBone(class'VRHandRolePose'.static.FingerBone(Hand, ContactFinger, ContactJoint)) >= 0)
+    {
+        SourcePalmLocal = QuatRotateVector(QuatInvert(SourceWristQ), (bThumbContact ? 1.0 : 0.5) * (Mesh.GetBoneLocation(
+            class'VRHandRolePose'.static.FingerBone(SourceHand, ContactFinger, ContactJoint)) - Mesh.GetBoneLocation(WristBone(SourceHand))));
+        TargetPalmLocal = QuatRotateVector(QuatInvert(TargetWristQ), (bThumbContact ? 1.0 : 0.5) * (Mesh.GetBoneLocation(
+            class'VRHandRolePose'.static.FingerBone(Hand, ContactFinger, ContactJoint)) - Mesh.GetBoneLocation(WristBone(Hand))));
+    }
     for (F = 0; F < 5; ++F)
         for (J = 1; J <= 3; ++J)
         {
@@ -238,7 +272,8 @@ function bool Cache(Actor OwnerActor, SkeletalMesh FloatingMesh,
         Pose(SampleMesh, SampleSequence, Time);
         AnchorWrist(SampleMesh.GetBoneLocation(AnchorBone), SampleMesh.GetBoneQuaternion(AnchorBone),
             SampleMesh.GetBoneLocation(WristBone(SourceHand)), SampleMesh.GetBoneQuaternion(WristBone(SourceHand)),
-            SourceBasis, TargetBasis, MirrorSide, Frame.WristInAnchor, Frame.WristInAnchorQ);
+            SourceBasis, TargetBasis, MirrorSide, Frame.WristInAnchor, Frame.WristInAnchorQ, bPreserveContact,
+            SourcePalmLocal, TargetPalmLocal);
         if (!ValidQ(Frame.WristInAnchorQ) || VSize(Frame.WristInAnchor) != VSize(Frame.WristInAnchor))
             return Fail("invalid-contact");
         Frames.AddItem(Frame);
@@ -301,7 +336,7 @@ function bool Cache(Actor OwnerActor, SkeletalMesh FloatingMesh,
             if (Control == None) return Fail("missing-render-control");
             Controls.AddItem(Control);
         }
-    Mesh.HideBoneByName(WristBone(1 - Hand), PBO_None);
+    class'VRBoneVisibility'.static.SetVisible(Mesh, WristBone(1 - Hand), false);
     Mesh.ForceSkelUpdate(); Mesh.ForceUpdate(false);
     bReady = Frames.Length == Count && FingerRotations.Length == Count * 15 && Controls.Length == 15;
     if (bReady && bResumePresentation)
@@ -317,7 +352,8 @@ function bool Cache(Actor OwnerActor, SkeletalMesh FloatingMesh,
 }
 
 function bool Build(VRHandsBridge B, KFSkeletalMeshComponent GunMesh, name Anim,
-    name AnchorBone, float EntryTime, float EndTime, int TargetHand, optional int StockHand)
+    name AnchorBone, float EntryTime, float EndTime, int TargetHand, optional int StockHand,
+    optional bool bPreserveContact, optional bool bThumbContact)
 {
     local string NewKey;
     if (B == None || B.Arms == None || B.FreeHandPose == None || !B.FreeHandPose.bReady
@@ -327,7 +363,7 @@ function bool Build(VRHandsBridge B, KFSkeletalMeshComponent GunMesh, name Anim,
     FreeMesh = B.Arms;
     FreePose = B.FreeHandPose;
     NewKey = string(B.FloatingHandsMesh) $ "/" $ GunMesh.SkeletalMesh $ "/" $ Anim $ "/" $ AnchorBone $ "/"
-        $ EntryTime $ "/" $ EndTime $ "/" $ TargetHand $ "/" $ StockHand;
+        $ EntryTime $ "/" $ EndTime $ "/" $ TargetHand $ "/" $ StockHand $ "/" $ bPreserveContact $ "/" $ bThumbContact;
     if (NewKey == Key && bReady)
     {
         Mesh.SetMaterial(0, B.GetFloatingHandsMaterial());
@@ -336,7 +372,7 @@ function bool Build(VRHandsBridge B, KFSkeletalMeshComponent GunMesh, name Anim,
     Key = "";
     if (!Cache(B, B.FloatingHandsMesh, GunMesh, Anim, AnchorBone, EntryTime, EndTime,
         TargetHand, B.FreeHandPose.WristBasis[Clamp(StockHand, 0, 1)], B.FreeHandPose.WristBasis[TargetHand], true,
-        StockHand)) return false;
+        StockHand, bPreserveContact, bThumbContact)) return false;
     Mesh.SetMaterial(0, B.GetFloatingHandsMaterial());
     Mesh.SetLightingChannels(B.Arms.LightingChannels);
     B.UseWorldRendering(Mesh);
@@ -382,6 +418,7 @@ function ApplyTransform(vector Position, quat Rotation, float Scale)
     Mesh.ForceSkelUpdate(); Mesh.ForceUpdate(true);
     LastWrist = Position; LastWristQ = Rotation;
     bVisible = true;
+    if (Bridge != None) Bridge.NoteDrawnHand(self);
 }
 
 // Also lets asset checks evaluate the actual controls, positive mesh scale,

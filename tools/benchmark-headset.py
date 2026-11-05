@@ -43,7 +43,7 @@ def main():
             parser.error('--pid must identify a live KFGame process with a readable executable path')
         paths = json.loads((Path(os.environ['LOCALAPPDATA'])/'openvr/openvrpaths.vrpath').read_text())
         dll = Path(paths['runtime'][0])/'bin/win64/openvr_api.dll'
-        monitor = workspace/'build/portal-native/native/tools/vrmonitor/Release/kf2vr_runtime_monitor.exe'
+        monitor = workspace/'build/multiplayer/native/native/tools/vrmonitor/Release/kf2vr_runtime_monitor.exe'
         if not dll.is_file() or not monitor.is_file():
             parser.error('SteamVR loader or built monitor missing; build first')
         root = workspace/'build/headset-benchmarks'/datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')

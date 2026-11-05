@@ -10,7 +10,7 @@ import zipfile
 import os
 import ipaddress
 
-from session import digest, read_ini
+from launch_support import digest, read_ini
 from vr_config import DEFAULTS, values
 
 
@@ -68,7 +68,7 @@ def summarize(root):
         if raw.get("schema") == "kf2vr/epic-manual/1":
             raw = {**raw, "vr": True, "host": False, "session_mode": "solo", "roles": [raw.get("role", {})]}
         entry = {key: raw.get(key) for key in ("vr", "host", "cleanup_complete", "user_config_preserved",
-            "mod_handshake_observed", "inventory_focus", "multiplayer_grabs_host_requested")
+            "mod_handshake_observed", "inventory_focus")
             if isinstance(raw.get(key), (bool, type(None)))}
         entry["mode"] = raw.get("session_mode") if raw.get("session_mode") in ("solo", "host", "join") else "unknown"
         entry["store"] = "epic" if raw.get("store") == "epic" else "steam"
@@ -286,9 +286,10 @@ def collect_logs(root, destination, sessions=3, limit=6_000_000):
     """Sanitize every report entry before writing it; never write raw copies to disk."""
     root, destination = Path(root), Path(destination)
     secrets = set()
-    settings = root / "settings.json"
-    if settings.exists():
-        secrets.add(json.loads(settings.read_text(encoding="utf-8")).get("host_password") or "")
+    # Both the remembered password and any older release-local copy.
+    import machine_settings
+    secrets.add(machine_settings.load(root).get("host_password") or "")
+    secrets.add(machine_settings._read(root / "settings.json").get("host_password") or "")
     files = []
     for number, run in enumerate(session_records(root)[-sessions:], 1):
         # Do not collect arbitrary JSON, configurations, deployment backups or crash dumps.
@@ -297,7 +298,10 @@ def collect_logs(root, destination, sessions=3, limit=6_000_000):
         for index, path in enumerate(paths, 1):
             name = path.name if path.name in ("game.log", "native.log", "run.json", "epic-session.json") else "log" + path.suffix
             files.append((path, f"sessions/session-{number}/{index:03}-{name}"))
-    for index, path in enumerate(sorted((root / "logs").glob("*.txt"))[-5:], 1):
+    # The current logs folder, plus a release-local one written by older launchers.
+    from launcher_events import logs_folder
+    launcher_logs = [*logs_folder().glob("*.txt"), *(root / "logs").glob("*.txt")]
+    for index, path in enumerate(sorted(launcher_logs, key=lambda item: item.stat().st_mtime)[-5:], 1):
         files.append((path, f"launcher/{index:03}.txt"))
     for index, path in enumerate(sorted((root / "build/multiplayer/steamcmd").glob("install-*.log"))[-2:], 1):
         files.append((path, f"installer/{index:03}.log"))

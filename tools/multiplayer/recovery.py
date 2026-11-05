@@ -6,8 +6,8 @@ import re
 import subprocess
 
 from native_fixture import NativeDeployment
-from session import digest
-from vr_config import export_preferences
+from launch_support import digest
+from vr_config import export_session_preferences
 from watchdog import api, creation_time
 
 
@@ -30,21 +30,10 @@ def recover_record(path):
             errors.append("No durable ownership journal (legacy or unstarted deployment); inspect manually")
             continue
         errors.extend(deployment.restore())
-    if record.get("vr") and any(r.get("pid") for r in record.get("roles", [])):
-        try:
-            driver = next(r for r in record["roles"] if r["role"] == "driver")
-            export_preferences(Path(driver["config_root"]), network=record.get("session_mode") != "solo")
-            record["preferences_saved"] = True
-        except (OSError, ValueError, StopIteration) as error:
-            errors.append("Preferences could not be saved: " + str(error))
-    elif record.get("vr") is False and record.get("user_config_root") and any(r.get("pid") for r in record.get("roles", [])):
-        try:
-            from desktop_settings import export
-            driver = next(r for r in record["roles"] if r["role"] == "driver")
-            export(Path(driver["config_root"]), Path(record["user_config_root"]))
-            record["preferences_saved"] = True
-        except (OSError, ValueError, StopIteration) as error:
-            errors.append("Desktop settings could not be saved: " + str(error))
+    try:
+        export_session_preferences(record)
+    except (OSError, ValueError) as error:
+        errors.append("Preferences could not be saved: " + str(error))
     record.update(cleanup_complete=not errors, cleanup_errors=errors, status="recovered" if not errors else "recovery_incomplete")
     from friends import save_session_record
     save_session_record(path, record)

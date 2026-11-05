@@ -2,24 +2,26 @@
 param(
     [string]$CMake = 'C:\Program Files\CMake\bin\cmake.exe',
     [string]$CTest = '',
-    [switch]$Dlss,
+    [switch]$Dlss = $true,
     [ValidateRange(1,12)][int]$Parallel = 4,
     # Only for an independently owned worktree and correctness replay. Keep
     # performance runs quiet; this never deploys DLLs or selects a package.
     [switch]$AllowRuntimeOverlap
 )
 $ErrorActionPreference = 'Stop'
+if (-not $Dlss) { throw 'Playable builds require DLSS support. Choose DLSS Off in the launcher to disable it at runtime.' }
 $projectRoot = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 $buildRoot = Join-Path $projectRoot 'build/multiplayer/native'
 . (Join-Path $PSScriptRoot 'build-lock.ps1')
+. (Join-Path $PSScriptRoot 'script-sources.ps1')
 Assert-KF2VRBuildOutput $buildRoot $projectRoot -InspectEntries
 function Read-NetworkNativeSources {
     $hashes = [ordered]@{}
     if (Get-Command rg -ErrorAction SilentlyContinue) {
-        $nativeFiles = @(rg --files native/adapter native/vrcore native/xr native/portal -g '*.h' -g '*.hpp' -g '*.cpp' -g '*.asm' -g CMakeLists.txt | Sort-Object)
+        $nativeFiles = @(rg --files native/adapter native/vrcore native/xr -g '*.h' -g '*.hpp' -g '*.cpp' -g '*.asm' -g CMakeLists.txt | Sort-Object)
     } else {
         $repositoryPrefix = (Resolve-Path -LiteralPath $projectRoot).Path.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
-        $nativeFiles = @(Get-ChildItem -LiteralPath 'native/adapter','native/vrcore','native/xr','native/portal' -Recurse -File |
+        $nativeFiles = @(Get-ChildItem -LiteralPath 'native/adapter','native/vrcore','native/xr' -Recurse -File |
             Where-Object { $_.Extension -in '.h','.hpp','.cpp','.asm' -or $_.Name -eq 'CMakeLists.txt' } |
             ForEach-Object { $_.FullName.Substring($repositoryPrefix.Length) } |
             Sort-Object)
@@ -68,7 +70,7 @@ try {
         try { $fixtureLocked = $fixtureMutex.WaitOne(0) }
         catch [Threading.AbandonedMutexException] { $fixtureLocked = $true }
         if (-not $fixtureLocked) { throw 'Another KF2-VR fixture owns the build/game slot.' }
-        if (Get-Process KFGame,KFEditor,KFServer -ErrorAction SilentlyContinue) {
+        if ((Get-KF2VRSharedProcesses).Count) {
             throw 'KF2, its dedicated server or its editor is running; defer native compilation.'
         }
     }

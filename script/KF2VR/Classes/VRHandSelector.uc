@@ -12,7 +12,13 @@ var float LastPlacement;
 var string ContentKey, WeaponLabel, DetailLabel, HintLabel;
 var int ChoiceIndex, ChoiceCount;
 var color Ink, Muted, Red, Backing;
-var array<KFWeapon> Choices;
+struct SelectorChoice
+{
+    var KFWeapon Item, SecondItem;
+    var VRWeaponPair CombinedPair;
+    var int StockMember;
+};
+var array<SelectorChoice> Choices;
 var int Page, HoverHand, HoverRow;
 var bool bUtilities;
 var int MenuPage; // 0 weapons, 1 fit, 2 player/HUD, 3 UI, 4 practice, 5 armory
@@ -74,7 +80,7 @@ function int WeaponRows() { return Min(WeaponsPerPage(), Max(0, Choices.Length -
 function int PageCount() { return Max(1, (Choices.Length + WeaponsPerPage() - 1) / WeaponsPerPage()); }
 // A paged wheel keeps all ten sectors on every page, so OPEN HAND, NEXT and
 // TOOLS never move and a short last page leaves its spare sectors empty.
-function int RadialCount() { return bUtilities ? 3 : (Paged() ? MaxSectors : WeaponRows() + 2); }
+function int RadialCount() { return bUtilities ? ((class'VRWorldWeaponPolicy'.static.Enabled() && InputOwner.Bridge.bWorldWeaponDrops) ? 5 : 4) : (Paged() ? MaxSectors : WeaponRows() + 2); }
 
 function int SectorRow(int Sector)
 {
@@ -108,18 +114,22 @@ function int ChoiceRank(KFWeapon W)
     return int(W.InventoryGroup);
 }
 
-// One slot per owned pair. The actor chosen for a hand is resolved at use time.
-function AddChoice(KFWeapon W)
+// Each paid pistol has its own sector and exact actor identity. An unsplit
+// stock dual is represented twice until the existing conversion finishes.
+function AddChoice(KFWeapon W, optional VRWeaponPair Combined, optional int StockMember)
 {
-    local VRWeaponPair Pair;
+    local SelectorChoice Choice;
     local int I;
-    if (!Selectable(W) || Choices.Find(W) >= 0) return;
-    Pair = class'VRWeaponPair'.static.ForMember(W);
-    if (Pair != None)
-        for (I = 0; I < Choices.Length; ++I)
-            if (class'VRWeaponPair'.static.ForMember(Choices[I]) == Pair) return;
-    Choices.AddItem(W);
+    if (!Selectable(W)) return;
+    if (Combined != None) return;
+    for (I = 0; I < Choices.Length; ++I)
+        if (Choices[I].Item == W && Choices[I].StockMember == StockMember) return;
+    Choice.Item = W; Choice.StockMember = StockMember;
+    Choices.AddItem(Choice);
     if (!W.WeaponContentLoaded) W.Class.static.TriggerAsyncContentLoad(W.Class);
+    if (StockMember == 0 && KFWeap_DualBase(W) != None
+        && class'VRWeaponPair'.static.MemberClassFor(KFWeap_DualBase(W)) != None)
+        AddChoice(W, None, 1);
 }
 
 // Purchases finish on authority when the trader closes and may reach a remote
@@ -130,22 +140,31 @@ function AddChoice(KFWeapon W)
 function RefreshChoices()
 {
     local KFWeapon W;
+    local VRWeaponPair Pair;
+    local SelectorChoice Choice;
     local int I, J, Rank;
-    local array<KFWeapon> PreviousChoices;
+    local array<SelectorChoice> PreviousChoices;
     local array<int> Ranks;
     PreviousChoices = Choices;
     Choices.Length = 0;
-    for (I = 0; I < PreviousChoices.Length; ++I) AddChoice(PreviousChoices[I]);
+    for (I = 0; I < PreviousChoices.Length; ++I)
+        AddChoice(PreviousChoices[I].Item, PreviousChoices[I].CombinedPair, PreviousChoices[I].StockMember);
     foreach InputOwner.Inventory.Registry.Human.InvManager.InventoryActors(class'KFWeapon', W)
         AddChoice(W);
+    foreach WorldInfo.AllActors(class'VRWeaponPair', Pair)
+        if (Pair.PairState == 2)
+        {
+            AddChoice(Pair.Members[0]);
+            AddChoice(Pair.Members[1]);
+        }
     Ranks.Length = Choices.Length;
-    for (I = 0; I < Choices.Length; ++I) Ranks[I] = ChoiceRank(Choices[I]);
+    for (I = 0; I < Choices.Length; ++I) Ranks[I] = ChoiceRank(Choices[I].Item);
     for (I = 1; I < Choices.Length; ++I)
     {
-        W = Choices[I]; Rank = Ranks[I];
+        Choice = Choices[I]; Rank = Ranks[I];
         for (J = I; J > 0 && Ranks[J - 1] > Rank; --J)
         { Choices[J] = Choices[J - 1]; Ranks[J] = Ranks[J - 1]; }
-        Choices[J] = W; Ranks[J] = Rank;
+        Choices[J] = Choice; Ranks[J] = Rank;
     }
     Page = Clamp(Page, 0, PageCount() - 1);
 }
@@ -211,7 +230,7 @@ function OpenSelection()
         StepAside();
         if (InputOwner.Selectors[1 - Hand] != None) InputOwner.Selectors[1 - Hand].StepAside();
     }
-    MenuPage = 0; Page = 0; bUtilities = false; HoverHand = -1; HoverRow = -1;
+    MenuPage = 0; Page = Clamp(Page, 0, PageCount() - 1); bUtilities = false; HoverHand = -1; HoverRow = -1;
     OpenTime = WorldInfo.RealTimeSeconds; HoverTime = 0; CollapseStart = 0;
     InputOwner.Grenade.Pulse(Hand, 0.16, 0.03);
     ReadSelection();
@@ -225,27 +244,47 @@ function StepAside()
     AnchorOffset += AxisRight * (Hand == 0 ? -26 : 26);
 }
 
+function int ChoiceForRow(int Row)
+{
+    local int Index;
+    Index = Page * WeaponsPerPage() + Row - 1;
+    return (Row >= 1 && Row <= WeaponRows() && Index >= 0 && Index < Choices.Length) ? Index : -1;
+}
+
+function VRWeaponPair RowPair(int Row)
+{
+    local int Index;
+    if (bUtilities || MenuPage != 0) return None;
+    Index = ChoiceForRow(Row);
+    return Index >= 0 ? Choices[Index].CombinedPair : None;
+}
+
+function Texture2D RowIcon(int Row, KFWeapon W)
+{
+    local VRWeaponPair Pair;
+    local KFWeap_DualBase Dual;
+    Pair = RowPair(Row);
+    if (Pair != None && Pair.StockItem != None) return Pair.StockItem.WeaponSelectTexture;
+    Dual = KFWeap_DualBase(W);
+    if (Dual != None && Dual.SingleClass != None) return Dual.SingleClass.default.WeaponSelectTexture;
+    return W != None ? W.WeaponSelectTexture : None;
+}
+
 function KFWeapon RowItem(int Row)
 {
-    local int Index, I;
+    local int Index;
     local KFWeapon W;
     local VRWeaponPair Pair;
-    local VRWeaponRuntime R;
-    Index = Page * WeaponsPerPage() + Row - 1;
-    if (Row < 1 || Row > WeaponRows() || Index < 0 || Index >= Choices.Length) return None;
-    W = Choices[Index];
-    Pair = class'VRWeaponPair'.static.ForMember(W);
-    if (Pair != None && Pair.PairState == 2)
+    Index = ChoiceForRow(Row);
+    if (Index < 0) return None;
+    W = Choices[Index].Item;
+    if (Choices[Index].CombinedPair != None)
     {
-        // Re-selecting a held pair keeps that hand's exact gun and magazine.
-        for (I = 0; I < 2; ++I)
-        {
-            R = InputOwner.Inventory.Registry.FindItem(Pair.Members[I]);
-            if (Selectable(Pair.Members[I]) && R != None && R.PrimaryHand == Hand) return Pair.Members[I];
-        }
-        for (I = 0; I < 2; ++I)
-            if (Available(Pair.Members[I], Hand)) return Pair.Members[I];
+        Pair = Choices[Index].CombinedPair;
+        if (Pair.PairState != 2 || Pair.Members[0] != W || Pair.Members[1] != Choices[Index].SecondItem) return None;
+        return Selectable(W) ? W : None;
     }
+    // Never silently substitute the other pistol when this one is occupied.
     return Selectable(W) ? W : None;
 }
 
@@ -255,6 +294,31 @@ function bool Available(KFWeapon W, int TargetHand)
     if (!Selectable(W)) return false;
     R = InputOwner.Inventory.Registry.FindItem(W);
     return R == None || (R.PrimaryHand < 0 && R.SupportHand < 0) || R.PrimaryHand == TargetHand;
+}
+
+function string LocationLabel(KFWeapon W)
+{
+    local VRWeaponRuntime R;
+    local VRWorldDropGun Prop;
+    local VRLocalWeaponDrops LocalDrops;
+    local int I;
+    if (W == None) return "";
+    R = InputOwner.Inventory.Registry.FindItem(W);
+    if (R == None) return "";
+    if (R.PrimaryHand >= 0 || R.SupportHand >= 0) return "HELD";
+    if (R.WorldDropped != 0)
+    {
+        foreach WorldInfo.DynamicActors(class'VRWorldDropGun', Prop)
+            if (Prop.OwnedWeapon == W && !Prop.bDeleteMe)
+                return (Prop.bGrounded && !Prop.bReturning) ? "GROUND" : "OUT";
+        return "OUT";
+    }
+    LocalDrops = InputOwner.Inventory.LocalDrops;
+    if (LocalDrops != None)
+        for (I = 0; I < LocalDrops.Drops.Length; ++I)
+            if (LocalDrops.Drops[I].Runtime == R)
+                return (LocalDrops.Drops[I].bResting && !LocalDrops.Drops[I].bReturning) ? "GROUND" : "OUT";
+    return "";
 }
 
 function string RowLabel(int TargetHand, int Row)
@@ -270,15 +334,25 @@ function string RowLabel(int TargetHand, int Row)
         switch (Row)
         {
         case 0: return DropLabel();
-        case 1: return InputOwner.Bridge.CalibrationPanel.GodModeOn() ? "GOD MODE: ON" : "GOD MODE: OFF";
+        case 1: return InputOwner.HasDosh() ? "DROP DOSH" : "DROP DOSH: NONE";
+        case 2:
+            if ((class'VRWorldWeaponPolicy'.static.Enabled() && InputOwner.Bridge.bWorldWeaponDrops))
+                return "SHARE GEAR: " $ (InputOwner.Bridge.bAllowOtherWeaponPickup ? "ON" : "OFF");
+            return "MIC: " $ class'VRPlayerAudio'.static.MicLabel();
+        case 3:
+            if (class'VRWorldWeaponPolicy'.static.Enabled() && InputOwner.Bridge.bWorldWeaponDrops)
+                return "MIC: " $ class'VRPlayerAudio'.static.MicLabel();
+            return "BACK";
         default: return "BACK";
         }
     }
     if (Row == 0) return "OPEN HAND";
-    if (Row == UtilitiesRow) return "DROP / GOD MODE";
+    if (Row == UtilitiesRow) return "TOOLS";
     if (Row == PreviousPageRow) return "PREVIOUS PAGE";
     if (Row == NextPageRow) return "NEXT PAGE (" $ ((Page + 1) % PageCount() + 1) $ " OF " $ PageCount() $ ")";
     W = RowItem(Row);
+    Pair = RowPair(Row);
+    if (Pair != None && Pair.StockItem != None) return "PAIR:" @ Pair.StockItem.GetHumanReadableName();
     if (W == None || !InputOwner.Inventory.Registry.IsOwned(W)) return "--";
     if (!Available(W, TargetHand)) return "OCCUPIED:" @ W.GetHumanReadableName();
     Pair = class'VRWeaponPair'.static.ForMember(W);
@@ -335,8 +409,11 @@ function ReadSelection(optional bool bHoldCursor)
     local bool bWasHovering;
     local string NewKey;
     local KFWeapon W;
+    local VRWeaponPair Pair;
     local Texture2D Icon;
-    RefreshChoices();
+    // Freeze row identities along with the cursor during confirmation. A
+    // disappearing combined pair must not turn this pull into another item.
+    if (!bHoldCursor) RefreshChoices();
     OldHand = HoverHand; OldRow = HoverRow;
     Delta = InputOwner.Bridge.Hands[Hand].Position - (InputOwner.Bridge.Human.Location + OpeningHandPosition);
     X = Delta dot AxisRight; Y = Delta dot AxisUp; Depth = Delta dot AxisForward;
@@ -375,14 +452,20 @@ function ReadSelection(optional bool bHoldCursor)
     {
         HoverHand = X < 0 ? 0 : 1;
         HoverRow = Clamp(int((24 - Y) / 8), 0, 5);
+        if (RowLabel(HoverHand, HoverRow) == "") { HoverHand = -1; HoverRow = -1; }
     }
     WeaponLabel = ""; DetailLabel = "";
     if (HoverHand >= 0)
     {
         WeaponLabel = RowLabel(HoverHand, HoverRow);
         W = RowItem(HoverRow);
+        Pair = RowPair(HoverRow);
         if (MenuPage == 0 && !bUtilities && W != None && InputOwner.Inventory.Registry.IsOwned(W) && W.UsesAmmo())
-            DetailLabel = W.AmmoCount[0] $ " / " $ W.GetSpareAmmoForHUD();
+        {
+            if (Pair != None && Pair.Members[0] != None && Pair.Members[1] != None)
+                DetailLabel = string(Pair.Members[0].AmmoCount[0] + Pair.Members[1].AmmoCount[0]) $ " / " $ Pair.SharedReserve();
+            else DetailLabel = LoadedLabel(W) $ " / " $ W.GetSpareAmmoForHUD();
+        }
     }
     if ((OldHand != HoverHand || OldRow != HoverRow) && HoverHand >= 0)
     {
@@ -390,13 +473,21 @@ function ReadSelection(optional bool bHoldCursor)
         HoverTime = WorldInfo.RealTimeSeconds;
     }
     NewKey = string(MenuPage) @ Page @ bUtilities @ HoverHand @ HoverRow @ WeaponLabel @ DetailLabel
+        @ (class'VRWorldWeaponPolicy'.static.Enabled() && InputOwner.Bridge.bWorldWeaponDrops) @ InputOwner.Bridge.bAllowOtherWeaponPickup
         @ ((HoverHand >= 0 && MenuPage == 0) ? string(int(Atan2(CursorX, CursorY) * 60 / Pi)) : "")
         @ Choices.Length @ InputOwner.SelectionMessage[Hand]
         @ InputOwner.Inventory.Registry.HandRevision[0] @ InputOwner.Inventory.Registry.HandRevision[1];
     // Other-hand swaps and equal-size inventory replacements also change the
     // icons/HELD markers even while this thumb rests on the same selection.
     // Ammunition too, so a bar redraws while the wheel stays open.
-    for (I = 0; I < Choices.Length; ++I) NewKey @= string(Choices[I]) $ ":" $ Choices[I].GetTotalAmmoAmount(0);
+    for (I = 0; I < Choices.Length; ++I)
+    {
+        NewKey @= string(Choices[I].Item) $ ":" $ Choices[I].Item.GetTotalAmmoAmount(0)
+            @ string(Choices[I].CombinedPair) @ string(Choices[I].SecondItem);
+        if (Choices[I].CombinedPair != None)
+            NewKey @= Choices[I].CombinedPair.Revision @ Choices[I].CombinedPair.TotalRounds()
+                @ Choices[I].Item.AmmoCount[0] @ Choices[I].SecondItem.AmmoCount[0];
+    }
     // Async content/mip completion can arrive after the opening burst ends,
     // without changing ammo or selection. Track the exact rendered row actor
     // (including a resolved pair member), not just the inventory choice.
@@ -404,9 +495,9 @@ function ReadSelection(optional bool bHoldCursor)
         for (Row = 1; Row <= WeaponRows(); ++Row)
         {
             W = RowItem(Row);
-            NewKey @= string(W);
+            NewKey @= string(W) @ LocationLabel(W);
             if (W == None) continue;
-            Icon = W.WeaponSelectTexture;
+            Icon = RowIcon(Row, W);
             NewKey @= W.WeaponContentLoaded @ string(Icon);
             if (Icon != None) NewKey @= Icon.SizeX @ Icon.SizeY @ Icon.ResidentMips;
         }
@@ -417,12 +508,25 @@ function ReadSelection(optional bool bHoldCursor)
 function bool CommitSelection()
 {
     local KFWeapon W;
+    local VRWeaponPair Pair;
+    local int Index;
     if (HoverHand < 0 || HoverRow < 0) return true;
     if (MenuPage != 0) return InputOwner.Bridge.CalibrationPanel.Activate(self, HoverHand, HoverRow);
     if (bUtilities)
     {
         if (HoverRow == 0) return InputOwner.DropHeldWeapon(Hand);
-        if (HoverRow == 1) { InputOwner.Bridge.CalibrationPanel.ToggleGodMode(); return false; }
+        // Stays open so repeated clicks toss more, like tapping stock B.
+        if (HoverRow == 1) { InputOwner.TossDosh(Hand); return false; }
+        if (HoverRow == 2 && (class'VRWorldWeaponPolicy'.static.Enabled() && InputOwner.Bridge.bWorldWeaponDrops))
+        {
+            InputOwner.Bridge.bAllowOtherWeaponPickup = !InputOwner.Bridge.bAllowOtherWeaponPickup;
+            InputOwner.Bridge.SavePreferences();
+            InputOwner.ModeFeedback(Hand, true);
+            ContentKey = "";
+            return false;
+        }
+        if (HoverRow == ((class'VRWorldWeaponPolicy'.static.Enabled() && InputOwner.Bridge.bWorldWeaponDrops) ? 3 : 2))
+        { class'VRPlayerAudio'.static.ToggleMute(InputOwner.Bridge.PC); ContentKey = ""; return false; }
         bUtilities = false;
         return false;
     }
@@ -435,6 +539,35 @@ function bool CommitSelection()
         return false;
     }
     W = RowItem(HoverRow);
+    Pair = RowPair(HoverRow);
+    if (Pair != None)
+    {
+        if (!InputOwner.Bridge.bToggleGrip && (InputOwner.Bridge.NativeGripMask & 3) != 3)
+        {
+            InputOwner.SelectionMessage[Hand] = "HOLD BOTH GRIPS TO DRAW PAIR";
+            InputOwner.ModeFeedback(Hand, false);
+            return false;
+        }
+        if (InputOwner.IsSelectorOpen(1 - HoverHand))
+        {
+            InputOwner.SelectionMessage[Hand] = "CLOSE OTHER WEAPON WHEEL";
+            InputOwner.ModeFeedback(Hand, false);
+            return false;
+        }
+        Index = ChoiceForRow(HoverRow);
+        if (Index < 0 || W == None || !InputOwner.Inventory.DrawExistingPair(Pair, HoverHand,
+            Choices[Index].Item, Choices[Index].SecondItem))
+        {
+            InputOwner.SelectionMessage[Hand] = "PAIR NEEDS BOTH HANDS FREE AND READY";
+            InputOwner.ModeFeedback(Hand, false);
+            return false;
+        }
+        InputOwner.SelectionMessage[Hand] = "";
+        InputOwner.RefreshWeapon(0); InputOwner.RefreshWeapon(1);
+        InputOwner.Inventory.PlaceAll();
+        InputOwner.ModeFeedback(Hand, true);
+        return true;
+    }
     if (HoverRow != 0 && !Available(W, HoverHand))
     {
         if (W == None) return true;
@@ -449,7 +582,10 @@ function bool CommitSelection()
         InputOwner.ModeFeedback(Hand, false);
         return false;
     }
-    if (InputOwner.Inventory.Draw(HoverHand, W))
+    Index = ChoiceForRow(HoverRow);
+    if (InputOwner.Inventory.Draw(HoverHand, W,
+        W != None && KFWeap_DualBase(W) != None && Index >= 0,
+        Index >= 0 ? Choices[Index].StockMember : 0))
     {
         InputOwner.SelectionMessage[Hand] = "";
         InputOwner.Bridge.Hands[HoverHand].bTriggerArmed = false;
@@ -612,6 +748,7 @@ simulated function RenderDisplay(Canvas C)
     for (H = 0; H < 2; ++H)
         for (Row = 0; Row < 6; ++Row)
         {
+            if (RowLabel(H, Row) == "") continue;
             X = H == 0 ? 4 : 440; Y = 54 + Row * 110;
             W = RowItem(Row);
             bUnavailable = MenuPage == 0 && !bUtilities && W != None
@@ -622,7 +759,7 @@ simulated function RenderDisplay(Canvas C)
             Text(C, RowLabel(H, Row), X + 12, Y + 48, 300, 30,
                 bUnavailable ? MakeColor(190,123,123,255) : Ink);
             if (MenuPage == 0 && !bUtilities && W != None && InputOwner.Inventory.Registry.IsOwned(W) && W.UsesAmmo())
-                Text(C, string(W.AmmoCount[0]) $ "/" $ W.MagazineCapacity[0] @ "RESERVE" @ W.GetSpareAmmoForHUD(),
+                Text(C, LoadedLabel(W) $ "/" $ W.MagazineCapacity[0] @ "RESERVE" @ W.GetSpareAmmoForHUD(),
                     X + 12, Y + 82, 300, 16, Muted);
         }
     if (InputOwner.SelectionMessage[Hand] != "")
@@ -683,10 +820,18 @@ simulated function bool SpraySlash(Canvas C, float X, float Y, float Scale)
 // Share of a weapon's ammunition left: magazine plus reserve over the most it
 // can carry (stock GetTotalAmmoAmount / GetMaxAmmoAmount). The syringe shows
 // its heal charge. -1 when there is nothing to show (melee, open hand).
-simulated function float AmmoShare(KFWeapon W, out color Fill)
+simulated function float AmmoShare(KFWeapon W, out color Fill, optional VRWeaponPair Pair)
 {
     local float Max, Share;
     if (W == None) return -1;
+    if (Pair != None && Pair.PairState == 2 && Pair.Members[0] != None && Pair.Members[1] != None)
+    {
+        Max = Pair.Members[0].MagazineCapacity[0] + Pair.Members[1].MagazineCapacity[0] + Pair.SourceReserveCapacity;
+        if (Max <= 0) return -1;
+        Share = FClamp(float(Pair.TotalRounds()) / Max, 0, 1);
+        Fill = Share < 0.25 ? AmmoLow : Ink;
+        return Share;
+    }
     if (KFWeap_HealerBase(W) != None)
     {
         Fill = HealCharge;
@@ -700,11 +845,11 @@ simulated function float AmmoShare(KFWeapon W, out color Fill)
     return Share;
 }
 
-simulated function AmmoBar(Canvas C, float X, float Y, KFWeapon W, bool Selected)
+simulated function AmmoBar(Canvas C, float X, float Y, KFWeapon W, bool Selected, optional VRWeaponPair Pair)
 {
-    local float Share, Max;
+    local float Share, Max, ReloadSize;
     local color Fill;
-    Share = AmmoShare(W, Fill);
+    Share = AmmoShare(W, Fill, Pair);
     if (Share < 0) return;
     if (Selected && Share >= 0.25 && KFWeap_HealerBase(W) == None) Fill = MakeColor(255,255,255,255);
     if (Share <= 0)
@@ -724,8 +869,14 @@ simulated function AmmoBar(Canvas C, float X, float Y, KFWeapon W, bool Selected
     SprayTile(C, X - 50, Y - 5, FMax(10, 100 * Share), 10, 0, 192, 512, 48, Fill);
     // One magazine's worth, so "less than one reload left" reads at a glance.
     Max = W.GetMaxAmmoAmount(0);
-    if (KFWeap_HealerBase(W) == None && W.MagazineCapacity[0] < Max)
-        Box(C, X - 51 + 100 * W.MagazineCapacity[0] / Max, Y - 7, 2, 14, Selected ? SlashRed : Ink);
+    ReloadSize = W.MagazineCapacity[0];
+    if (Pair != None)
+    {
+        ReloadSize += Pair.Members[1].MagazineCapacity[0];
+        Max = ReloadSize + Pair.SourceReserveCapacity;
+    }
+    if (KFWeap_HealerBase(W) == None && ReloadSize < Max)
+        Box(C, X - 51 + 100 * ReloadSize / Max, Y - 7, 2, 14, Selected ? SlashRed : Ink);
 }
 
 simulated function RenderRadial(Canvas C)
@@ -733,9 +884,11 @@ simulated function RenderRadial(Canvas C)
     local int Slot, Row, Count;
     local float Angle, Edge, Sector, X, Y, Width, Height, IconWidth, Now, Burst, Pop, Size;
     local KFWeapon W;
+    local VRWeaponPair Pair;
     local Texture2D Icon;
     local color Tint, Fill;
     local bool Selected, Usable, DiagnoseIcons;
+    local string ItemLocation;
     Now = WorldInfo.RealTimeSeconds;
     Count = RadialCount(); Sector = 2 * Pi / Count;
     // One initial and one settled sample per selector lifetime. This identifies
@@ -770,17 +923,19 @@ simulated function RenderRadial(Canvas C)
             Selected ? Red : MakeColor(143,146,145,100), Selected ? 6 : 1);
         if (!RowSelectable(Row)) continue;
         W = bUtilities ? None : RowItem(Row);
-        Usable = W == None || Available(W, Hand);
+        Pair = RowPair(Row);
+        Usable = Pair != None ? (InputOwner.Inventory.PairHandsFree(Pair) && !InputOwner.IsSelectorOpen(1 - Hand))
+            : (W == None || Available(W, Hand));
         Tint = Usable ? Ink : Muted;
         // An empty gun stays selectable but fades back.
-        if (AmmoShare(W, Fill) == 0) Tint = MakeColor(Tint.R, Tint.G, Tint.B, 90);
+        if (AmmoShare(W, Fill, Pair) == 0) Tint = MakeColor(Tint.R, Tint.G, Tint.B, 90);
         if (Selected)
         {
             Tint = Usable ? MakeColor(255,255,255,255) : Red;
             if (!SpraySlash(C, X, Y, 0.6 + 0.4 * BackOut(Pop)))
                 Arc(C, 180, Angle - Sector * 0.33, Angle + Sector * 0.33, Red, 3);
         }
-        Icon = W != None ? W.WeaponSelectTexture : None;
+        Icon = RowIcon(Row, W);
         if (DiagnoseIcons && W != None)
         {
             `log("KF2VR_SELECTOR_ICON hand=" $ Hand @ "sample=" $ IconDiagnosticFrames
@@ -800,18 +955,25 @@ simulated function RenderRadial(Canvas C)
             C.DrawTile(Icon, Width, Height, 0, 0, Icon.SizeX, Icon.SizeY,
                 MakeLinearColor(LinearChannel(Tint.R), LinearChannel(Tint.G), LinearChannel(Tint.B), float(Tint.A) / 255.0),
                 false, BLEND_Translucent);
-            AmmoBar(C, X, Y + 44, W, Selected);
-            if (!Usable) Text(C, "HELD", X - 32, Y + 58, 64, 17, Muted, true);
-            else if (InputOwner.Inventory.Registry.GetPrimary(Hand) != None
+            AmmoBar(C, X, Y + 44, W, Selected, Pair);
+            if (Pair != None) Text(C, "PAIR", X - 38, Y + 58, 76, 17, Muted, true);
+            ItemLocation = LocationLabel(W);
+            if (Pair == None && ItemLocation != "") Text(C, ItemLocation, X - 48, Y + 58, 96, 17, Muted, true);
+            if (InputOwner.Inventory.Registry.GetPrimary(Hand) != None
                 && InputOwner.Inventory.Registry.GetPrimary(Hand).Item == W)
-                Box(C, X - 13, Y + 60, 26, 4, Red);
+                Box(C, X - 13, Y + 78, 26, 4, Red);
         }
         else if (!bUtilities && Row == 0) OpenHandIcon(C, X, Y, Tint);
-        else if (Row == UtilitiesRow) Text(C, "+", X - 18, Y - 28, 50, 56, Tint);
+        else if (Row == UtilitiesRow) Text(C, "TOOLS", X - 48, Y - 16, 96, 32, Tint, true);
         else if (Row == NextPageRow)
         {
             Text(C, ">>", X - 32, Y - 30, 76, 44, Tint);
             Text(C, "PAGE" @ (Page + 1) $ "/" $ PageCount(), X - 50, Y + 16, 100, 18, Selected ? Tint : Muted, true);
+        }
+        else if (bUtilities && Row == 2 && (class'VRWorldWeaponPolicy'.static.Enabled() && InputOwner.Bridge.bWorldWeaponDrops))
+        {
+            Text(C, "SHARE GEAR", X - 90, Y - 24, 180, 16, Tint, true);
+            Text(C, "PICKUP: " $ (InputOwner.Bridge.bAllowOtherWeaponPickup ? "ON" : "OFF"), X - 90, Y + 2, 180, 20, Tint, true);
         }
         else Text(C, RowLabel(Hand, Row), X - 70, Y - 15, 140, 28, Tint);
     }
@@ -822,15 +984,30 @@ simulated function RenderRadial(Canvas C)
         Box(C, 384 + Sin(Angle) * 165 - 6, 364 - Cos(Angle) * 165 - 6, 12, 12, Red);
     }
     Text(C, Hand == 0 ? "LEFT HAND" : "RIGHT HAND", 284, 280, 200, 16, HandInk, true);
-    Text(C, WeaponLabel, 216, 302, 336, 36, Ink, true);
+    if (bUtilities && HoverRow == 2 && (class'VRWorldWeaponPolicy'.static.Enabled() && InputOwner.Bridge.bWorldWeaponDrops))
+    {
+        Text(C, "SHARE GEAR", 216, 300, 336, 18, Ink, true);
+        Text(C, "TO PICK UP: " $ (InputOwner.Bridge.bAllowOtherWeaponPickup ? "ON" : "OFF"), 216, 321, 336, 18, Ink, true);
+    }
+    else Text(C, WeaponLabel, 216, 302, 336, 36, Ink, true);
     if (WeaponLabel != "") SprayTile(C, 284, 342, 200, 10, 0, 192, 512, 48, SlashRed);
     W = (HoverRow >= 0 && !bUtilities) ? RowItem(HoverRow) : None;
+    Pair = RowPair(HoverRow);
     if (W != None && InputOwner.Inventory.Registry.IsOwned(W) && W.UsesAmmo())
     {
-        Text(C, string(W.AmmoCount[0]), 180, 358, 200, 60, MakeColor(255,255,255,255), false, true);
-        Text(C, "/" $ W.GetSpareAmmoForHUD(), 388, 384, 180, 30, Muted);
+        if (Pair != None && Pair.Members[0] != None && Pair.Members[1] != None)
+        {
+            Text(C, string(Pair.Members[0].AmmoCount[0] + Pair.Members[1].AmmoCount[0]),
+                180, 358, 200, 60, MakeColor(255,255,255,255), false, true);
+            Text(C, "/" $ Pair.SharedReserve(), 388, 384, 180, 30, Muted);
+        }
+        else
+        {
+            Text(C, LoadedLabel(W), 180, 358, 200, 60, MakeColor(255,255,255,255), false, true);
+            Text(C, "/" $ W.GetSpareAmmoForHUD(), 388, 384, 180, 30, Muted);
+        }
     }
-    Text(C, HoverRow >= 0 ? "TRIGGER TO EQUIP" : "POINT TO SELECT", 254, 436, 260, 16, Muted, true);
+    Text(C, ConfirmationHint(), 254, 436, 260, 16, Muted, true);
     if (PageCount() > 1 && !bUtilities)
         Text(C, string(Page + 1) $ " / " $ PageCount(), 352, 711, 96, 20, Muted);
     Text(C, InputOwner.SelectionMessage[Hand], 144, 745, 480, 20, Red);
@@ -848,6 +1025,20 @@ simulated event Destroyed()
     if (Display != None) { Display.Render = None; Display.bNeedsUpdate = false; }
     InputOwner = None;
     Super.Destroyed();
+}
+
+// A held gun's loaded count as its runtime reads it (realistic ammo: "14+1").
+function string LoadedLabel(KFWeapon W)
+{
+    local VRWeaponRuntime R;
+    R = InputOwner.Inventory.Registry.FindItem(W);
+    return R != None ? R.AmmoCountLabel() : string(Max(W.AmmoCount[0], 0));
+}
+
+simulated function string ConfirmationHint()
+{
+    if (HoverRow < 0) return "POINT TO SELECT";
+    return (bUtilities || MenuPage != 0) ? "TRIGGER TO SELECT" : "GRIP TO GRAB";
 }
 
 defaultproperties

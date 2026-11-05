@@ -2,13 +2,13 @@
    This is a native-only experiment, not a new script or asset compilation. #>
 [CmdletBinding()]
 param([Parameter(Mandatory)][string]$BaseCombinedBuild,
-    [string]$NativeBuildRoot=(Join-Path $PSScriptRoot '../build/portal-native'))
+    [string]$NativeBuildRoot=(Join-Path $PSScriptRoot '../build/multiplayer/native'))
 $ErrorActionPreference='Stop'
 $workspace=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'script-sources.ps1')
-. (Join-Path $PSScriptRoot 'portal-combined.ps1')
+. (Join-Path $PSScriptRoot 'combined-state.ps1')
 $base=[IO.Path]::GetFullPath($BaseCombinedBuild).TrimEnd('\','/')
-$state=Get-CombinedPortalState $workspace $base
+$state=Get-CombinedBuildState $workspace $base
 $destination=Join-Path $workspace ('build/combined-script-runs/'+[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')+'-native')
 New-Item -ItemType Directory -Path $destination -ErrorAction Stop | Out-Null
 Get-ChildItem -LiteralPath $base | Copy-Item -Destination $destination -Recurse
@@ -37,7 +37,7 @@ if(Test-Path -LiteralPath $pdb) {
     $record | Add-Member -Force -NotePropertyName native_symbols -NotePropertyValue ([ordered]@{
         path=$symbolTarget;sha256=(Get-FileHash -LiteralPath $symbolTarget).Hash})
 }
-foreach($relative in @('CMakeLists.txt','third_party/xr-sdks.cmake')+@(rg --files native/adapter native/vrcore native/xr native/portal -g '*.h' -g '*.hpp' -g '*.cpp' -g '*.asm' -g 'CMakeLists.txt' | Sort-Object)) {
+foreach($relative in @('CMakeLists.txt','third_party/xr-sdks.cmake')+@(rg --files native/adapter native/vrcore native/xr -g '*.h' -g '*.hpp' -g '*.cpp' -g '*.asm' -g 'CMakeLists.txt' | Sort-Object)) {
     $key=$relative.Replace('\','/');$source=Join-Path $workspace $relative
     $hashes[$key]=(Get-FileHash -LiteralPath $source).Hash
     $target=Join-Path $destination ('Provenance/NativeSources/'+$relative)
@@ -47,7 +47,7 @@ foreach($relative in @('CMakeLists.txt','third_party/xr-sdks.cmake')+@(rg --file
 $record.native_sources_sha256=$hashes
 $record.success=$true;$record.verification_ready=$true
 $record | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $destination 'run.json') -Encoding UTF8
-$verified=Get-CombinedPortalState $workspace $destination
+$verified=Get-CombinedBuildState $workspace $destination
 if($verified.Build.package_sha256 -ne $state.Build.package_sha256 -or
     ($verified.ArtHashes | ConvertTo-Json -Compress) -cne ($state.ArtHashes | ConvertTo-Json -Compress)) {throw 'Frozen script/art changed'}
 Write-Output "Native render candidate: $destination"

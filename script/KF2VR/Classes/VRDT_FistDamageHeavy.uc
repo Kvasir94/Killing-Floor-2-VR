@@ -8,6 +8,7 @@ defaultproperties
     // Bare-hand and body-slam melee counts as Berserker melee (post-playtest
     // perk pass): stock lists no perk for these VR-only attacks.
     ModifierPerkList(0)=class'KFPerk_Berserker'
+    WeaponDef=class'VRWeapDef_BareHands'
     KDamageImpulse=1600
     KDeathVel=750
     KDeathUpKick=250

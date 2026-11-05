@@ -38,6 +38,33 @@ function Assert-Argument($Arguments, [string]$Flag, [string]$Value) {
     Assert-Launch ($index -ge 0 -and $index + 1 -lt $Arguments.Count -and $Arguments[$index + 1] -ceq $Value) "Missing or changed $Flag $Value"
 }
 
+# The recorder is a PowerShell script, so it receives arguments without the
+# native command line that python.exe parses. Under Windows PowerShell, rebuild
+# that boundary with the OS parser before reading the GUI seed.
+Add-Type -Namespace KF2VRTest -Name NativeArguments -MemberDefinition @'
+[DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+static extern IntPtr CommandLineToArgvW(string commandLine, out int count);
+[DllImport("kernel32.dll")]
+static extern IntPtr LocalFree(IntPtr memory);
+public static string Second(string commandLine) {
+    int count;
+    IntPtr argv = CommandLineToArgvW(commandLine, out count);
+    try { return count == 2 ? Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, IntPtr.Size)) : null; }
+    finally { LocalFree(argv); }
+}
+'@
+
+function Get-InitialArguments($Arguments) {
+    $index = [array]::IndexOf([string[]]$Arguments, '--initial-arguments')
+    Assert-Launch ($index -ge 0 -and $index + 1 -lt $Arguments.Count) 'Player window lost --initial-arguments.'
+    $value = [string]$Arguments[$index + 1]
+    if ($PSVersionTable.PSVersion.Major -lt 7) {
+        Assert-Launch ($value -notmatch '\s') 'Windows PowerShell would split or requote the GUI seed.'
+        $value = [KF2VRTest.NativeArguments]::Second('python.exe ' + $value)
+    }
+    return [string[]]($value | ConvertFrom-Json)
+}
+
 try {
     New-Item -ItemType Directory -Force -Path $fixtureTools,(Join-Path $package 'runtime'),(Join-Path $package 'tools/multiplayer') | Out-Null
     $env:LOCALAPPDATA = Join-Path $fixture 'LocalAppData'
@@ -57,19 +84,18 @@ $kind = if ($args[0] -like '*release_state.py') { 'verify' } else { 'launch' }
 if ($kind -eq 'verify' -and $env:KF2VR_PLAY_TEST_STALE -eq 'True') { Write-Output 'WARNING: Launching stale package (isolated test).' }
 $global:LASTEXITCODE = if ($kind -eq 'verify') { [int]$env:KF2VR_PLAY_TEST_VERIFY_EXIT } else { 0 }
 '@ | Set-Content -LiteralPath (Join-Path $package 'runtime/python.ps1')
-    @'
-param($Repo, $Package, $ServerRoot, $GameRoot, $Release, [switch]$Stale, [switch]$TestMap, [switch]$Solo, [hashtable]$InitialSelections = @{})
-$initial = @{}
-foreach ($key in $InitialSelections.Keys) {
-    $value = $InitialSelections[$key]
-    $initial[$key] = if ($value -is [System.Management.Automation.SwitchParameter]) { [bool]$value } else { $value }
-}
-@{kind='gui'; initial_solo=[bool]$Solo; stale=[bool]$Stale; initial_selections=$initial} | ConvertTo-Json -Depth 4 -Compress | Add-Content -LiteralPath $env:KF2VR_PLAY_TEST_EVENTS
-$selected = Get-Content -LiteralPath $env:KF2VR_PLAY_TEST_CHOICE -Raw | ConvertFrom-Json
-$choice = @{}
-foreach ($property in $selected.PSObject.Properties) { $choice[$property.Name] = $property.Value }
-return $choice
-'@ | Set-Content -LiteralPath (Join-Path $fixtureTools 'play-gui.ps1')
+
+
+    foreach ($parameters in @(@{Gui=$true}, @{DevGui=$true}, @{Gui=$true; DevGui=$true})) {
+        $case = Invoke-LaunchCase $parameters
+        Assert-Launch (-not $case.Failure -and ($case.Events.kind -join ',') -eq 'verify,launch') 'GUI alias did not use one verified player entry.'
+        Assert-Launch ($case.Events[-1].arguments[0] -eq (Join-Path $package 'tools/multiplayer/launcher_gui.py')) 'GUI alias opened another launcher.'
+        Assert-Argument $case.Events[-1].arguments '--workspace' $fixture
+    }
+    $case = Invoke-LaunchCase @{DevGui=$true; AllowStale=$true} 0 @{} $true
+    Assert-Launch ($case.Events[-1].arguments -contains '--allow-stale' -and $case.Events[-1].arguments -contains '--stale') 'Legacy shortcut lost stale consent/context.'
+    Assert-Launch (-not (Test-Path (Join-Path $env:LOCALAPPDATA 'KF2VR/Profile/session-type.txt'))) 'Opening a window changed the profile.'
+    Write-Output 'PASS: Gui and legacy DevGui use the same donor entry without a server or profile write.'
 
     # There is deliberately no server executable or legacy combined build.
     $case = Invoke-LaunchCase @{Solo=$true; Vr=$true; PrepareOnly=$true; GameRoot='D:\Fake KF2'; Map='KF-Outpost'; Difficulty='Hard'; GameLength='Long'; EyeRenderPercent=75; VrQuality='balanced'}
@@ -77,22 +103,50 @@ return $choice
     Assert-Launch (($case.Events.kind -join ',') -eq 'verify,launch') 'Solo must verify the selected release before launching.'
     $forwarded = $case.Events[-1].arguments
     Assert-Launch ($forwarded[0] -eq (Join-Path $package 'tools/multiplayer/friends.py')) 'Solo did not use selected packaged friends.py.'
-    Assert-Launch ($forwarded -contains '--solo' -and $forwarded -notcontains '--host' -and $forwarded -notcontains '--server-root') 'Solo retained a hosted/server dependency.'
+    Assert-Launch ($forwarded -contains '--solo' -and $forwarded -notcontains '--host') 'Solo retained a hosted/server dependency.'
     Assert-Launch ($forwarded -contains '--vr' -and $forwarded -contains '--prepare-only') 'Solo lost explicit mode/preparation flags.'
     foreach ($pair in @(@('--game-root','D:\Fake KF2'),@('--map','KF-Outpost'),@('--difficulty','hard'),@('--game-length','long'),@('--eye-render-percent','75'),@('--vr-quality','balanced'))) {
         Assert-Argument $forwarded $pair[0] $pair[1]
     }
     Write-Output 'PASS: selected-package Solo verifies first, has no server dependency, forwards explicit options.'
 
-    foreach ($mode in @('off','dlaa','quality','balanced','performance','ultraperformance')) {
+    foreach ($mode in @('Off','Gibs','Fluids')) {
+        foreach ($playerMode in @('Vr','Desktop')) {
+            $parameters = @{Solo=$true; PrepareOnly=$true; Flex=$mode}
+            $parameters[$playerMode] = $true
+            $case = Invoke-LaunchCase $parameters
+            Assert-Launch (-not $case.Failure) "FleX $mode $playerMode unexpectedly failed: $($case.Failure)"
+            Assert-Argument $case.Events[-1].arguments '--flex' $mode.ToLowerInvariant()
+        }
+    }
+    $case = Invoke-LaunchCase @{Gui=$true; Vr=$true; Flex='Fluids'; GameRoot='D:\Steam "Library"\KF2\'}
+    Assert-Launch (-not $case.Failure) "FleX player window unexpectedly failed: $($case.Failure)"
+    $seed = Get-InitialArguments $case.Events[-1].arguments
+    Assert-Argument $seed '--flex' 'fluids'
+    Assert-Argument $seed '--game-root' 'D:\Steam "Library"\KF2\'
+    Write-Output 'PASS: FleX choices forward to desktop, VR and the shared player window.'
+
+    $case = Invoke-LaunchCase @{Gui=$true; MaxZeds=48; WaveZedsPercent=150; SpawnRatePercent=200}
+    $seed = Get-InitialArguments $case.Events[-1].arguments
+    Assert-Launch (-not $case.Failure) "Hosted zed spawn overrides unexpectedly failed: $($case.Failure)"
+    Assert-Argument $seed '--max-zeds' '48'
+    Assert-Argument $seed '--wave-zeds-percent' '150'
+    Assert-Argument $seed '--spawn-rate-percent' '200'
+    $case = Invoke-LaunchCase @{Solo=$true; Vr=$true; PrepareOnly=$true; SpawnRatePercent=150}
+    Assert-Launch (-not $case.Failure) "Solo zed spawn override unexpectedly failed: $($case.Failure)"
+    Assert-Argument $case.Events[-1].arguments '--spawn-rate-percent' '150'
+    $case = Invoke-LaunchCase @{Gui=$true; MaxZeds=129}
+    Assert-Launch ([bool]$case.Failure -and $case.Events.Count -eq 0) 'Out-of-range -MaxZeds reached verification or launch.'
+    Write-Output 'PASS: zed spawn overrides forward for Host and Solo; out-of-range values are rejected.'
+
+    foreach ($mode in @('auto','off','dlaa','quality','balanced','performance','ultraperformance')) {
         $case = Invoke-LaunchCase @{Solo=$true; Vr=$true; PrepareOnly=$true; Dlss=$mode; DlssSharpness=0}
         Assert-Launch (-not $case.Failure) "DLSS $mode unexpectedly failed: $($case.Failure)"
         Assert-Argument $case.Events[-1].arguments '--dlss' $mode
         Assert-Argument $case.Events[-1].arguments '--dlss-sharpness' '0'
     }
     $case = Invoke-LaunchCase @{Gui=$true; Vr=$true; Dlss='quality'; DlssSharpness=35}
-    $initialIndex = [array]::IndexOf([string[]]$case.Events[-1].arguments, '--initial-arguments')
-    $seed = [string[]]($case.Events[-1].arguments[$initialIndex + 1] | ConvertFrom-Json)
+    $seed = Get-InitialArguments $case.Events[-1].arguments
     Assert-Launch (-not $case.Failure) 'DLSS choices failed to reach the shared player window.'
     Assert-Argument $seed '--dlss' 'quality'
     Assert-Argument $seed '--dlss-sharpness' '35'
@@ -103,26 +157,18 @@ return $choice
     }
     $case = Invoke-LaunchCase @{Solo=$true; PrepareOnly=$true; DlssSharpness=101}
     Assert-Launch ([bool]$case.Failure -and $case.Events.Count -eq 0) 'Invalid DLSS sharpness reached package verification or launch.'
-    $case = Invoke-LaunchCase @{Gui=$true; DevGui=$true; Vr=$true; Dlss='quality'; DlssSharpness=35} 0 @{Solo=$true; Desktop=$true; PrepareOnly=$true}
-    Assert-Launch (-not $case.Failure -and $case.Events[-1].arguments -notcontains '--dlss' -and $case.Events[-1].arguments -notcontains '--dlss-sharpness') 'GUI Desktop retained CLI DLSS overrides.'
-    $case = Invoke-LaunchCase @{Gui=$true; DevGui=$true; Vr=$true; Dlss='quality'; DlssSharpness=35} 0 @{Solo=$true; Vr=$true; PrepareOnly=$true; Dlss='off'; DlssSharpness=0}
-    Assert-Launch (-not $case.Failure) 'GUI could not override CLI DLSS with Off.'
-    Assert-Argument $case.Events[-1].arguments '--dlss' 'off'
-    Assert-Argument $case.Events[-1].arguments '--dlss-sharpness' '0'
-    Write-Output 'PASS: explicit DLSS modes/sharpness forward to CLI and player UI; GUI choices win, Desktop and invalid sharpness are rejected.'
+    Write-Output 'PASS: explicit DLSS modes/sharpness forward to CLI and player UI; Desktop and invalid sharpness are rejected.'
 
-    $beforePlayerType = Get-Content (Join-Path $env:LOCALAPPDATA 'KF2VR/Profile/session-type.txt') -Raw
-    $case = Invoke-LaunchCase @{Gui=$true; Breacher='Off'; PrepareOnly=$true}
+    $case = Invoke-LaunchCase @{Gui=$true; InventoryFocus='Off'; PrepareOnly=$true}
     Assert-Launch (-not $case.Failure -and ($case.Events.kind -join ',') -eq 'verify,launch') 'Ordinary root GUI did not use the packaged player window.'
     $player = $case.Events[-1].arguments
     Assert-Launch ($player[0] -eq (Join-Path $package 'tools/multiplayer/launcher_gui.py')) 'Root opened a different player UI than the portable package.'
     Assert-Argument $player '--workspace' $fixture
-    $initialIndex = [array]::IndexOf([string[]]$player, '--initial-arguments')
-    $seed = [string[]]($player[$initialIndex + 1] | ConvertFrom-Json)
-    Assert-Launch ($seed -contains '--no-breacher' -and $seed -contains '--prepare-only' -and $seed -notcontains '--game-root') 'Shared player UI lost explicit OFF/preparation or replaced game detection.'
+    $seed = Get-InitialArguments $player
+    Assert-Launch ($seed -contains '--no-inventory-focus' -and $seed -contains '--prepare-only' -and $seed -notcontains '--game-root') 'Shared player UI lost explicit OFF/preparation or replaced game detection.'
     Assert-Argument $seed '--server-root' (Join-Path $fixture 'build/multiplayer/server')
     Assert-Argument $seed '--cache-root' (Join-Path $fixture 'build/workshop-cache')
-    Assert-Launch ((Get-Content (Join-Path $env:LOCALAPPDATA 'KF2VR/Profile/session-type.txt') -Raw) -ceq $beforePlayerType) 'Opening player UI changed the profile before Start.'
+    Assert-Launch (-not (Test-Path (Join-Path $env:LOCALAPPDATA 'KF2VR/Profile'))) 'Opening player UI wrote the profile before Start.'
     Write-Output 'PASS: ordinary root GUI uses portable player UI without a preinstalled server; forwards dependency context and explicit OFF.'
 
     foreach ($captureChoice in @('On','Off')) {
@@ -132,49 +178,28 @@ return $choice
         Assert-Launch (-not $case.Failure -and $case.Events[-1].arguments -contains $motionFlag -and $case.Events[-1].arguments -contains $eventFlag) 'Root capture switches lost explicit On/Off.'
     }
     $case = Invoke-LaunchCase @{Gui=$true; Vr=$true; RecordMotion='On'; HighlightEvents='On'}
-    $initialIndex = [array]::IndexOf([string[]]$case.Events[-1].arguments, '--initial-arguments')
-    $seed = [string[]]($case.Events[-1].arguments[$initialIndex + 1] | ConvertFrom-Json)
+    $seed = Get-InitialArguments $case.Events[-1].arguments
     Assert-Launch (-not $case.Failure -and $seed -contains '--record-motion' -and $seed -contains '--promo-events') 'Shared player window did not receive next-playtest recording choices.'
     $case = Invoke-LaunchCase @{Solo=$true; Desktop=$true; RecordMotion='On'; PrepareOnly=$true}
     Assert-Launch ([bool]$case.Failure -and $case.Events.kind -notcontains 'launch') 'Desktop motion capture must be rejected.'
     Write-Output 'PASS: separate session recording switches forward On/Off and seed the player window; desktop recording is rejected.'
 
-    foreach ($enabled in @('On','Off')) {
-        $case = Invoke-LaunchCase @{Solo=$true; PrepareOnly=$true; Breacher=$enabled}
-        $flag = if ($enabled -eq 'On') { '--breacher' } else { '--no-breacher' }
-        Assert-Launch (-not $case.Failure -and $case.Events[-1].arguments -contains $flag) "Breacher $enabled was not forwarded."
+    # Parked content has no switches; old command lines fail at parameter binding.
+    foreach ($option in @('Breacher','ZedDefense','StandingHolds','MultiplayerGrabs','PortalGun')) {
+        $case = Invoke-LaunchCase @{Solo=$true; Vr=$true; PrepareOnly=$true; $option='Off'}
+        Assert-Launch ([bool]$case.Failure -and $case.Events.Count -eq 0) "Removed -$option switch reached verification or launch."
     }
-    $case = Invoke-LaunchCase @{Gui=$true; DevGui=$true; Breacher='On'} 0 @{Solo=$true; Desktop=$true; PrepareOnly=$true; Breacher='Off'}
-    Assert-Launch (-not $case.Failure -and $case.Events[1].initial_selections.Breacher -eq 'On') 'GUI did not receive the explicit Breacher selection.'
-    Assert-Launch ($case.Events[-1].arguments -contains '--no-breacher' -and $case.Events[-1].arguments -notcontains '--breacher') 'Unchecked Breacher did not override an enabled initial selection.'
-    Write-Output 'PASS: Breacher On/Off forwards explicitly; the window can turn an initial On choice Off.'
-
-    $case = Invoke-LaunchCase @{Solo=$true; PrepareOnly=$true; BreacherLevel=25; BreacherSkills='12121'}
-    $forwarded = [string[]]$case.Events[-1].arguments
-    Assert-Launch (-not $case.Failure -and ($forwarded -join ' ') -match '--breacher-level 25' -and ($forwarded -join ' ') -match '--breacher-skills 12121') "Breacher development level was not forwarded: $($case.Failure)"
-    $case = Invoke-LaunchCase @{Solo=$true; PrepareOnly=$true; Breacher='Off'; BreacherLevel=25}
-    Assert-Launch ($case.Failure -match 'BreacherLevel') 'Breacher Off with a development level was not rejected.'
-    $case = Invoke-LaunchCase @{Solo=$true; PrepareOnly=$true; BreacherSkills='12121'}
-    Assert-Launch ($case.Failure -match 'BreacherLevel') 'BreacherSkills without BreacherLevel was not rejected.'
-    Write-Output 'PASS: Breacher development level and skills forward together and are rejected alone or with Breacher Off.'
+    Write-Output 'PASS: removed parked-content switches cannot reach deployment.'
 
     $case = Invoke-LaunchCase @{Solo=$true; PrepareOnly=$true}
     Assert-Launch (-not $case.Failure) "Profile-driven Solo failed: $($case.Failure)"
-    foreach ($flag in @('--vr','--desktop','--map','--difficulty','--game-length','--eye-render-percent','--vr-quality','--dlss','--dlss-sharpness')) {
+    foreach ($flag in @('--vr','--desktop','--map','--difficulty','--game-length','--max-zeds','--wave-zeds-percent','--spawn-rate-percent','--eye-render-percent','--vr-quality','--dlss','--dlss-sharpness')) {
         Assert-Launch ($case.Events[-1].arguments -notcontains $flag) "Omitted preference was replaced by launcher default: $flag"
     }
-    $case = Invoke-LaunchCase @{Solo=$true; PrepareOnly=$true; MultiplayerGrabs='Off'; InventoryFocus='Off'}
+    $case = Invoke-LaunchCase @{Solo=$true; PrepareOnly=$true; InventoryFocus='Off'}
     Assert-Launch (-not $case.Failure) "Explicitly disabled hosted settings should allow Solo: $($case.Failure)"
-    Assert-Launch ($case.Events[-1].arguments -notcontains '--no-multiplayer-grabs' -and $case.Events[-1].arguments -notcontains '--no-inventory-focus') 'Disabled hosted controls leaked into Solo arguments.'
-    $case = Invoke-LaunchCase @{Solo=$true; Vr=$true; PrepareOnly=$true; PortalGun='On'}
-    Assert-Launch (-not $case.Failure -and $case.Events[-1].arguments -contains '--portal-gun') "Solo PortalGun On was not forwarded: $($case.Failure)"
-    $case = Invoke-LaunchCase @{PrepareOnly=$true; PortalGun='On'}
-    Assert-Launch ([bool]$case.Failure -and $case.Events.kind -notcontains 'launch') 'Hosted PortalGun must be rejected.'
-    $case = Invoke-LaunchCase @{Solo=$true; Vr=$true; PrepareOnly=$true; ThreadedRender='Off'}
-    Assert-Launch (-not $case.Failure -and $case.Events[-1].arguments -contains '--no-threaded-render') "ThreadedRender Off was not forwarded: $($case.Failure)"
-    $case = Invoke-LaunchCase @{Solo=$true; Desktop=$true; PrepareOnly=$true; ThreadedRender='On'}
-    Assert-Launch ([bool]$case.Failure -and $case.Events.kind -notcontains 'launch') 'Desktop ThreadedRender must be rejected.'
-    foreach ($option in @(@('SinglePass','single-pass'), @('Hbao','hbao'), @('Reflections','reflections'), @('HideBloodLens','hide-blood-lens'))) {
+    Assert-Launch ($case.Events[-1].arguments -notcontains '--no-inventory-focus') 'Disabled hosted controls leaked into Solo arguments.'
+    foreach ($option in @(@('Hbao','hbao'), @('Reflections','reflections'), @('HideBloodLens','hide-blood-lens'))) {
         foreach ($value in @('On','Off')) {
             $parameters = @{Solo=$true; Vr=$true; PrepareOnly=$true}
             $parameters[$option[0]] = $value
@@ -199,69 +224,10 @@ return $choice
     $case = Invoke-LaunchCase @{Gui=$true; DevGui=$true; PrepareOnly=$true} 7 @{Solo=$true}
     Assert-Launch ($case.Failure -match 'verification failed' -and ($case.Events.kind -join ',') -eq 'verify') 'GUI opened or launched after verification failure.'
     Write-Output 'PASS: failed freshness gate blocks Solo and GUI before launch.'
-    $case = Invoke-LaunchCase @{Gui=$true; DevGui=$true} 0 @{Solo=$true; Desktop=$true; PrepareOnly=$true; AllowStale=$false} $true
-    Assert-Launch ($case.Failure -match 'selected build is stale' -and ($case.Events.kind -join ',') -eq 'verify,gui' -and $case.Events[-1].stale) 'GUI Solo launched without stale-build consent.'
-    $case = Invoke-LaunchCase @{Gui=$true; DevGui=$true} 0 @{Solo=$true; Desktop=$true; PrepareOnly=$true; AllowStale=$true} $true
-    Assert-Launch (-not $case.Failure -and ($case.Events.kind -join ',') -eq 'verify,gui,launch') 'GUI Solo ignored explicit stale-build consent.'
-    Write-Output 'PASS: GUI receives stale status and Solo requires explicit stale-build consent.'
-
-    # CLI selections initialize the GUI, but its final choices must win.
-    $initialOptions = @{Gui=$true; DevGui=$true; Solo=$true; Vr=$true; Map='KF-Outpost'; Difficulty='Hard'; GameLength='Long'; EyeRenderPercent=75; VrQuality='balanced'}
-    $case = Invoke-LaunchCase $initialOptions 0 @{Solo=$true; Vr=$true; Desktop=$false; PrepareOnly=$true; Map='KF-Outpost'; Difficulty='Hard'; GameLength='Long'; EyeRenderPercent=75; VrQuality='balanced'}
-    Assert-Launch (-not $case.Failure -and ($case.Events.kind -join ',') -eq 'verify,gui,launch') "GUI initialization failed: $($case.Failure)"
-    $initial = $case.Events[1].initial_selections
-    foreach ($key in @('Gui','Solo','Vr','Map','Difficulty','GameLength','EyeRenderPercent','VrQuality')) {
-        Assert-Launch ($initial.PSObject.Properties.Name -contains $key -and $initial.$key -ceq $initialOptions[$key]) "Explicit $key did not reach the GUI InitialSelections."
-    }
-    foreach ($key in @('Desktop','InventoryFocus','TestMapPlayers')) {
-        Assert-Launch ($initial.PSObject.Properties.Name -notcontains $key) "Omitted $key became an explicit GUI initial selection."
-    }
-    Assert-Argument $case.Events[-1].arguments '--eye-render-percent' '75'
-    Assert-Argument $case.Events[-1].arguments '--vr-quality' 'balanced'
-
-    $case = Invoke-LaunchCase $initialOptions 0 @{Solo=$true; Vr=$false; Desktop=$true; PrepareOnly=$true; Map='KF-BurningParis'; Difficulty='Normal'; GameLength='Short'}
-    Assert-Launch (-not $case.Failure -and ($case.Events.kind -join ',') -eq 'verify,gui,launch') "GUI Desktop must clear prior VR overrides: $($case.Failure)"
-    $forwarded = $case.Events[-1].arguments
-    Assert-Launch ($forwarded -contains '--desktop' -and $forwarded -notcontains '--vr' -and $forwarded -notcontains '--eye-render-percent' -and $forwarded -notcontains '--vr-quality') 'GUI Desktop retained original VR mode or graphics overrides.'
-    Assert-Argument $forwarded '--map' 'KF-BurningParis'
-    Assert-Argument $forwarded '--difficulty' 'normal'
-    Assert-Argument $forwarded '--game-length' 'short'
-
-    foreach ($option in @('SinglePass','Hbao','Reflections','HideBloodLens')) {
-        $graphicsOptions = @{} + $initialOptions
-        $graphicsOptions[$option] = 'On'
-        $case = Invoke-LaunchCase $graphicsOptions 0 @{Solo=$true; Vr=$false; Desktop=$true; PrepareOnly=$true}
-        Assert-Launch (-not $case.Failure -and ($case.Events.kind -join ',') -eq 'verify,gui,launch') "GUI Desktop must clear ${option}: $($case.Failure)"
-        $forwarded = $case.Events[-1].arguments
-        Assert-Launch ($forwarded -contains '--desktop') 'GUI lost Desktop selection.'
-        foreach ($flag in @('--single-pass','--no-single-pass','--hbao','--no-hbao','--reflections','--no-reflections','--hide-blood-lens','--no-hide-blood-lens')) {
-            Assert-Launch ($forwarded -notcontains $flag) "GUI Desktop retained $flag."
-        }
-    }
-
-    $case = Invoke-LaunchCase $initialOptions 0 @{Solo=$true; Vr=$true; Desktop=$false; PrepareOnly=$true; VrQuality='performance'}
-    Assert-Launch (-not $case.Failure -and ($case.Events.kind -join ',') -eq 'verify,gui,launch') "GUI saved-scale choice failed: $($case.Failure)"
-    $forwarded = $case.Events[-1].arguments
-    Assert-Launch ($forwarded -contains '--vr' -and $forwarded -notcontains '--eye-render-percent') 'GUI Use saved preference retained the original explicit eye scale.'
-    Assert-Argument $forwarded '--vr-quality' 'performance'
-    Write-Output 'PASS: explicit CLI selections initialize GUI; Desktop clears VR overrides and saved scale clears an earlier explicit scale.'
-
-    # Earlier GUI revisions always returned these disabled hosted fields.
-    $case = Invoke-LaunchCase @{Gui=$true; DevGui=$true} 0 @{Solo=$true; Desktop=$true; PrepareOnly=$true; Map='KF-Outpost'; Difficulty='Hard'; GameLength='Long'; TestMapPlayers=6; InventoryFocus='Off'; MultiplayerGrabs='Off'}
-    Assert-Launch (-not $case.Failure -and ($case.Events.kind -join ',') -eq 'verify,gui,launch') "GUI Solo without server failed: $($case.Failure)"
-    Assert-Launch ($case.Events[-1].arguments -contains '--solo' -and $case.Events[-1].arguments -notcontains '--host') 'GUI Solo choice was ignored.'
-    Assert-Argument $case.Events[-1].arguments '--map' 'KF-Outpost'
-    Assert-Launch ($case.Events[-1].arguments -notcontains '--test-map-players') 'Disabled GUI scaling leaked into Solo.'
     $case = Invoke-LaunchCase @{Desktop=$true; PrepareOnly=$true}
     Assert-Launch ($case.Failure -match 'server missing' -and $case.Events.kind -notcontains 'launch') 'Host should retain its server precondition.'
     New-Item -ItemType Directory -Force -Path (Split-Path $serverExe) | Out-Null
     [IO.File]::WriteAllText($serverExe, 'test placeholder, never executed')
-    $case = Invoke-LaunchCase @{Gui=$true; DevGui=$true; Solo=$true} 0 @{Solo=$false; Desktop=$true; PrepareOnly=$true}
-    Assert-Launch (-not $case.Failure -and ($case.Events.kind -join ',') -eq 'verify,gui,launch') "GUI Host selection failed: $($case.Failure)"
-    Assert-Launch ($case.Events[-1].arguments -contains '--host' -and $case.Events[-1].arguments -notcontains '--solo') 'Arguments were built before GUI changed Solo to Host.'
-    Assert-Argument $case.Events[-1].arguments '--server-root' (Split-Path (Split-Path (Split-Path $serverExe)))
-    Write-Output 'PASS: GUI chooses Solo or Host after verification, including changing the initial mode.'
-
     foreach ($preset in @(@('quest2','performance','75'),@('quest3','performance','75'),@('quest3s','performance','75'),@('index','balanced','100'),@('high-resolution','performance','65'))) {
         foreach ($soloMode in @($false,$true)) {
             $case = Invoke-LaunchCase @{Vr=$true; Solo=$soloMode; PrepareOnly=$true; HeadsetPreset=$preset[0]}
@@ -278,7 +244,7 @@ return $choice
     Write-Output 'PASS: provisional headset bundles share Solo/Host forwarding and preserve explicit overrides.'
 
 
-    foreach ($invalid in @(@{TestMap=$true},@{Map='KF-Remilly_Test_Map'},@{InventoryFocus='On'},@{MultiplayerGrabs='On'},@{TestMapPlayers=0})) {
+    foreach ($invalid in @(@{TestMap=$true},@{Map='KF-Remilly_Test_Map'},@{InventoryFocus='On'},@{TestMapPlayers=0})) {
         $parameters = @{Solo=$true; PrepareOnly=$true}
         foreach ($key in $invalid.Keys) { $parameters[$key] = $invalid[$key] }
         $case = Invoke-LaunchCase $parameters
@@ -286,9 +252,7 @@ return $choice
     }
     $case = Invoke-LaunchCase @{Solo=$true; Gui=$true; DevGui=$true; InventoryFocus='On'} 0 @{Solo=$true; Desktop=$true; PrepareOnly=$true}
     Assert-Launch ([bool]$case.Failure -and $case.Events.kind -notcontains 'gui' -and $case.Events.kind -notcontains 'launch') 'Explicit incompatible Solo options must fail before GUI.'
-    $case = Invoke-LaunchCase @{Gui=$true; DevGui=$true; MultiplayerGrabs='On'} 0 @{Solo=$true; Desktop=$true; PrepareOnly=$true}
-    Assert-Launch ([bool]$case.Failure -and $case.Events.kind -notcontains 'launch') 'Selecting Solo in GUI must still reject an explicitly enabled hosted option.'
-    Write-Output 'PASS: Solo rejects test map, inventory focus, multiplayer grabs and explicit player scaling.'
+    Write-Output 'PASS: Solo rejects test map, inventory focus and explicit player scaling.'
     $case = Invoke-LaunchCase @{LocomotionPreview=$true; PrepareOnly=$true}
     Assert-Launch (-not $case.Failure -and $case.Events[-1].arguments -contains '--locomotion-preview' -and $case.Events[-1].arguments -contains '--desktop') 'Locomotion preview must forward desktop and the explicit replay mode.'
     foreach ($conflict in @('Solo','Vr','Gui','Menu','TestMap')) {

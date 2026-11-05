@@ -14,35 +14,52 @@ function OnOpen()
     if (V != None && V.VRSession != None) V.VRSession.bGraphicsMenuRequested = true;
 }
 
-static function ApplyComfortPolicy(out GFXSettings S)
+static function ApplyComfortPolicy(out GFXSettings S, PlayerController PC)
 {
     local GFXSettings Current;
+    local VRGameViewportClient V;
+    local int PolicyFlags;
+    PolicyFlags = int(class'VRHandsBridge'.default.bVRPostProcessAA)
+        + 2 * int(class'VRHandsBridge'.default.bVRScreenEffects);
+    if (PC != None && LocalPlayer(PC.Player) != None)
+        V = VRGameViewportClient(LocalPlayer(PC.Player).ViewportClient);
+    if (V != None && V.VRSession != None)
+        PolicyFlags = V.VRSession.RenderPolicyFlags();
     GetCurrentNativeSettings(Current);
     S.Resolution = Current.Resolution;
     S.Display = Current.Display;
+    if (V == None || V.VRSession == None || !V.VRSession.bCinematicMotionBlur)
+    {
     S.MotionBlur.MotionBlur = false;
     S.MotionBlur.MotionBlurQuality = 0;
+    }
+    if (V == None || V.VRSession == None || !V.VRSession.bCinematicDepthOfField)
+    {
     S.DepthOfField.DepthOfField = false;
     S.DepthOfField.DepthOfFieldQuality = 0;
-    S.AntiAliasing.PostProcessAA = false;
+    }
+    S.AntiAliasing.PostProcessAA = (PolicyFlags & 1) != 0;
     S.VSync.VSync = false;
     S.VariableFPS.VariableFrameRate = true;
-    S.AmbientOcclusion.AmbientOcclusion = false;
-    S.AmbientOcclusion.HBAO = false;
-    S.RealtimeReflections.bAllowScreenSpaceReflections = false;
-    S.LensFlares.bAllowLensFlares = false;
-    S.FilmGrain.FilmGrainScale = class'VRRenderSettings'.const.MIN_FILM_GRAIN_SCALE;
+    if ((PolicyFlags & 2) == 0)
+    {
+        S.AmbientOcclusion.AmbientOcclusion = false;
+        S.AmbientOcclusion.HBAO = false;
+        S.RealtimeReflections.bAllowScreenSpaceReflections = false;
+        S.LensFlares.bAllowLensFlares = false;
+        S.FilmGrain.FilmGrainScale = class'VRRenderSettings'.const.MIN_FILM_GRAIN_SCALE;
+    }
 }
 
 function GetModifiedGFXSettings(out GFXSettings S)
 {
     Super.GetModifiedGFXSettings(S);
-    ApplyComfortPolicy(S);
+    ApplyComfortPolicy(S, GetPC());
 }
 
 function SetGFXSettings(GFXSettings NewSettings)
 {
-    ApplyComfortPolicy(NewSettings);
+    ApplyComfortPolicy(NewSettings, GetPC());
     RevertedGFXSettings = CurrentGFXSettings;
     SetNativeSettings(NewSettings);
     SetScriptSettings(NewSettings);
@@ -55,6 +72,42 @@ static function UpdateGSA(GFXSettings InSettings) {}
 
 // The spatial shell exposes only editable VR-safe quality options. Read native
 // and script state for the current value; preserve the remainder when applying.
+static function int VisualCharacterIndex(CharacterDetailSetting S)
+{
+    local int I;
+    local CharacterDetailSetting P;
+    for (I = 0; I < default.CharacterDetailPresets.Length; ++I)
+    {
+        P = default.CharacterDetailPresets[I];
+        P.MaxDeadBodies = S.MaxDeadBodies; P.MaxBodyWoundDecals = S.MaxBodyWoundDecals;
+        P.ShouldCorpseCollideWithDead = S.ShouldCorpseCollideWithDead;
+        P.ShouldCorpseCollideWithLiving = S.ShouldCorpseCollideWithLiving;
+        P.ShouldCorpseCollideWithDeadAfterSleep = S.ShouldCorpseCollideWithDeadAfterSleep;
+        P.bAllowPhysics = S.bAllowPhysics;
+        if (S == P) return I;
+    }
+    return -1;
+}
+
+static function int VisualFXIndex(FXQualitySetting S)
+{
+    local int I;
+    local FXQualitySetting P;
+    for (I = 0; I < default.FXQualityPresets.Length; ++I)
+    {
+        P = default.FXQualityPresets[I];
+        P.AllowFootstepSounds = S.AllowFootstepSounds;
+        P.AllowRagdollAndGoreOnDeadBodies = S.AllowRagdollAndGoreOnDeadBodies;
+        P.GoreFXLifetimeMultiplier = S.GoreFXLifetimeMultiplier;
+        P.MaxBloodEffects = S.MaxBloodEffects; P.MaxGoreEffects = S.MaxGoreEffects;
+        P.AllowSecondaryBloodEffects = S.AllowSecondaryBloodEffects;
+        P.AllowBloodSplatterDecals = S.AllowBloodSplatterDecals;
+        P.MaxPersistentSplatsPerFrame = S.MaxPersistentSplatsPerFrame;
+        if (S == P) return I;
+    }
+    return -1;
+}
+
 static function string QualityLabel(int Option, GFXSettings S)
 {
     local int Index;
@@ -65,9 +118,9 @@ static function string QualityLabel(int Option, GFXSettings S)
         case 0: Label = "ENVIRONMENT DETAIL"; Values = default.EnvironmentDetailsStringOptions;
             Index = FindEnvironmentDetailIndex(S.EnvironmentDetail, default.EnvironmentDetailPresets); break;
         case 1: Label = "CHARACTER DETAIL"; Values = default.CharacterDetailStringOptions;
-            Index = FindCharacterDetailIndex(S.CharacterDetail, default.CharacterDetailPresets); break;
+            Index = VisualCharacterIndex(S.CharacterDetail); break;
         case 2: Label = "EFFECTS QUALITY"; Values = default.FXStringOptions;
-            Index = FindFXQualityIndex(S.FX, default.FXQualityPresets); break;
+            Index = VisualFXIndex(S.FX); break;
         case 3: Label = "TEXTURE QUALITY"; Values = default.TextureResolutionStringOptions;
             Index = FindTextureResolutionSettingIndex(S.TextureResolution, default.TextureResolutionPresets); break;
         case 4: Label = "TEXTURE FILTERING"; Values = default.TextureFilteringStringOptions;
@@ -85,52 +138,67 @@ static function string QualityLabel(int Option, GFXSettings S)
     return Label $ ": " $ ((Index >= 0 && Index < Values.Length) ? Caps(Values[Index]) : "CUSTOM");
 }
 
-static function bool CycleQuality(PlayerController PC, int Option)
+static function bool CycleQuality(PlayerController PC, int Option, optional int Target=-1)
 {
-    local GFXSettings S, After;
+    local GFXSettings S, Before, After;
     local int Index;
     if (PC == None) return false;
     GetCurrentGFXSettings(S);
+    Before = S;
     switch (Option)
     {
         case 0:
             if (default.EnvironmentDetailPresets.Length == 0) return false;
-            Index = (FindEnvironmentDetailIndex(S.EnvironmentDetail, default.EnvironmentDetailPresets) + 1) % default.EnvironmentDetailPresets.Length;
+            Index = Target >= 0 ? Target : (FindEnvironmentDetailIndex(S.EnvironmentDetail, default.EnvironmentDetailPresets) + 1) % default.EnvironmentDetailPresets.Length;
             S.EnvironmentDetail = default.EnvironmentDetailPresets[Index]; break;
         case 1:
             if (default.CharacterDetailPresets.Length == 0) return false;
-            Index = (FindCharacterDetailIndex(S.CharacterDetail, default.CharacterDetailPresets) + 1) % default.CharacterDetailPresets.Length;
+            Index = Target >= 0 ? Target : (VisualCharacterIndex(S.CharacterDetail) + 1) % default.CharacterDetailPresets.Length;
             S.CharacterDetail = default.CharacterDetailPresets[Index]; break;
         case 2:
             if (default.FXQualityPresets.Length == 0) return false;
-            Index = (FindFXQualityIndex(S.FX, default.FXQualityPresets) + 1) % default.FXQualityPresets.Length;
+            Index = Target >= 0 ? Target : (VisualFXIndex(S.FX) + 1) % default.FXQualityPresets.Length;
             S.FX = default.FXQualityPresets[Index]; break;
         case 3:
             if (default.TextureResolutionPresets.Length == 0) return false;
-            Index = (FindTextureResolutionSettingIndex(S.TextureResolution, default.TextureResolutionPresets) + 1) % default.TextureResolutionPresets.Length;
+            Index = Target >= 0 ? Target : (FindTextureResolutionSettingIndex(S.TextureResolution, default.TextureResolutionPresets) + 1) % default.TextureResolutionPresets.Length;
             S.TextureResolution = default.TextureResolutionPresets[Index]; break;
         case 4:
             if (default.TextureFilterPresets.Length == 0) return false;
-            Index = (FindTextureFilterSettingIndex(S.TextureFiltering, default.TextureFilterPresets) + 1) % default.TextureFilterPresets.Length;
+            Index = Target >= 0 ? Target : (FindTextureFilterSettingIndex(S.TextureFiltering, default.TextureFilterPresets) + 1) % default.TextureFilterPresets.Length;
             S.TextureFiltering = default.TextureFilterPresets[Index]; break;
         case 5:
             if (default.ShadowQualityPresets.Length == 0) return false;
-            Index = (FindShadowQualityIndex(S.Shadows, default.ShadowQualityPresets) + 1) % default.ShadowQualityPresets.Length;
+            Index = Target >= 0 ? Target : (FindShadowQualityIndex(S.Shadows, default.ShadowQualityPresets) + 1) % default.ShadowQualityPresets.Length;
             S.Shadows = default.ShadowQualityPresets[Index]; break;
         case 6:
             if (default.BloomPresets.Length == 0) return false;
-            Index = (FindBloomSettingIndex(S.Bloom, default.BloomPresets) + 1) % default.BloomPresets.Length;
+            Index = Target >= 0 ? Target : (FindBloomSettingIndex(S.Bloom, default.BloomPresets) + 1) % default.BloomPresets.Length;
             S.Bloom = default.BloomPresets[Index]; break;
         case 7:
             if (default.VolumetricLightingPresets.Length == 0) return false;
-            Index = (FindVolumetricLightingSettingIndex(S.VolumetricLighting, default.VolumetricLightingPresets) + 1) % default.VolumetricLightingPresets.Length;
+            Index = Target >= 0 ? Target : (FindVolumetricLightingSettingIndex(S.VolumetricLighting, default.VolumetricLightingPresets) + 1) % default.VolumetricLightingPresets.Length;
             S.VolumetricLighting = default.VolumetricLightingPresets[Index]; break;
         case 8:
             if (default.LightShaftsPresets.Length == 0) return false;
-            Index = (FindLightShaftsSettingIndex(S.LightShafts, default.LightShaftsPresets) + 1) % default.LightShaftsPresets.Length;
+            Index = Target >= 0 ? Target : (FindLightShaftsSettingIndex(S.LightShafts, default.LightShaftsPresets) + 1) % default.LightShaftsPresets.Length;
             S.LightShafts = default.LightShaftsPresets[Index]; break;
         default: return false;
     }
+    S.CharacterDetail.MaxDeadBodies = Before.CharacterDetail.MaxDeadBodies;
+    S.CharacterDetail.MaxBodyWoundDecals = Before.CharacterDetail.MaxBodyWoundDecals;
+    S.CharacterDetail.ShouldCorpseCollideWithDead = Before.CharacterDetail.ShouldCorpseCollideWithDead;
+    S.CharacterDetail.ShouldCorpseCollideWithLiving = Before.CharacterDetail.ShouldCorpseCollideWithLiving;
+    S.CharacterDetail.ShouldCorpseCollideWithDeadAfterSleep = Before.CharacterDetail.ShouldCorpseCollideWithDeadAfterSleep;
+    S.CharacterDetail.bAllowPhysics = Before.CharacterDetail.bAllowPhysics;
+    S.FX.AllowFootstepSounds = Before.FX.AllowFootstepSounds;
+    S.FX.AllowRagdollAndGoreOnDeadBodies = Before.FX.AllowRagdollAndGoreOnDeadBodies;
+    S.FX.GoreFXLifetimeMultiplier = Before.FX.GoreFXLifetimeMultiplier;
+    S.FX.MaxBloodEffects = Before.FX.MaxBloodEffects;
+    S.FX.MaxGoreEffects = Before.FX.MaxGoreEffects;
+    S.FX.AllowSecondaryBloodEffects = Before.FX.AllowSecondaryBloodEffects;
+    S.FX.AllowBloodSplatterDecals = Before.FX.AllowBloodSplatterDecals;
+    S.FX.MaxPersistentSplatsPerFrame = Before.FX.MaxPersistentSplatsPerFrame;
     // SCALE SET preserves texture group overrides and avoids resizing the
     // OpenXR viewport when the player changes a non-texture quality option.
     switch (Option)
@@ -190,11 +258,141 @@ static function bool CycleQuality(PlayerController PC, int Option)
             || S.TextureResolution.CharacterBias < 0 || S.TextureResolution.Weapon1stBias < 0
             || S.TextureResolution.Weapon3rdBias < 0 || S.TextureResolution.EnvironmentBias < 0
             || S.TextureResolution.FXBias < 0)) return false;
-        ApplyComfortPolicy(S);
+        ApplyComfortPolicy(S, PC);
         SetNativeSettings(S);
         break;
     }
     GetCurrentGFXSettings(After);
     `log("KF2VR_MENU quality=" $ Option $ " verified=" $ (After == S));
     return After == S;
+}
+
+static function AdjustShadowTuning(PlayerController PC, int Option, int Direction)
+{
+    local GFXSettings S;
+    local string Key, Value;
+    if (PC == None || Direction == 0) return;
+    GetCurrentGFXSettings(S);
+    switch (Option)
+    {
+        case 0: Key = "MaxWholeSceneDominantShadowResolution"; Value = string(Clamp(S.Shadows.MaxWholeSceneDominantShadowResolution + Direction * 256, 256, 8192)); break;
+        case 1: Key = "MaxShadowResolution"; Value = string(Clamp(S.Shadows.MaxShadowResolution + Direction * 256, 256, 8192)); break;
+        case 2: Key = "ShadowTexelsPerPixel"; Value = string(FClamp(S.Shadows.ShadowTexelsPerPixel + Direction * 0.25, 0.25, 8)); break;
+        case 3: Key = "GlobalShadowDistanceScale"; Value = string(FClamp(S.Shadows.GlobalShadowDistanceScale + Direction * 0.25, 0.25, 4)); break;
+        default: return;
+    }
+    PC.ConsoleCommand("scale set " $ Key $ " " $ Value, false);
+}
+
+static function int PresetIndex()
+{
+    local GFXSettings S;
+    local int I, Environment, Character, FX, Textures, Shadows, Lighting;
+    GetCurrentGFXSettings(S);
+    for (I = 0; I < 3; ++I)
+    {
+        Environment = I == 0 ? 3 : (I == 1 ? 1 : 0);
+        Character = I == 0 ? 2 : 1;
+        FX = I == 0 ? 3 : (I == 1 ? 1 : 0);
+        Textures = I == 0 ? 3 : 2;
+        Shadows = I == 0 ? 3 : (I == 1 ? 1 : 0);
+        Lighting = I == 0 ? 1 : 0;
+        if (S.EnvironmentDetail == default.EnvironmentDetailPresets[Environment]
+            && VisualCharacterIndex(S.CharacterDetail) == Character
+            && VisualFXIndex(S.FX) == FX
+            && S.TextureResolution == default.TextureResolutionPresets[Textures]
+            && S.TextureFiltering == default.TextureFilterPresets[3]
+            && ShadowsMatch(S.Shadows, default.ShadowQualityPresets[Shadows])
+            && S.VolumetricLighting == default.VolumetricLightingPresets[Lighting]
+            && S.LightShafts == default.LightShaftsPresets[Lighting]
+            && S.AmbientOcclusion.HBAO == (I == 0)
+            && S.RealtimeReflections.bAllowScreenSpaceReflections == (I == 0)) return I;
+    }
+    return -1;
+}
+// The groups that keep the live settings from matching preset Tier, for
+// diagnosing a CUSTOM label (#136); "match" when none do. Mirrors PresetIndex.
+static function string PresetReport(int Tier)
+{
+    local GFXSettings S;
+    local string Out;
+    GetCurrentGFXSettings(S);
+    if (S.EnvironmentDetail != default.EnvironmentDetailPresets[Tier == 0 ? 3 : (Tier == 1 ? 1 : 0)]) Out @= "environment";
+    if (VisualCharacterIndex(S.CharacterDetail) != (Tier == 0 ? 2 : 1)) Out @= "character";
+    if (VisualFXIndex(S.FX) != (Tier == 0 ? 3 : (Tier == 1 ? 1 : 0))) Out @= "fx";
+    if (S.TextureResolution != default.TextureResolutionPresets[Tier == 0 ? 3 : 2]) Out @= "textures";
+    if (S.TextureFiltering != default.TextureFilterPresets[3])
+        Out @= "filtering(" $ S.TextureFiltering.MinMagFilter $ "," $ S.TextureFiltering.MipFilter $ "," $ S.TextureFiltering.MaxAnisotropy $ ")";
+    if (!ShadowsMatch(S.Shadows, default.ShadowQualityPresets[Tier == 0 ? 3 : (Tier == 1 ? 1 : 0)]))
+        Out @= "shadows(" $ ShadowText(S.Shadows) $ " want " $ ShadowText(default.ShadowQualityPresets[Tier == 0 ? 3 : (Tier == 1 ? 1 : 0)]) $ ")";
+    if (S.VolumetricLighting != default.VolumetricLightingPresets[Tier == 0 ? 1 : 0]) Out @= "volumetric";
+    if (S.LightShafts != default.LightShaftsPresets[Tier == 0 ? 1 : 0]) Out @= "lightshafts";
+    if (S.AmbientOcclusion.HBAO != (Tier == 0)) Out @= "hbao";
+    if (S.RealtimeReflections.bAllowScreenSpaceReflections != (Tier == 0)) Out @= "reflections";
+    return Out == "" ? "match" : Mid(Out, 1);
+}
+// The engine reads per-object shadows back as off even with AllowPerObjectShadows=True
+// in the INI, so every QUALITY or BALANCED launch read CUSTOM (#136, replay probe
+// on 20261105-034409). The tiers differ in every other shadow field anyway.
+static function bool ShadowsMatch(ShadowQualitySetting Live, ShadowQualitySetting Preset)
+{
+    Live.bAllowPerObjectShadows = Preset.bAllowPerObjectShadows;
+    return Live == Preset;
+}
+static function string ShadowText(ShadowQualitySetting Q)
+{
+    return int(Q.bAllowWholeSceneDominantShadows) $ int(Q.bOverrideMapWholeSceneDominantShadowSetting)
+        $ int(Q.bAllowDynamicShadows) $ int(Q.bAllowPerObjectShadows) $ int(Q.AllowForegroundPreshadows)
+        $ "/" $ Q.MaxWholeSceneDominantShadowResolution $ "/" $ Q.MaxShadowResolution $ "/" $ Q.ShadowFadeResolution
+        $ "/" $ Q.MinShadowResolution $ "/" $ Q.ShadowTexelsPerPixel $ "/" $ Q.GlobalShadowDistanceScale;
+}
+static function string PresetLabel()
+{
+    switch (PresetIndex()) { case 0: return "QUALITY"; case 1: return "BALANCED"; case 2: return "PERFORMANCE"; }
+    return "CUSTOM";
+}
+static function ApplyDetailPreset(PlayerController PC, int Tier)
+{
+    if (PC == None) return;
+    CycleQuality(PC, 0, Tier == 0 ? 3 : (Tier == 1 ? 1 : 0));
+    CycleQuality(PC, 1, Tier == 0 ? 2 : 1);
+    CycleQuality(PC, 2, Tier == 0 ? 3 : (Tier == 1 ? 1 : 0));
+    CycleQuality(PC, 3, Tier == 0 ? 3 : 2);
+    CycleQuality(PC, 4, 3);
+    CycleQuality(PC, 5, Tier == 0 ? 3 : (Tier == 1 ? 1 : 0));
+    CycleQuality(PC, 7, Tier == 0 ? 1 : 0);
+    CycleQuality(PC, 8, Tier == 0 ? 1 : 0);
+    PC.ConsoleCommand("scale set AmbientOcclusion " $ string(Tier == 0), false);
+    PC.ConsoleCommand("scale set HBAO " $ string(Tier == 0), false);
+    PC.ConsoleCommand("scale set AllowScreenSpaceReflections " $ string(Tier == 0), false);
+}
+
+static function ToggleEffect(PlayerController PC, int Option)
+{
+    local GFXSettings S;
+    if (PC == None) return;
+    GetCurrentGFXSettings(S);
+    if (Option == 0)
+    {
+        PC.ConsoleCommand("scale set AmbientOcclusion " $ string(!S.AmbientOcclusion.HBAO), false);
+        PC.ConsoleCommand("scale set HBAO " $ string(!S.AmbientOcclusion.HBAO), false);
+    }
+    if (Option == 1) PC.ConsoleCommand("scale set AllowScreenSpaceReflections " $ string(!S.RealtimeReflections.bAllowScreenSpaceReflections), false);
+}
+
+static function TogglePhysics(PlayerController PC, int Option)
+{
+    local GFXSettings S;
+    local KFPawn P;
+    if (PC == None) return;
+    GetCurrentGFXSettings(S);
+    if (Option == 0)
+    {
+        class'KFPawn'.default.bAllowAlwaysOnPhysics = !class'KFPawn'.default.bAllowAlwaysOnPhysics;
+        foreach PC.WorldInfo.AllPawns(class'KFPawn', P) P.bAllowAlwaysOnPhysics = class'KFPawn'.default.bAllowAlwaysOnPhysics;
+        class'KFPawn'.static.StaticSaveConfig();
+    }
+    if (Option == 1) PC.ConsoleCommand("scale set ShouldCorpseCollideWithDead " $ string(!S.CharacterDetail.ShouldCorpseCollideWithDead), false);
+    if (Option == 2) PC.ConsoleCommand("scale set ShouldCorpseCollideWithLiving " $ string(!S.CharacterDetail.ShouldCorpseCollideWithLiving), false);
+    if (Option == 3) PC.ConsoleCommand("scale set ShouldCorpseCollideWithDeadAfterSleep " $ string(!S.CharacterDetail.ShouldCorpseCollideWithDeadAfterSleep), false);
 }

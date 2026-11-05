@@ -1,19 +1,24 @@
 """Console selections and host URL shared by the normal launcher."""
 from pathlib import Path
-import breacher
 from workshop_map import MAP_NAME, cached_solo_map
 from workshop_loadout import MAPS, choose_mods, launch_options, load_preferences
+from installed_map_catalog import catalog
+import range_map
 
 DIFFICULTIES = {"normal": 0, "hard": 1, "suicidal": 2, "hellonearth": 3}
 LENGTHS = {"short": 0, "medium": 1, "long": 2}
+NORMAL_GAME = "KF2VRNet.KF2VRNetGame"
+TEST_MODE_MUTATOR = "KF2VR.VRTestMode"
+# Zed spawn overrides and their stock values (UKFP settings).
+SPAWN_OPTIONS = (("max_zeds", 0), ("wave_zeds_percent", 100), ("spawn_rate_percent", 100))
 
 
 def installed_solo_maps(game):
-    """Client BrewedPC maps only; never offer downloadable Workshop entries."""
-    available = {p.stem for p in (Path(game) / "KFGame/BrewedPC/Maps").rglob("KF-*.kfm")}
-    available.difference_update(set(MAPS) | {MAP_NAME})
+    """All maps already installed for this client, including Workshop caches."""
+    available = set(catalog(game))
+    available.discard(MAP_NAME)  # Explicit test-map route retains its verified pin.
     preferred = ["KF-BurningParis", "KF-Outpost"]
-    return [m for m in preferred if m in available] + sorted(available - set(preferred))
+    return range_map.include_bundled([m for m in preferred if m in available] + sorted(available - set(preferred)))
 
 
 def resolve_solo_map(args, maps):
@@ -37,19 +42,60 @@ def installed_maps(game, server):
     client = names(game)
     # A first-time host can install its dedicated server after making choices.
     available = client & names(server) if (Path(server) / "Binaries/Win64/KFServer.exe").exists() else client
+    available.update(catalog(game))
     preferred = ["KF-BurningParis", "KF-Outpost"]
     available.update(MAPS)
-    return [m for m in preferred if m in available] + [MAP_NAME] + sorted(available - set(preferred) - {MAP_NAME})
+    return range_map.include_bundled([m for m in preferred if m in available] + [MAP_NAME] + sorted(available - set(preferred) - {MAP_NAME}))
+
+
+def add_mutator(url, mutator):
+    """Add a mutator to the URL's single ?Mutator= list; a second ?Mutator= would be ignored."""
+    marker = "?Mutator="
+    if marker not in url:
+        return url + marker + mutator
+    start = url.index(marker) + len(marker)
+    end = url.find("?", start)
+    end = len(url) if end < 0 else end
+    mutators = url[start:end].split(",")
+    if mutator not in mutators:
+        mutators.append(mutator)
+    return url[:start] + ",".join(mutators) + url[end:]
+
+
+def with_test_mode(url, args):
+    """Opt-in perk test mode; the server-side mutator reads ?KF2VRTestMode=1."""
+    if not getattr(args, "test_mode", False):
+        return url
+    return add_mutator(url, TEST_MODE_MUTATOR) + "?KF2VRTestMode=1"
+
+
+def spawn_summary(args):
+    max_zeds = getattr(args, "max_zeds", None) or 0
+    return (f"max alive {max_zeds if max_zeds else 'stock'}, "
+            f"wave size {getattr(args, 'wave_zeds_percent', None) or 100}%, "
+            f"spawn rate {getattr(args, 'spawn_rate_percent', None) or 100}%")
 
 
 def host_url(args):
     name = MAP_NAME if getattr(args, "test_map", False) else getattr(args, "map", "KF-BurningParis")
     difficulty = DIFFICULTIES[getattr(args, "difficulty", "normal")]
     length = LENGTHS[getattr(args, "game_length", "short")]
-    url = (f"{name}?Game=KF2VRNet.KF2VRNetGame?Difficulty={difficulty}?GameLength={length}"
-            + launch_options(args) + f"?VRInventoryFocus={int(getattr(args, 'inventory_focus', False))}"
-            + f"?VRMultiplayerGrabs={int(getattr(args, 'multiplayer_grabs', False))}")
-    return breacher.add_mutator(url, args) + breacher.options(args)
+    game = range_map.GAME_CLASS if name == range_map.MAP_NAME else NORMAL_GAME
+    # Spawn overrides are UKFP settings (workshop_loadout.ukfp_spawn_settings).
+    return with_test_mode(f"{name}?Game={game}?Difficulty={difficulty}?GameLength={length}"
+            + launch_options(args) + "?VRInventoryFocus=0"
+            + f"?VRMultiplayerGrabs={int(getattr(args, 'zed_grabs', None) is not False)}"
+            + f"?VRGravityPull={int(getattr(args, 'gravity_grab', None) is not False)}", args)
+
+
+def solo_url(args, vr_demo=False):
+    """Solo's local game URL; the mod options are present only when UKFP was required."""
+    game = range_map.GAME_CLASS if args.map == range_map.MAP_NAME else "KFGameContent.KFGameInfo_Survival"
+    url = (f"{args.map}?Game={game}?Difficulty={DIFFICULTIES[args.difficulty]}"
+           f"?GameLength={LENGTHS[args.game_length]}" + launch_options(args))
+    if vr_demo:
+        url = add_mutator(add_mutator(url, "KF2VR.VRBootstrap"), "KF2VR.VRDemo") + "?VRNormalGame=1"
+    return with_test_mode(url, args)
 
 
 def choose_options(args, maps, read=input, write=print):
@@ -80,16 +126,12 @@ def choose_options(args, maps, read=input, write=print):
             if not solo:
                 write(f"  7. Experimental inventory slowdown: {'On' if args.inventory_focus else 'Off'}")
                 write("  8. Mods: " + (", ".join(args.mods or []) or "none"))
-                write(f"  9. Experimental multiplayer Zed grabbing (all players): {'On' if args.multiplayer_grabs else 'Off'}")
+            write(f"  Z. Zed spawns: {spawn_summary(args)}")
             write("  Enter / 0. " + ("Prepare configuration" if args.prepare_only else "Launch game"))
-            write(f"  B. Breacher experimental mod: {'On' if getattr(args, 'breacher', False) else 'Off'} (matching local package required)")
             write("  Q. Quit")
             action = read("Selection: ").strip().lower()
             if action in ("", "0"):
                 return True
-            if action == "b":
-                args.breacher = not getattr(args, "breacher", False)
-                continue
             if action == "q":
                 return False
             if action == "1":
@@ -119,16 +161,37 @@ def choose_options(args, maps, read=input, write=print):
                 args.eye_render_percent = scales[choose("Headset render scale", ["Use saved preference"] + [f"{n}%" for n in scales[1:]], current)]
             elif action == "7" and not solo:
                 args.inventory_focus = not args.inventory_focus
-            elif action == "9" and not solo:
-                args.multiplayer_grabs = not args.multiplayer_grabs
-                write("The host's choice applies to every VR player in this session.")
             elif action == "8" and not solo:
                 if args.mods is None:
                     load_preferences(args)
                 choose_mods(args, read=read, write=write)
                 args.mods_requested = True
+            elif action == "z":
+                choose_spawns(args, read=read, write=write)
             else:
                 write("Choose one of the options shown above.")
     except (EOFError, KeyboardInterrupt):
         write("\nLaunch cancelled.")
         return False
+
+
+def choose_spawns(args, read=input, write=print):
+    """Edit the three optional spawn overrides; Enter keeps a value, 0/100 restore stock."""
+    import settings_registry
+    titles = {"max_zeds": "Max zeds alive at once (0 = stock, 10-32 by players)",
+              "wave_zeds_percent": "Zeds per wave, percent of stock (100 = stock)",
+              "spawn_rate_percent": "Spawn rate, percent (100 = stock, 200 = twice as often)"}
+    write("\nZed spawns (applied through the Unofficial KF2 Patch, which they turn on)")
+    for dest, stock in SPAWN_OPTIONS:
+        option = settings_registry.option(dest)
+        current = getattr(args, dest, None)
+        current = stock if current is None else current
+        write(titles[dest])
+        while True:
+            value = read(f"  {option.minimum}-{option.maximum} [Enter keeps {current}]: ").strip()
+            if not value:
+                break
+            if value.isdigit() and option.minimum <= int(value) <= option.maximum:
+                setattr(args, dest, int(value))
+                break
+            write(f"Please enter a whole number from {option.minimum} to {option.maximum}.")

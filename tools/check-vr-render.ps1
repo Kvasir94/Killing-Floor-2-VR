@@ -7,7 +7,7 @@ $projectRoot = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 
 if (-not $RunRoot) {
     $candidates = @()
-    foreach ($dir in @('build/portal-game-runs','build/bootstrap-runs')) {
+    foreach ($dir in @('build/combined-game-runs','build/bootstrap-runs')) {
         $path = Join-Path $projectRoot $dir
         if (Test-Path -LiteralPath $path) {
             $candidates += Get-ChildItem -LiteralPath $path -Directory -ErrorAction SilentlyContinue |

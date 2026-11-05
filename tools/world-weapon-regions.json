@@ -1,0 +1,292 @@
+{
+  "frame": "actual static pickup local UU",
+  "profiles": {
+    "KFWeap_Edged_Katana": {
+      "along": 1,
+      "across": 0,
+      "low": -21,
+      "high": 57.36148,
+      "sides": [
+        1
+      ],
+      "tip_mode": "max_along"
+    },
+    "KFWeap_Edged_Zweihander": {
+      "along": 0,
+      "across": 1,
+      "low": -12,
+      "high": 82.15498,
+      "sides": [
+        -1,
+        1
+      ],
+      "tip_mode": "max_along"
+    },
+    "KFWeap_Edged_Scythe": {
+      "along": 0,
+      "across": 1,
+      "low": -25,
+      "high": 30,
+      "sides": [
+        1
+      ],
+      "tip_mode": "scythe",
+      "maximum_y": -15,
+      "tip_seed": [
+        -25,
+        -38,
+        5.656
+      ]
+    },
+    "KFWeap_Edged_IonThruster": {
+      "along": 0,
+      "across": 1,
+      "low": -102.15597,
+      "high": -17,
+      "sides": [
+        -1,
+        1
+      ],
+      "tip_mode": "min_x"
+    },
+    "KFWeap_Edged_FireAxe": {
+      "along": 1,
+      "across": 0,
+      "low": 30.93038,
+      "high": 42.07566,
+      "sides": [
+        1
+      ],
+      "tip_mode": "pick"
+    },
+    "KFWeap_Edged_AbominationAxe": {
+      "along": 1,
+      "across": 0,
+      "low": 33.4,
+      "high": 80,
+      "sides": [
+        -1,
+        1
+      ],
+      "tip_mode": "max_along"
+    },
+    "VRWeap_Tomahawk": {
+      "along": 2,
+      "across": 0,
+      "low": 11.63933,
+      "high": 27.66857,
+      "sides": [
+        1
+      ],
+      "material": 6,
+      "tip_mode": "none",
+      "tip_axis": [
+        0,
+        0,
+        1
+      ],
+      "edge_min_z": 11.63932
+    },
+    "KFWeap_Rifle_MosinNagant": {
+      "along": 1,
+      "across": 0,
+      "low": 60,
+      "high": 94.68501282,
+      "sides": [],
+      "tip_mode": "tip_only",
+      "tip_axis": [
+        0,
+        1,
+        0
+      ]
+    },
+    "KFWeap_Pistol_Bladed": {
+      "along": 0,
+      "across": 2,
+      "low": 31,
+      "high": 48.80461121,
+      "sides": [
+        -1,
+        1
+      ],
+      "tip_mode": "none",
+      "tip_axis": [
+        1,
+        0,
+        0
+      ],
+      "face_bounds": [
+        [
+          0,
+          30,
+          100
+        ]
+      ]
+    },
+    "KFWeap_Rifle_FrostShotgunAxe": {
+      "along": 1,
+      "across": 0,
+      "low": -22.38918686,
+      "high": -2,
+      "sides": [
+        1
+      ],
+      "tip_mode": "none",
+      "tip_axis": [
+        1,
+        0,
+        0
+      ],
+      "face_bounds": [
+        [
+          0,
+          25,
+          100
+        ],
+        [
+          1,
+          -30,
+          -1.5
+        ]
+      ]
+    }
+  },
+  "visible_form_exceptions": {
+    "KFWeap_Eviscerator": "Original static pickup has no mounted forward circular cutting disc; body remains blunt."
+  },
+  "rig_frame": "first-person rig profile root at Idle frame 0 (tools/author_world_gun_rigs.py)",
+  "rig_profiles": {
+    "KFWeap_Rifle_MosinNagant": {
+      "along": 0,
+      "across": 1,
+      "low": 108,
+      "high": 152.2,
+      "sides": [],
+      "tip_mode": "tip_only",
+      "tip_axis": [
+        1,
+        0,
+        0
+      ]
+    },
+    "KFWeap_Pistol_Bladed": {
+      "along": 0,
+      "across": 1,
+      "low": 31,
+      "high": 48.80461121,
+      "sides": [
+        -1,
+        1
+      ],
+      "tip_mode": "none",
+      "tip_axis": [
+        1,
+        0,
+        0
+      ],
+      "face_bounds": [
+        [
+          0,
+          30,
+          100
+        ]
+      ]
+    },
+    "KFWeap_Rifle_FrostShotgunAxe": {
+      "along": 2,
+      "across": 0,
+      "low": -22.38918686,
+      "high": -2,
+      "sides": [
+        1
+      ],
+      "tip_mode": "none",
+      "tip_axis": [
+        1,
+        0,
+        0
+      ],
+      "face_bounds": [
+        [
+          0,
+          25,
+          100
+        ],
+        [
+          2,
+          -30,
+          -1.5
+        ]
+      ]
+    },
+    "KFWeap_Bow_CompoundBow": [
+      {
+        "kind": "edge_points",
+        "along": 2,
+        "across": 0,
+        "sides": [
+          -1,
+          1
+        ],
+        "bounds": [
+          [
+            0,
+            -7.3,
+            -5.8
+          ],
+          [
+            2,
+            10,
+            35.3
+          ]
+        ],
+        "tip": true,
+        "tip_axis": [
+          0,
+          0,
+          1
+        ]
+      },
+      {
+        "kind": "edge_points",
+        "along": 0,
+        "across": 2,
+        "sides": [
+          1
+        ],
+        "bounds": [
+          [
+            0,
+            23.1,
+            36.1
+          ],
+          [
+            2,
+            9.0,
+            15.7
+          ]
+        ]
+      },
+      {
+        "kind": "edge_points",
+        "along": 0,
+        "across": 2,
+        "sides": [
+          1
+        ],
+        "bounds": [
+          [
+            0,
+            -33.8,
+            -20.8
+          ],
+          [
+            2,
+            9.0,
+            15.7
+          ]
+        ]
+      }
+    ]
+  }
+}

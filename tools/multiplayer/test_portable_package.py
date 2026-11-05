@@ -1,7 +1,6 @@
 """Run distribution entry points using only the files selected by packaging."""
 import json
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 import zipfile
@@ -15,8 +14,9 @@ class PortablePackageTests(unittest.TestCase):
     def test_desktop_companions_use_exact_full_release_and_packages(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "candidate"
-            for name in ("Packages/KF2VR.u", "Packages/KF2VRNet.u", "Packages/KF2VRHands.upk",
-                         "docs/EPIC-DESKTOP.md", "docs/LINUX-DESKTOP.md", "tools/multiplayer/linux-desktop.sh"):
+            for name in ("Packages/KF2VR.u", "Packages/KF2VRNet.u", "Packages/KF2VRHands.upk", "Packages/KF-VRRange.kfm",
+                         "docs/EPIC-DESKTOP.md", "docs/LINUX-DESKTOP.md", "tools/multiplayer/linux-desktop.sh",
+                         "tools/multiplayer/epic_desktop_install.ps1", "tools/epic-pack/Install KF2VR for Epic.bat"):
                 path = output / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(name.encode())
@@ -32,6 +32,10 @@ class PortablePackageTests(unittest.TestCase):
                 record = json.loads(archive.read("companion.json"))
                 self.assertEqual("current-build", record["build_id"])
                 self.assertEqual(19, record["package_revision"])
+                self.assertEqual((output / "Packages/KF-VRRange.kfm").read_bytes(), archive.read("KF2VR/KF-VRRange.kfm"))
+                self.assertEqual(digest(output / "Packages/KF-VRRange.kfm"), record["files_sha256"]["KF2VR/KF-VRRange.kfm"])
+                import game_install
+                self.assertEqual(game_install.EPIC_SHA256, record["supported_epic_sha256"])
                 self.assertEqual(digest(output / "release.json"), record["release_manifest_sha256"])
                 self.assertEqual(set(record["files_sha256"]) | {"companion.json"}, set(archive.namelist()))
                 import hashlib
@@ -143,11 +147,19 @@ class PortablePackageTests(unittest.TestCase):
             self.assertEqual(selection["manifest_sha256"].lower(), hashlib.sha256(manifest).hexdigest())
 
     def test_exported_launchers_start_outside_checkout(self):
+        # The players' own runtime: the pinned embedded Python with the launcher's Qt payload.
+        from dependencies import extract_verified
+        from package import ROOT, add_qt
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "extracted package"
             copy_launcher_tools(Path(__file__).resolve().parents[2], output)
             (output / "release.json").write_text(json.dumps({"build_id": "package-test"}))
-            check_portable_launchers(output, Path(sys.executable))
+            runtime = output / "runtime"
+            archive = "python-3.14.3-embed-amd64.zip"
+            extract_verified(archive, ROOT / "build/multiplayer" / archive, runtime)
+            (runtime / "python314._pth").write_text("python314.zip\n.\n../tools/multiplayer\n", encoding="ascii")
+            add_qt(runtime)
+            check_portable_launchers(output, runtime / "python.exe")
 
 
 if __name__ == "__main__":

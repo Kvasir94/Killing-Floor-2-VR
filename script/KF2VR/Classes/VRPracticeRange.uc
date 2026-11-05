@@ -140,8 +140,6 @@ function GrantSandboxWeapon(string ClassName)
     if (Left(ClassName, 7) ~= "KFWeap_") ClassPath = "KFGameContent." $ ClassName;
     else if (Left(ClassName, 7) ~= "VRWeap_") ClassPath = "KF2VR." $ ClassName;
     else { Tell("Optional/test weapon unavailable in this sandbox."); return; }
-    // Local-only portals must not be silently granted in a network session.
-    if (ClassName ~= "VRWeap_PortalGun") { Tell("Portal gun is unsupported in network sandbox."); return; }
     WeaponClass = class<KFWeapon>(DynamicLoadObject(ClassPath, class'Class', true));
     if (WeaponClass == None) { Tell("Weapon class unavailable: " $ ClassPath); return; }
     foreach SandboxInventory.InventoryActors(class'KFWeapon', W)

@@ -47,9 +47,8 @@ def prepare(root, game, user, run, enabled, bridge):
         if digest(stage / 'Packages' / name) != digest(root / 'build/multiplayer/script' / name):
             raise RuntimeError('Refresh compiled core content stage before preparation')
     if bridge:
-        for name in ('KF2VRHands.upk', 'KF2VRPortal.upk'):
-            if not (root / 'build/multiplayer/script' / name).is_file():
-                raise RuntimeError('Missing owned bridge asset ' + name)
+        if not (root / 'build/multiplayer/script/KF2VRHands.upk').is_file():
+            raise RuntimeError('Missing owned bridge asset KF2VRHands.upk')
     args = SimpleNamespace(breacher=enabled, solo=True)
     breacher.prepare(args, stage, {'breacher_protocol': 1})
     role = role_config(run, 'driver', user, root / 'build/multiplayer/script', game, 19077, 29077,

@@ -11,7 +11,7 @@ No legal clearance of game-derived assets is claimed by this source export.
 | MinHook/HDE | Pinned source included in the curated export with upstream BSD-style/HDE notices; hashes in third_party/VERSIONS.md |
 | CPython/Microsoft components | Not in source export; playable packages retain upstream notices/licences |
 | KF2/SDK binaries and extracted/derived meshes, textures and packages | Excluded; obtain game/SDK locally under their terms |
-| Portal/Source/TF2 and other third-party content | No extracted assets included; code tools do not convey asset rights |
+| Source/TF2 and other third-party content | No extracted assets included; code tools do not convey asset rights |
 | Steam Workshop content/server/SteamCMD | Excluded; downloaded separately when requested |
 | RAVEN-7 current atlas | Original AI-generated material source included; no game texture extraction |
 | Embedded bell WAVs | CC0 BigSoundBank Boxing bell #1, trimmed/faded/normalized; included with source notice |
@@ -34,8 +34,8 @@ there is no blanket exclusion of everything in a binary file format.
 
 This project incorporates work from
 [OptimumBox/Killing-Floor-2-VR](https://github.com/OptimumBox/Killing-Floor-2-VR),
-pinned to `v0.5.0-alpha.20261011`
-(`e35ec355ae951dda72ee80b20cb1cef12345b9ac`). Keep upstream attribution and
+integrated through `v0.5.2-alpha.20261014` and distribution tree
+`68932aef5ee76b2bcc834eed4d2f3275ea4d6995`. Keep upstream attribution and
 licence notices with incorporated source and dependencies. This repository's
 public history remains independent of the private development checkout.
 The full integrated contribution areas, earlier fork pins and recorded Claude

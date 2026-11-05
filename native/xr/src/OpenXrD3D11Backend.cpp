@@ -1,4 +1,5 @@
 #include "kf2vr/xr/OpenXrD3D11Backend.h"
+#include "kf2vr/xr/HapticPlayback.h"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -109,8 +110,9 @@ struct OpenXrD3D11Backend::Impl {
     struct HapticPulse { float amplitude=0, duration=0; ULONGLONG queued=0; };
     SRWLOCK hapticLock = SRWLOCK_INIT;
     std::array<HapticPulse, 2> hapticPending{};
-    std::array<bool, 2> hapticPlaying{};
+    std::array<HapticPlayback, 2> hapticPlayback{};
     std::atomic<bool> hapticsAllowed{false};
+    std::atomic<float> hapticStrength{1.f};
     std::array<XrPath, 2> handPaths{};
     std::array<XrSpace, 2> gripSpaces{}, aimSpaces{};
     std::array<Swapchain, 2> swapchains;
@@ -123,6 +125,14 @@ struct OpenXrD3D11Backend::Impl {
     XrSwapchain quadChain = XR_NULL_HANDLE;
     XrCompositionLayerQuad quadLayer{XR_TYPE_COMPOSITION_LAYER_QUAD};
     std::atomic<std::uint64_t> quadFrames{0}, quadFailures{0};
+    // Loading-movie mirror quad; shares frameLock with the static quad.
+    std::atomic<bool> mirrorReady{false};
+    XrSwapchain mirrorChain = XR_NULL_HANDLE;
+    std::vector<ID3D11Texture2D*> mirrorImages;
+    XrCompositionLayerQuad mirrorLayer{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    std::uint32_t mirrorWidth = 0, mirrorHeight = 0;
+    std::atomic<std::uint64_t> mirrorFrames{0}, mirrorFailures{0};
+    std::vector<std::int64_t> swapchainFormats;
     std::array<XrView, 2> views{{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}}};
     std::array<XrCompositionLayerProjectionView, 2> projectionViews{};
     ComPtr<ID3D11Device> device;
@@ -163,12 +173,12 @@ struct OpenXrD3D11Backend::Impl {
         hapticPending={};
         ReleaseSRWLockExclusive(&hapticLock);
         for (unsigned hand=0;hand<2;++hand) {
-            if (hapticPlaying[hand] && running && session!=XR_NULL_HANDLE && vibration!=XR_NULL_HANDLE) {
+            if (hapticPlayback[hand].playing && running && session!=XR_NULL_HANDLE && vibration!=XR_NULL_HANDLE) {
                 XrHapticActionInfo action{XR_TYPE_HAPTIC_ACTION_INFO};
                 action.action=vibration; action.subactionPath=handPaths[hand];
                 xrStopHapticFeedback(session,&action);
             }
-            hapticPlaying[hand]=false;
+            hapticPlayback[hand].Stopped();
         }
     }
 
@@ -185,13 +195,13 @@ struct OpenXrD3D11Backend::Impl {
         const auto now=GetTickCount64();
         for (unsigned hand=0;hand<2;++hand) {
             const bool valid=hand==0?frame.handLeft.poseValid:frame.handRight.poseValid;
-            if (!valid && hapticPlaying[hand]) {
+            if (hapticPlayback[hand].ShouldStop(now,valid)) {
                 XrHapticActionInfo action{XR_TYPE_HAPTIC_ACTION_INFO};
                 action.action=vibration; action.subactionPath=handPaths[hand];
-                xrStopHapticFeedback(session,&action);
-                hapticPlaying[hand]=false;
+                if (XR_SUCCEEDED(xrStopHapticFeedback(session,&action))) hapticPlayback[hand].Stopped();
             }
             if (!valid || pending[hand].amplitude<=0 || now-pending[hand].queued>250) continue;
+            if (!hapticPlayback[hand].Allows(now,pending[hand].amplitude)) continue;
             XrHapticActionInfo action{XR_TYPE_HAPTIC_ACTION_INFO};
             action.action=vibration; action.subactionPath=handPaths[hand];
             XrHapticVibration pulse{XR_TYPE_HAPTIC_VIBRATION};
@@ -200,8 +210,9 @@ struct OpenXrD3D11Backend::Impl {
             pulse.frequency=XR_FREQUENCY_UNSPECIFIED;
             // Unsupported/disconnected haptics never interrupt frame or game
             // work. A failed receipt is discarded and is never replayed later.
-            hapticPlaying[hand]=XR_SUCCEEDED(xrApplyHapticFeedback(session,&action,
-                reinterpret_cast<const XrHapticBaseHeader*>(&pulse)));
+            hapticPlayback[hand].Applied(now,pending[hand].amplitude,pending[hand].duration,
+                XR_SUCCEEDED(xrApplyHapticFeedback(session,&action,
+                    reinterpret_cast<const XrHapticBaseHeader*>(&pulse))));
         }
     }
 
@@ -410,6 +421,7 @@ struct OpenXrD3D11Backend::Impl {
         std::vector<std::int64_t> formats(count);
         Check(xrEnumerateSwapchainFormats(session, count, &count, formats.data()), "xrEnumerateSwapchainFormats");
         formats.resize(count);
+        swapchainFormats = formats;
         constexpr DXGI_FORMAT preferred[] = {DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB};
         for (const auto format : preferred) {
             if (Contains(formats, static_cast<std::int64_t>(format))) { colorFormat = format; break; }
@@ -706,6 +718,11 @@ struct OpenXrD3D11Backend::Impl {
         if (quadChain != XR_NULL_HANDLE) xrDestroySwapchain(quadChain);
         quadChain = XR_NULL_HANDLE;
         quadLayer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+        mirrorReady.store(false, std::memory_order_release);
+        if (mirrorChain != XR_NULL_HANDLE) xrDestroySwapchain(mirrorChain);
+        mirrorChain = XR_NULL_HANDLE;
+        mirrorImages.clear();
+        mirrorLayer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
         for (auto& chain : swapchains) {
             chain.targets.clear();
             chain.depthView.Reset();
@@ -763,8 +780,9 @@ bool OpenXrD3D11Backend::Initialise(const D3D11Options& options) {
 }
 void OpenXrD3D11Backend::Shutdown() {
     auto& p = *impl_;
-    // Stop the loading-plate path first, then wait for any frame it holds.
+    // Stop the loading-plate paths first, then wait for any frame they hold.
     p.quadReady.store(false, std::memory_order_release);
+    p.mirrorReady.store(false, std::memory_order_release);
     AcquireSRWLockExclusive(&p.frameLock);
     p.Shutdown();
     ReleaseSRWLockExclusive(&p.frameLock);
@@ -777,7 +795,11 @@ struct FrameLockScope {
 };
 } // namespace
 bool OpenXrD3D11Backend::RequestHaptic(unsigned hand, float amplitude, float durationSeconds) {
-    return impl_->QueueHaptic(hand,amplitude,durationSeconds);
+    return impl_->QueueHaptic(hand,amplitude*impl_->hapticStrength.load(std::memory_order_relaxed),durationSeconds);
+}
+
+void OpenXrD3D11Backend::SetHapticStrength(float strength) {
+    impl_->hapticStrength.store(std::isfinite(strength)?std::clamp(strength,0.f,1.f):1.f,std::memory_order_relaxed);
 }
 
 bool OpenXrD3D11Backend::BeginFrame(FrameState& out) {
@@ -937,7 +959,10 @@ bool OpenXrD3D11Backend::CreateStaticQuad(std::uint32_t width, std::uint32_t hei
         p.Check(xrAcquireSwapchainImage(created, &acquire, &index), "xrAcquireSwapchainImage(static quad)");
         XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
         wait.timeout = 1000000000; // 1 s
-        p.Check(xrWaitSwapchainImage(created, &wait), "xrWaitSwapchainImage(static quad)");
+        const XrResult waitResult = xrWaitSwapchainImage(created, &wait);
+        if (waitResult == XR_TIMEOUT_EXPIRED)
+            throw std::runtime_error("xrWaitSwapchainImage(static quad) timed out after one second");
+        p.Check(waitResult, "xrWaitSwapchainImage(static quad)");
         if (index >= images.size() || !images[index].texture) throw std::runtime_error("static quad image index out of range");
         // The chosen swapchain format is RGBA or BGRA sRGB; the plate is RGBA.
         std::vector<std::uint8_t> pixels(rgba, rgba + static_cast<std::size_t>(width) * height * 4);
@@ -999,6 +1024,127 @@ OpenXrD3D11Backend::QuadFrame OpenXrD3D11Backend::SubmitStaticQuadFrame() {
         return QuadFrame::Failed;
     }
 }
+bool OpenXrD3D11Backend::CreateMirrorQuad(std::uint32_t width, std::uint32_t height, std::uint32_t backbufferDxgiFormat,
+                                          float widthMetres, float distanceMetres) {
+    auto& p = *impl_;
+    FrameLockScope frameLock(p.frameLock);
+    // A raw GPU copy needs the same typeless family; the sRGB view makes the
+    // backbuffer's display-encoded bytes read back unchanged in the headset.
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    switch (static_cast<DXGI_FORMAT>(backbufferDxgiFormat)) {
+    case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; break;
+    case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB; break;
+    default: break;
+    }
+    if (!p.initialised || p.quit || width == 0 || height == 0 || !std::isfinite(widthMetres) || !std::isfinite(distanceMetres) ||
+        widthMetres <= 0 || distanceMetres <= 0 || p.mirrorChain != XR_NULL_HANDLE || !p.context ||
+        format == DXGI_FORMAT_UNKNOWN ||
+        std::find(p.swapchainFormats.begin(), p.swapchainFormats.end(), static_cast<std::int64_t>(format)) == p.swapchainFormats.end()) {
+        p.error = "CreateMirrorQuad: backend not ready, unsupported backbuffer format or quad already created";
+        return false;
+    }
+    XrSwapchain created = XR_NULL_HANDLE;
+    try {
+        XrSwapchainCreateInfo create{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+        create.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+        create.format = format;
+        create.sampleCount = 1;
+        create.width = width;
+        create.height = height;
+        create.faceCount = 1;
+        create.arraySize = 1;
+        create.mipCount = 1;
+        p.Check(xrCreateSwapchain(p.session, &create, &created), "xrCreateSwapchain(mirror quad)");
+        std::uint32_t count = 0;
+        p.Check(xrEnumerateSwapchainImages(created, 0, &count, nullptr), "xrEnumerateSwapchainImages(mirror count)");
+        if (count == 0) throw std::runtime_error("mirror quad swapchain has no images");
+        std::vector<XrSwapchainImageD3D11KHR> images(count, {XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
+        p.Check(xrEnumerateSwapchainImages(created, count, &count,
+            reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data())), "xrEnumerateSwapchainImages(mirror)");
+        p.mirrorImages.clear();
+        for (std::uint32_t i = 0; i < count; ++i) p.mirrorImages.push_back(images[i].texture);
+        p.mirrorLayer = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+        p.mirrorLayer.layerFlags = 0;
+        p.mirrorLayer.space = p.viewSpace;
+        p.mirrorLayer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        p.mirrorLayer.subImage.swapchain = created;
+        p.mirrorLayer.subImage.imageRect = {{0, 0}, {static_cast<std::int32_t>(width), static_cast<std::int32_t>(height)}};
+        p.mirrorLayer.subImage.imageArrayIndex = 0;
+        p.mirrorLayer.pose = {{0, 0, 0, 1}, {0, 0, -distanceMetres}};
+        p.mirrorLayer.size = {widthMetres, widthMetres * static_cast<float>(height) / static_cast<float>(width)};
+        p.mirrorChain = created;
+        p.mirrorWidth = width; p.mirrorHeight = height;
+        p.mirrorReady.store(true, std::memory_order_release);
+        return true;
+    } catch (const std::exception& exception) {
+        if (created != XR_NULL_HANDLE) xrDestroySwapchain(created);
+        p.mirrorImages.clear();
+        return p.Failure(exception, false);
+    }
+}
+OpenXrD3D11Backend::QuadFrame OpenXrD3D11Backend::SubmitMirrorQuadFrame(ID3D11Texture2D* source) {
+    auto& p = *impl_;
+    if (!p.mirrorReady.load(std::memory_order_acquire)) return QuadFrame::Unavailable;
+    if (!TryAcquireSRWLockExclusive(&p.frameLock)) return QuadFrame::Busy;
+    struct Release { SRWLOCK* lock; ~Release() { ReleaseSRWLockExclusive(lock); } } release{&p.frameLock};
+    if (p.ownerFrameOpen.load(std::memory_order_acquire) || p.frameBegun || !p.initialised || !p.running || p.quit ||
+        !p.mirrorReady.load(std::memory_order_acquire)) return QuadFrame::Busy;
+    // Only same-size, single-sample sources copy; anything else shows the plate.
+    bool copyable = false;
+    if (source) {
+        D3D11_TEXTURE2D_DESC desc{};
+        source->GetDesc(&desc);
+        copyable = desc.Width == p.mirrorWidth && desc.Height == p.mirrorHeight && desc.SampleDesc.Count == 1 &&
+            desc.ArraySize == 1;
+    }
+    try {
+        XrFrameWaitInfo wait{XR_TYPE_FRAME_WAIT_INFO};
+        XrFrameState state{XR_TYPE_FRAME_STATE};
+        p.Check(xrWaitFrame(p.session, &wait, &state), "xrWaitFrame(mirror quad)");
+        XrFrameBeginInfo begin{XR_TYPE_FRAME_BEGIN_INFO};
+        p.Check(xrBeginFrame(p.session, &begin), "xrBeginFrame(mirror quad)");
+        // A begun frame is always ended, with whichever layer is valid.
+        bool mirrored = false;
+        if (copyable && state.shouldRender != XR_FALSE) {
+            std::uint32_t index = 0;
+            XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+            if (XR_SUCCEEDED(xrAcquireSwapchainImage(p.mirrorChain, &acquire, &index))) {
+                XrSwapchainImageWaitInfo imageWait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+                imageWait.timeout = 100000000; // 100 ms
+                if (xrWaitSwapchainImage(p.mirrorChain, &imageWait) == XR_SUCCESS && index < p.mirrorImages.size() &&
+                    p.mirrorImages[index]) {
+                    p.context->CopySubresourceRegion(p.mirrorImages[index], 0, 0, 0, 0, source, 0, nullptr);
+                    mirrored = true;
+                }
+                // Released even after a failed wait; an image that missed its
+                // copy is not shown this frame.
+                XrSwapchainImageReleaseInfo releaseImage{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+                if (XR_FAILED(xrReleaseSwapchainImage(p.mirrorChain, &releaseImage))) mirrored = false;
+            }
+        }
+        const bool plate = !mirrored && p.quadReady.load(std::memory_order_acquire);
+        const XrCompositionLayerBaseHeader* layers[] = {
+            reinterpret_cast<const XrCompositionLayerBaseHeader*>(mirrored ? &p.mirrorLayer : &p.quadLayer)
+        };
+        XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
+        end.displayTime = state.predictedDisplayTime;
+        end.environmentBlendMode = p.blendMode;
+        const bool submit = state.shouldRender != XR_FALSE && (mirrored || plate);
+        end.layerCount = submit ? 1u : 0u;
+        end.layers = submit ? layers : nullptr;
+        p.Check(xrEndFrame(p.session, &end), "xrEndFrame(mirror quad)");
+        if (mirrored) p.mirrorFrames.fetch_add(1, std::memory_order_relaxed);
+        else if (plate) p.quadFrames.fetch_add(1, std::memory_order_relaxed);
+        return QuadFrame::Submitted;
+    } catch (const std::exception&) {
+        // As the static plate: give up on the mirror after repeated refusals.
+        if (p.mirrorFailures.fetch_add(1, std::memory_order_relaxed) + 1 >= 8)
+            p.mirrorReady.store(false, std::memory_order_release);
+        return QuadFrame::Failed;
+    }
+}
+std::uint64_t OpenXrD3D11Backend::MirrorQuadFrames() const { return impl_->mirrorFrames.load(std::memory_order_relaxed); }
+std::uint64_t OpenXrD3D11Backend::MirrorQuadFailures() const { return impl_->mirrorFailures.load(std::memory_order_relaxed); }
 std::uint64_t OpenXrD3D11Backend::StaticQuadFrames() const { return impl_->quadFrames.load(std::memory_order_relaxed); }
 std::uint64_t OpenXrD3D11Backend::StaticQuadFailures() const { return impl_->quadFailures.load(std::memory_order_relaxed); }
 void OpenXrD3D11Backend::RequestExit() {

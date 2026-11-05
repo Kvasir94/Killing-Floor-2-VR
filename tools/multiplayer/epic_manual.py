@@ -11,14 +11,41 @@ import time
 
 import friends
 import game_install
+import machine_settings
+import launcher_events
 from epic_launch import resolve_target
 from epic_launch_options import prepare_session
 from epic_session import PendingEpicLaunch
 from epic_broker import EpicBroker
 from native_fixture import NativeDeployment
-from session import digest, read_ini, set_ini, config_hashes
+from launch_support import digest, read_ini, set_ini, config_hashes
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def owner_running(broker, milliseconds=0):
+    """Only an authenticated held handle can establish ordinary session exit."""
+    if broker.ticket.owner is None or not broker.owner_handle:
+        raise RuntimeError('No authenticated Epic process to observe')
+    state = broker.kernel.WaitForSingleObject(broker.owner_handle, milliseconds)
+    if state not in (0, 258):
+        raise OSError('Cannot verify owned Epic process exit; native files retained')
+    return state == 258
+
+
+def restore_native_files(deployment, broker=None, worker=None):
+    # A still-running handoff can admit another peer after a process-list check.
+    # Stop it first, then retain files unless every observed held handle exited.
+    if worker is not None and worker.is_alive():
+        raise RuntimeError('Epic handoff is still active; native files retained')
+    if broker is not None and not broker.observed_peers_exited():
+        raise RuntimeError('Cannot verify all observed Epic peers exited; native files retained')
+    # Handles cover observed peers only. Keep the existing global check for a
+    # game/editor/server that never reached the authenticated pipe.
+    no_game()
+    errors = deployment.restore()
+    if errors:
+        raise RuntimeError('; '.join(errors))
 
 
 def align_identical_defaults(configs, game):
@@ -83,8 +110,6 @@ def validate_options(args):
         return
     if not args.solo or not args.vr or args.host or args.address:
         raise RuntimeError('Epic currently supports menu-first Solo VR only. Epic Host, Join and Desktop are unverified and unavailable.')
-    if getattr(args, 'single_pass', False):
-        raise RuntimeError('Single-pass stereo is Steam-only. Turn it OFF for Epic Solo VR.')
     if args.record_motion or args.promo_events:
         raise RuntimeError('Epic motion recording and highlight logging are unavailable in this alpha. Turn both OFF; Steam supports them.')
     if args.local_test_control or args.replay_teammate or args.avatar_preview or args.locomotion_preview or args.duration:
@@ -94,12 +119,13 @@ def validate_options(args):
 def configure_menu_first(role, args):
     # Epic ignores an appended positional URL. Keep KFMainMenu as the frontend
     # identity and carry the SAME Solo gameplay options through stock travel.
-    # Clearing LocalOptions (old D) loses VRBootstrap; replacing LocalMap (old C)
+    # Clearing LocalOptions (old D) loses the match options; replacing LocalMap (old C)
     # makes a gameplay map the frontend. Both defaults live only in session INIs.
     url = role['args'][0]
     _, separator, options = url.partition('?')
-    if not separator or '?Mutator=KF2VR.VRBootstrap,KF2VR.VRDemo' not in url or '?VRNormalGame=1' not in url:
-        raise RuntimeError('Solo VR gameplay bootstrap is missing; no native deployment.')
+    if not separator or not any('?Game=' + game in url for game in
+                               ('KFGameContent.KFGameInfo_Survival', 'KF2VRNet.KF2VRRangeGame')):
+        raise RuntimeError('Solo VR match options are missing; no native deployment.')
     engine = Path(role['config_root'])/'KFEngine.ini'
     engine.write_text(set_ini(read_ini(engine), 'URL', {
         'LocalMap': 'KFMainMenu', 'LocalOptions': '?'+options}), encoding='utf-16')
@@ -139,7 +165,7 @@ def run_session(args, manifest, install):
             print('In Epic, remove the KF2-VR Launch Options and restore your previous text/switch setting.')
             return
         if (install.executable.parent/'dinput8.dll').exists():
-            raise RuntimeError('A proxy is already installed. Close its launcher or select Epic > Fix a stuck session.')
+            raise RuntimeError('A proxy is already installed. Close its launcher or press Help > Restore.')
         friends.validate_play_mode(args)
         friends.preflight({**manifest, 'game_sha256': game_install.EPIC_SHA256}, install.root, True)
         args.mods = []
@@ -148,7 +174,9 @@ def run_session(args, manifest, install):
         friends.resolve_solo_map(args, friends.installed_solo_maps(install.root))
         if args.map not in friends.installed_solo_maps(install.root):
             raise ValueError('Choose an installed stock solo map; default is KF-BurningParis.')
-        friends.breacher.prepare(args, ROOT, manifest)
+        # The selected map is already installed; this mounts its companion
+        # packages in the isolated session without downloading Workshop mods.
+        friends.prepare_content(args, install.root, install.root)
         import winreg
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders') as key:
             user = Path(os.path.expandvars(winreg.QueryValueEx(key, 'Personal')[0]))/'My Games/KillingFloor2/KFGame/Config'
@@ -171,10 +199,7 @@ def run_session(args, manifest, install):
             print('No deployment or live Launch Options. Start KF2-VR and select Epic / Play solo when ready.')
             return
         friends.save_preferences(args)
-        settings_path = ROOT/'settings.json'
-        settings = json.loads(settings_path.read_text(encoding='utf-8')) if settings_path.exists() else {}
-        settings.update(game_root=str(install.root), store='epic')
-        settings_path.write_text(json.dumps(settings, indent=2), encoding='utf-8')
+        machine_settings.save({'game_root': str(install.root), 'store': 'epic'}, getattr(args, 'profile_root', None))
         print('\nOpen Epic Library > Killing Floor 2 > Manage > Launch Options.')
         print('Save any previous Launch Options locally, then replace the field with the generated line below. Keep your headset runtime ready.')
         print('Epic opens the stock frontend. Choose Play Solo Offline, your map/difficulty/length, then perk and Ready.')
@@ -203,6 +228,8 @@ def run_session(args, manifest, install):
             raise RuntimeError('Epic broker could not start: '+str(broker.error))
         print('\nCOPY THIS ENTIRE SINGLE LINE into Epic Launch Options, replacing your saved previous text; switch it ON:\n')
         print('Epic Launch Options: '+plan.prepared, flush=True)
+        launcher_events.emit(epic_options=plan.prepared)
+        launcher_events.phase('epic-options')
         print('\nAlso saved in: '+str(option_path))
         print('Now click Launch in EPIC yourself. Keep this window open while playing.', flush=True)
         while worker.is_alive():
@@ -210,16 +237,14 @@ def run_session(args, manifest, install):
         if broker.error:
             raise RuntimeError('Epic session handoff failed: '+str(broker.error))
         print('Epic game connected. Headset playtest is ready; exit KF2 normally when finished.', flush=True)
-        while broker.kernel.WaitForSingleObject(broker.owner_handle, 250) == 258:
+        launcher_events.phase('epic-connected')
+        while owner_running(broker, 250):
             pass
         record['status'] = 'game_exited'
+        friends.save_preferences(args)
         friends.export_preferences(Path(role['config_root']), root=getattr(args, 'profile_root', None), network=False)
         record['preferences_saved'] = True
-        friends.save_preferences(args)
-        settings_path = ROOT/'settings.json'
-        settings = json.loads(settings_path.read_text(encoding='utf-8')) if settings_path.exists() else {}
-        settings.update(game_root=str(install.root), store='epic')
-        settings_path.write_text(json.dumps(settings, indent=2), encoding='utf-8')
+        machine_settings.save({'game_root': str(install.root), 'store': 'epic'}, getattr(args, 'profile_root', None))
         record['user_config_preserved'] = config_hashes(user) == before
         save(output, record)
     finally:
@@ -229,10 +254,7 @@ def run_session(args, manifest, install):
             worker.join(6)
         if deployment:
             try:
-                no_game()
-                errors = deployment.restore()
-                if errors:
-                    raise RuntimeError('; '.join(errors))
+                restore_native_files(deployment, broker, worker)
                 record['cleanup_complete'] = True
                 save(output, record)
                 print('Temporary native files restored.')
@@ -241,7 +263,7 @@ def run_session(args, manifest, install):
                 record.update(cleanup_complete=False, cleanup_error=cleanup_failure)
                 save(output, record)
                 print('Files preserved: '+str(error))
-                print('After exiting all KF2 processes, select Epic > Fix a stuck session.')
+                print('After every KF2 window has closed, press Help > Restore.')
             print('In Epic, remove the KF2-VR Launch Options and restore your previous text/switch setting before ordinary play.')
         if broker and (not worker or not worker.is_alive()):
             broker.close()

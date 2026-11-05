@@ -38,7 +38,7 @@ def append_defaults(text, field, entries):
 
 
 def integrate(snapshot):
-    """Source, Portal and combined builders share this registration step.
+    """Source and combined builders share this registration step.
 
     Never patch tracking, input or rendering branches in VRHandsBridge. Those
     call VRTrackedWeapon/VRTrackedPresentation; Source classes own behavior.

@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import desktop_settings
 import friends
 import launch_menu
-import launch_state
 import workshop_loadout as loadout
 import workshop_map
 from session import config_hashes, read_ini
@@ -23,6 +22,18 @@ from workshop_map import MAP_NAME
 
 
 class SoloLauncherTests(unittest.TestCase):
+    def test_range_uses_network_game_and_viewport_in_solo(self):
+        user = self.root / "user"
+        user.mkdir()
+        (user / "KFEngine.ini").write_text("[Core.System]\nPaths=stock\n")
+        (user / "KFGame.ini").write_text("[KFGame.KFGameInfo]\n")
+        args = self.options("--solo", "--vr", "--map", "KF-VRRange")
+        role = friends.configure_role(self.root / "range", "driver", user, self.root / "game", args)
+        self.assertTrue(role["args"][0].startswith("KF-VRRange?Game=KF2VRNet.KF2VRRangeGame?"))
+        engine = values(read_ini(Path(role["config_root"]) / "KFEngine.ini"), "Engine.Engine")
+        self.assertEqual("KF2VRNetClient.KF2VRNetViewportClient", engine["GameViewportClientClassName"])
+        self.assertNotIn("-kf2vr-network", role["args"])
+
     def cached_remilly_fixture(self):
         path = self.root / "cache" / workshop_map.ITEM_ID / "0/Unpublished/BrewedPC" / (MAP_NAME + ".kfm")
         path.parent.mkdir(parents=True)
@@ -35,8 +46,8 @@ class SoloLauncherTests(unittest.TestCase):
             args = self.options("--solo", "--vr", "--store", "steam", *selector)
             self.assertTrue(args.test_map)
             self.assertFalse(args.host)
-            self.assertEqual(([], 0, False, False),
-                             (args.mods, args.test_map_players, args.inventory_focus, args.multiplayer_grabs))
+            self.assertEqual(([], 0, False),
+                             (args.mods, args.test_map_players, args.inventory_focus))
             for store in ("auto", "epic"):
                 with self.subTest(store=store), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     friends.parse_options(["--solo", "--vr", "--store", store, *selector])
@@ -64,6 +75,32 @@ class SoloLauncherTests(unittest.TestCase):
             copy.assert_not_called()
             run.assert_not_called()
 
+    def test_menu_remilly_reads_cache_then_steamcmd_in_place(self):
+        steam = self.root / "steamcmd"
+        with patch.object(workshop_map.shutil, "copy2") as copy, \
+                patch.object(workshop_map.subprocess, "run") as run:
+            self.assertIsNone(workshop_map.installed_map(self.root / "cache", steam))
+            download = steam / "steamapps/workshop/content/232090" / workshop_map.ITEM_ID / "BrewedPC" / (MAP_NAME + ".kfm")
+            download.parent.mkdir(parents=True)
+            download.write_bytes(b"\xc1\x83\x2a\x9e" + b"download" * 200)
+            self.assertEqual(download, workshop_map.installed_map(self.root / "cache", steam))
+            cached, _ = self.cached_remilly_fixture()
+            self.assertEqual(cached, workshop_map.installed_map(self.root / "cache", steam))
+            copy.assert_not_called()
+            run.assert_not_called()
+
+    def test_vr_driver_mounts_menu_remilly_without_test_map(self):
+        user = self.root / "user"
+        user.mkdir()
+        (user / "KFEngine.ini").write_text("[Core.System]\nPaths=stock\nSeekFreePCPaths=stock\nBrewedPCPaths=stock\n")
+        (user / "KFGame.ini").write_text("[KFGame.KFGameInfo]\n")
+        cached, _ = self.cached_remilly_fixture()
+        args = self.options("--solo", "--vr")
+        args.menu_map_path = cached
+        role = friends.configure_role(self.root / "menu", "driver", user, self.root / "game", args)
+        text = read_ini(Path(role["config_root"]) / "KFEngine.ini")
+        self.assertIn("Paths=" + str(cached.parent), text)
+
     def test_solo_remilly_uses_isolated_paths_and_stock_local_game_without_auto_cheats(self):
         self.save_profile(map="KF-Outpost")
         path, expected = self.cached_remilly_fixture()
@@ -79,7 +116,7 @@ class SoloLauncherTests(unittest.TestCase):
         self.assertEqual((MAP_NAME, True, path), (args.map, args.test_map, args.test_map_path))
         role = friends.configure_role(self.root / "run", "driver", user, self.root / "game", args)
         self.assertTrue(role["args"][0].startswith(MAP_NAME + "?Game=KFGameContent.KFGameInfo_Survival"))
-        self.assertIn("VRNormalGame=1", role["args"][0])
+        self.assertNotIn("?Mutator=", role["args"][0])
         self.assertNotIn("-kf2vr-network", role["args"])
         self.assertNotIn("enablecheats", " ".join(role["args"]).lower())
         config = read_ini(Path(role["config_root"]) / "KFEngine.ini")
@@ -110,7 +147,7 @@ class SoloLauncherTests(unittest.TestCase):
             controller = values(text, "KF2VRNet.KF2VRNetPlayerController")
             self.assertEqual("false", controller["bDiagnosticSyntheticAutoStart"])
             if mode == "--solo":
-                self.assertIn("vrnormalgame=1", command)
+                self.assertNotIn("?mutator=", command)
                 self.assertEqual({"bNormalGame": "True", "bRenderDiagnostic": "False"}, values(text, "KF2VR.VRDemo"))
         self.assertEqual(before, config_hashes(user))
 
@@ -125,12 +162,14 @@ class SoloLauncherTests(unittest.TestCase):
         saved = {"vr": True, "map": "KF-BurningParis", "difficulty": "hard",
                  "game_length": "long", "vr_quality": "balanced", "mods": ["ukfp", "yas"],
                  "damage_popups": True, "test_map_players": 6,
-                 "inventory_focus": True, "multiplayer_grabs": True}
+                 "inventory_focus": True}
         saved.update(overrides)
         (self.profile / "launcher.json").write_text(json.dumps(saved), encoding="utf-8")
         return saved
 
     def options(self, *flags):
+        if "--host" in flags:
+            flags = (*flags, "--no-workshop-desktop")  # This fixture has no published core package.
         args = friends.parse_options(["--prepare-only", *flags])
         args.profile_root = self.profile
         args.cache_root = self.root / "cache"
@@ -147,14 +186,17 @@ class SoloLauncherTests(unittest.TestCase):
             (maps / (name + ".kfm")).write_bytes(b"map fixture")
         return game
 
-    def test_solo_maps_require_client_files_and_exclude_host_workshop_content(self):
+    def test_solo_maps_include_installed_workshop_content(self):
         game = self.install_maps("KF-ZedLanding", "KF-Outpost", "KF-BurningParis", "KF-AshwoodAsylum",
                                  MAP_NAME, *loadout.MAPS)
         outside = game / "KFGame/Cache/other"
         outside.mkdir(parents=True)
         (outside / "KF-CacheOnly.kfm").write_bytes(b"map fixture")
-        self.assertEqual(["KF-BurningParis", "KF-Outpost", "KF-AshwoodAsylum", "KF-ZedLanding"],
-                         launch_menu.installed_solo_maps(game))
+        with patch('installed_map_catalog.user_game_root', return_value=self.root / 'user-game'):
+            found = launch_menu.installed_solo_maps(game)
+        self.assertEqual(["KF-BurningParis", "KF-Outpost"], found[:2])
+        self.assertEqual({"KF-BurningParis", "KF-Outpost", "KF-AshwoodAsylum", "KF-ZedLanding",
+                          "KF-CacheOnly", *loadout.MAPS}, set(found))
         self.assertEqual([], launch_menu.installed_solo_maps(self.root / "missing-game"))
 
     def test_saved_map_falls_back_but_explicit_or_empty_catalog_is_rejected(self):
@@ -181,21 +223,19 @@ class SoloLauncherTests(unittest.TestCase):
         previous = self.save_profile()
         solo = self.options("--solo")
         self.assertTrue(solo.vr)
-        self.assertEqual(([], False, 0, False, False),
-                         (solo.mods, solo.damage_popups, solo.test_map_players,
-                          solo.inventory_focus, solo.multiplayer_grabs))
+        self.assertEqual(([], False, 0, False),
+                         (solo.mods, solo.damage_popups, solo.test_map_players, solo.inventory_focus))
         solo.map, solo.difficulty, solo.game_length, solo.vr_quality = "KF-Outpost", "suicidal", "medium", "performance"
         loadout.save_preferences(solo)
         saved = json.loads((self.profile / "launcher.json").read_text(encoding="utf-8"))
-        for key in ("mods", "damage_popups", "test_map_players", "inventory_focus", "multiplayer_grabs"):
+        for key in ("mods", "damage_popups", "test_map_players", "inventory_focus"):
             self.assertEqual(previous[key], saved[key], key)
         host = self.options("--host")
         self.assertTrue(host.vr)
         self.assertEqual(("KF-Outpost", "suicidal", "medium", "performance"),
                          (host.map, host.difficulty, host.game_length, host.vr_quality))
-        self.assertEqual((previous["mods"], True, 6, True, True),
-                         (host.mods, host.damage_popups, host.test_map_players,
-                          host.inventory_focus, host.multiplayer_grabs))
+        self.assertEqual((previous["mods"], True, 6, True),
+                         (host.mods, host.damage_popups, host.test_map_players, host.inventory_focus))
 
     def test_join_stays_desktop_without_an_explicit_vr_request(self):
         self.save_profile(vr=True)
@@ -244,21 +284,11 @@ class SoloLauncherTests(unittest.TestCase):
                 read=lambda _: next(answers), write=output.append))
         mods_menu.assert_not_called()
         self.assertFalse(any(re.match(r"\s+[789]\.", line) for line in output))
-        self.assertEqual(([], False, False), (args.mods, args.inventory_focus, args.multiplayer_grabs))
+        self.assertEqual(([], False), (args.mods, args.inventory_focus))
         self.assertTrue(args.map_requested)
         self.assertEqual("KF-Outpost", args.map)
         with self.assertRaises(RuntimeError):
             launch_menu.resolve_solo_map(args, ["KF-BurningParis"])
-
-    def test_launch_state_exposes_client_solo_maps_separately_from_host_maps(self):
-        self.save_profile()
-        game = self.install_maps("KF-Outpost", MAP_NAME, next(iter(loadout.MAPS)))
-        with patch.object(loadout, "profile_root", return_value=self.profile):
-            state = launch_state.describe(game, self.root / "server", self.root / "package")
-        self.assertEqual(["KF-Outpost"], state["solo_maps"])
-        self.assertIn(MAP_NAME, state["maps"])
-        self.assertIn(next(iter(loadout.MAPS)), state["maps"])
-        self.assertEqual(state, json.loads(json.dumps(state)))
 
     def test_solo_and_host_keep_the_same_graphics_and_eye_preferences(self):
         self.save_profile()
@@ -283,8 +313,8 @@ class SoloLauncherTests(unittest.TestCase):
         configs = [Path(role["config_root"]) for role in roles]
         settings = [values(read_ini(path / "KFSystemSettings.ini"), "SystemSettings") for path in configs]
         self.assertEqual(settings[0], settings[1])
-        self.assertEqual("False", settings[0]["DynamicShadows"])
-        self.assertEqual("0.8", settings[0]["MaxDrawDistanceScale"])
+        self.assertEqual("True", settings[0]["DynamicShadows"])
+        self.assertEqual("1.0", settings[0]["MaxDrawDistanceScale"])
         self.assertEqual("3", settings[0]["TextureDetail"])
         for path, role in zip(configs, roles):
             text = read_ini(path / "KFGame.ini")
@@ -297,6 +327,36 @@ class SoloLauncherTests(unittest.TestCase):
         for role in roles:
             self.assertNotIn("-NOINI", role["args"])
             self.assertTrue(any(a.startswith("-GAMEINI=") and a.endswith("KFGame.ini") for a in role["args"]))
+
+    def test_legacy_standing_profiles_cannot_enable_solo_host_or_join(self):
+        self.save_profile(standing_holds=True, multiplayer_grabs=True)
+        user = self.root / "user"
+        user.mkdir()
+        (user / "KFEngine.ini").write_text("[Core.System]\nPaths=stock\nScriptPaths=stock\n"
+            "SeekFreePCPaths=stock\nBrewedPCPaths=stock\n", encoding="utf-16")
+        (user / "KFGame.ini").write_text("[Engine.AccessControl]\n", encoding="utf-16")
+        sections = ("KF2VR.VRHandsBridge", "KF2VRNetClient.KF2VRNetHandsBridge")
+        (self.profile / "KFGame.ini").write_text("".join(f"[{section}]\nbExperimentalStandingHolds=True\n"
+            "bExperimentalInteractions=True\nbZedGrabEnabled=True\n" for section in sections), encoding="utf-16")
+        for mode in ("--solo", "--host", "--address"):
+            with self.subTest(mode=mode):
+                argv = (mode, "example.test") if mode == "--address" else (mode,)
+                match = () if mode == "--address" else ("--map", "KF-Outpost")
+                args = self.options(*argv, "--vr", "--mods", "none", *match)
+                if mode == "--host":
+                    server = friends.configure_role(self.root / "server", "server", user, self.root / "game", args)
+                    server_text = read_ini(Path(server["config_root"]) / "KFGame.ini")
+                    self.assertEqual("false", values(server_text, "KF2VRNet.KF2VRNetGame")["bMultiplayerZedGrabAllowed"])
+                role = friends.configure_role(self.root / mode[2:], "driver", user, self.root / "game", args)
+                text = read_ini(Path(role["config_root"]) / "KFGame.ini")
+                for section in sections:
+                    self.assertEqual("False", values(text, section)["bExperimentalStandingHolds"])
+                    self.assertEqual("True", values(text, section)["bExperimentalInteractions"])
+                    self.assertEqual("True", values(text, section)["bZedGrabEnabled"])
+                loadout.save_dlss_preferences(args)
+                saved = json.loads((self.profile / "launcher.json").read_text())
+                self.assertNotIn("standing_holds", saved)
+                self.assertNotIn("multiplayer_grabs", saved)
 
     def test_hosted_server_and_player_raise_the_stock_net_rate_caps(self):
         self.save_profile(vr=False, mods=[])

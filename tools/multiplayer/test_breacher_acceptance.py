@@ -13,6 +13,11 @@ def log(enabled=True, bridge=False):
 
 
 class AcceptanceParserTests(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import patch
+        gate = patch("stable_features.experimental_content_enabled", return_value=True)
+        gate.start(); self.addCleanup(gate.stop)
+
     def test_child_launch_reuses_ue3_quoting_and_clears_inherited_fixture_controls(self):
         role = {'exe': 'D:/Game Folder/KFGame.exe', 'native_adapter': False,
                 'args': ['KF-BurningParis', '-ENGINEINI=D:/Run Folder/KFEngine.ini']}
@@ -65,8 +70,7 @@ class AcceptanceParserTests(unittest.TestCase):
                 for name in ('KF2VR.u', 'KF2VRNet.u', 'KF2VRNetClient.u'):
                     (folder / name).write_bytes(b'core compiled bytes')
             optional = stage / 'optional/breacher'
-            for name in ('KF2VRHands.upk', 'KF2VRPortal.upk'):
-                (root / 'build/multiplayer/script' / name).write_bytes(b'owned asset bytes')
+            (root / 'build/multiplayer/script/KF2VRHands.upk').write_bytes(b'owned asset bytes')
             (optional / 'Localization/INT').mkdir(parents=True)
             (optional / 'KF2Breacher.u').write_bytes(b'\xc1\x83\x2a\x9eoptional')
             (optional / 'manifest.json').write_text(json.dumps({'protocol': 1, 'sha256': digest(optional / 'KF2Breacher.u')}))

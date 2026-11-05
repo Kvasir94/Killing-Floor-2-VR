@@ -12,8 +12,22 @@ int main() {
         return session+"\t"+std::string(32,id)+"\t"+op+"\t7\t"+arg+"\t"+std::to_string(count);
     };
     Request request;
+    assert(FreshRequest(100,100));
+    assert(FreshRequest(100,100+60ULL*10000000));
+    assert(!FreshRequest(100,101+60ULL*10000000));
+    assert(!FreshRequest(101,100));
+    assert(!FreshRequest(100,200,150));
+    assert(!FreshRequest(150,200,150));
+    assert(FreshRequest(151,200,150));
     assert(Parse(wire('b'),request));
     assert(!Parse(wire('b',"exec","EnableCheats"),request));
+    assert(Parse(wire('b',"console","set Engine.GameInfo GameSpeed 0.5"),request));
+    assert(Parse(wire('b',"console","exec \"../test commands.txt\""),request));
+    assert(Parse(wire('b',"console",std::string(384,'x')),request));
+    assert(!Parse(wire('b',"console",std::string(385,'x')),request));
+    for (auto text : {"", "   ", "god\tquit", "god\nquit", "god\rquit"})
+        assert(!Parse(wire('b',"console",text),request));
+    assert(!Parse(wire('b',"console","god",1),request));
     assert(!Parse(wire('b',"give-one","../anything",1),request));
     assert(!Parse(wire('b',"give-one","Shotty;Quit",1),request));
     assert(!Parse(wire('b',"spawn-zeds","scrake",7),request));
@@ -59,10 +73,40 @@ int main() {
     assert(policy.Apply(wire('0'),2000,execute)=="error\tcontrols_off");
     assert(!policy.Enable(session,true,true));
     Policy asynchronous;
+    Policy console;
+    assert(console.Enable(session,true,true));
+    unsigned commands=0;
+    auto dispatch=[&](const Request& r) { ++commands; assert(r.argument=="god"); return "ok\tconsole_dispatched=1"; };
+    const auto command=wire('a',"console","god");
+    assert(console.Apply(command,0,dispatch).starts_with("ok\t"));
+    assert(console.Apply(command,1000,dispatch).starts_with("ok\t") && commands==1);
+    assert(console.Apply(wire('a',"console","ghost"),2000,dispatch)=="error\tid_conflict" && commands==1);
     assert(asynchronous.Enable(session,true,true));
     assert(asynchronous.Apply(wire('1'),0,[](const Request&) { return "pending\tqueued=132"; }).starts_with("pending\t"));
     assert(asynchronous.Complete(std::string(32,'1'),"ok\tgranted=132"));
     assert(!asynchronous.Complete(std::string(32,'1'),"error\tchanged_result"));
     assert(asynchronous.Apply(wire('1'),500,execute)=="ok\tgranted=132" && effects==2);
-    std::cout << "local test policy: allowlist, bounds, opt-in, session, dedup, conflict, rate, uncertain effect, disable passed\n";
+    Policy travel;
+    assert(!travel.Suspend() && !travel.Resume(session,true,true));
+    assert(travel.Enable(session,true,true));
+    assert(travel.Apply(wire('2'),1000,execute)==first && effects==3);
+    assert(travel.Suspend() && travel.Suspended() && !travel.Enabled());
+    assert(!travel.Suspend());
+    assert(travel.Apply(wire('3'),1500,execute)=="error\tcontrols_off" && effects==3);
+    assert(travel.Apply(wire('2'),1500,execute)==first && effects==3);
+    assert(!travel.Resume(std::string(32,'f'),true,true));
+    assert(!travel.Resume(session,false,true));
+    assert(!travel.Resume(session,true,false));
+    assert(travel.Resume(session,true,true) && travel.Enabled());
+    assert(!travel.Resume(session,true,true));
+    assert(travel.Apply(wire('2'),1600,execute)==first && effects==3);
+    assert(travel.Apply(wire('2',"status"),1600,execute)=="error\tid_conflict");
+    // Travel does not reset the rate limit or let a closed session revive.
+    assert(travel.Apply(wire('3'),1200,execute)=="error\trate_limited" && effects==3);
+    // A fresh action remains valid after days in the same opted-in process.
+    assert(travel.Apply(wire('5'),7ULL*24*60*60*1000,execute)==first && effects==4);
+    assert(travel.Suspend()); travel.Close();
+    assert(!travel.Suspended() && !travel.Resume(session,true,true));
+    assert(travel.Apply(wire('4'),2000,execute)=="error\tcontrols_off" && effects==4);
+    std::cout << "local test policy: allowlist, bounds, opt-in, session, dedup, conflict, rate, uncertain effect, disable, travel suspension and request freshness passed\n";
 }

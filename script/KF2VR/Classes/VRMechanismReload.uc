@@ -15,23 +15,32 @@ var VRReloadHandPose ActionPose;
 var AnimNodeSequence HeldNode;
 var SkeletalMeshComponent HeldMesh;
 var bool bActive, bReturning, bSavedPause, bSavedNotifies, bPaid, bControlsBound, bAnimationHeld;
+var bool bBindPermanentFailure;
 var int BoundRevision, AmmoAtBegin;
 var float Amount, EntryTime, TurnTime, ReturnTime, HintSince;
 var vector GrabOffset;
 var KFWeapon RejectedGun;
-var AkEvent ExtendSound, RetractSound, CompleteSound;
-var StaticMeshComponent HintMesh;
-var MaterialInstanceConstant HintMaterial;
+var AkEvent ExtendSound, RetractSound, CompleteSound, CompleteLayerSound;
+var VRReloadPartGlow PipeHints[2];
 
 function Initialize(VRInteractiveReload O)
 {
+    local int I;
     super.Initialize(O);
     ActionPose = new(self) class'VRReloadHandPose';
+    for (I = 0; I < ArrayCount(PipeHints); ++I)
+    {
+        PipeHints[I] = new(self) class'VRReloadPartGlow';
+        PipeHints[I].Initialize(O);
+    }
 }
 
+// Husk Cannon and HRG Vampire reload with the button only (Kvasir94,
+// 2026-10-22: no pipe grab). Their stock reload runs as in the flat game;
+// the Vampire's still goes through its acknowledged authority transport.
 function bool Enabled()
 {
-    return Owner != None && Bridge != None && Owner.Enabled();
+    return false;
 }
 
 static function bool Supported(KFWeapon W)
@@ -42,16 +51,24 @@ static function bool Supported(KFWeapon W)
 // The server-owned Vampire reuses the authored pipe presentation, but has a
 // separate acknowledged transaction instead of this client timer/accounting path.
 function bool AcceptsGun(KFWeapon W) { return Supported(W); }
-function bool ReadyForBind() { return Gun.IsTimerActive('ReloadStatusTimer'); }
+function bool ReadyForBind()
+{
+    // Do not take over a stock reload after its ammo has already been paid.
+    // Stock initializes this counter from finite reserve even in infinite
+    // mode. A zero reserve must not let the timers bypass the pipe stroke.
+    return Gun.IsTimerActive('ReloadAmmoTimer') && Gun.IsTimerActive('ReloadStatusTimer')
+        && (Gun.ReloadAmountLeft > 0 || (Gun.bInfiniteSpareAmmo
+            && Gun.AmmoCount[0] < Gun.MagazineCapacity[0]));
+}
 
 function bool SessionValid()
 {
     return bActive && Enabled() && Owner.InputOwner.ContextValid()
         && Gun != None && !Gun.bDeleteMe && Runtime != None && Runtime.IsCurrent()
-        && Runtime.Item == Gun && Runtime.PrimaryHand == GunHand
+        && Runtime.Item == Gun && GunHand >= 0 && GunHand <= 1
         && Runtime.OwnershipRevision == BoundRevision
-        && Owner.InputOwner.Inventory.Registry.GetPrimary(GunHand) == Runtime
-        && Owner.InputOwner.Inventory.Registry.GetPrimary(OffHand()) == None
+        && Owner.InputOwner.Inventory.GetHeldForHand(GunHand) == Runtime
+        && Owner.InputOwner.Inventory.GetHeldForHand(OffHand()) == None
         && Gun.MySkelMesh == HeldMesh && HeldMesh.Animations == Tree
         && Gun.WeaponAnimSeqNode == HeldNode && Gun.IsInState('Reloading')
         && !Gun.IsInState('AltReloading');
@@ -119,6 +136,8 @@ function bool SampleMechanism()
         { BackAt = Clip.Notifies[I].Time; RetractSound = Event.AkEvent; }
         else if (InStr(string(Event.AkEvent), "Reload_FWD") >= 0)
         { FinishAt = Clip.Notifies[I].Time; CompleteSound = Event.AkEvent; }
+        else if (Event.AkEvent.Name == 'Play_WEP_Husk_Cannon_Flame_Full')
+            CompleteLayerSound = Event.AkEvent;
     }
     if (!(ForwardAt > 0 && BackAt > ForwardAt && FinishAt > BackAt))
     { Bridge.DetachComponent(Outward.Ref); return false; }
@@ -190,6 +209,7 @@ function bool SampleSpan(VRActionPath Target, float First, float Last, vector Co
 function bool Bind(VRWeaponRuntime R, int Hand)
 {
     local int I;
+    bBindPermanentFailure = false;
     if (R == None || !AcceptsGun(R.Item) || R.Item.MySkelMesh == None
         || !R.Item.IsInState('Reloading') || R.Item.IsInState('AltReloading')) return false;
     Runtime = R; Gun = R.Item; GunHand = Hand;
@@ -201,20 +221,22 @@ function bool Bind(VRWeaponRuntime R, int Hand)
     Tree = AnimTree(HeldMesh.Animations);
     if (!FreeActionHand() || Tree == None || Tree == HeldMesh.AnimTreeTemplate
         || HeldNode == None || HeldNode != Gun.WeaponAnimSeqNode || HeldNode.bIsIssuingNotifies
-        || !ReadyForBind() || !SampleMechanism()) return false;
+        || HeldMesh.SkeletalMesh == None || Bridge.Arms == None || Bridge.FreeHandPose == None
+        || !Bridge.FreeHandPose.bReady || !ReadyForBind()) return false;
+    if (!SampleMechanism()) { bBindPermanentFailure = true; return false; }
     // All sampling/asset validation precedes timer or live-control mutation.
     Parts.Length = 0;
     for (I = 0; I < 2; ++I)
     {
         AddPart(Outward.Ref, Outward.Bones[I], true);
-        if (Parts.Length != I + 1) return false;
+        if (Parts.Length != I + 1) { bBindPermanentFailure = true; return false; }
     }
     bSavedPooling = Tree.bEnablePooling;
     bControlsBound = true;
     for (I = 0; I < Parts.Length; ++I)
     {
         Parts[I].Control = AppendControl(Parts[I].Bone);
-        if (Parts[I].Control == None) return false;
+        if (Parts[I].Control == None) { bBindPermanentFailure = true; return false; }
     }
     Tree.bEnablePooling = false;
     HeldMesh.InitSkelControls();
@@ -274,10 +296,16 @@ function Update()
         if (!Enabled() || Owner.bActive || !Owner.InputOwner.ContextValid()) return;
         for (Hand = 0; Hand < 2; ++Hand)
         {
-            R = Owner.InputOwner.Inventory.Registry.GetPrimary(Hand);
+            R = Owner.InputOwner.Inventory.GetHeldForHand(Hand);
             if (R == None || !R.IsCurrent() || R.Item == RejectedGun || !Supported(R.Item)
                 || !R.Item.IsInState('Reloading')) continue;
-            if (!Bind(R, Hand)) { RejectedGun = R.Item; Unbind(); }
+            if (!Bind(R, Hand))
+            {
+                // Live nodes and hand rigs can become ready on a later tick.
+                // Only invalid assets retire this reload from physical binding.
+                if (bBindPermanentFailure) RejectedGun = R.Item;
+                Unbind();
+            }
             break;
         }
     }
@@ -343,11 +371,12 @@ function Complete()
     W = Gun;
     SoundAt = Contact();
     PlayPumpSound(RetractSound);
-    // Pay once through stock accounting. Never assign AmmoCount, SpareAmmo,
-    // ReloadAmountLeft or Vampire's blood resource from this helper.
+    // Pay once through stock accounting. Infinite reserve still needs the
+    // ordered client count restatement after stock's reload-end bookkeeping.
     W.ClearTimer('ReloadAmmoTimer'); W.ClearTimer('ReloadStatusTimer');
     RestoreAnimation();
-    W.PerformReload(0);
+    class'VRPouchAmmo'.static.PerformPhysicalReload(W,
+        Max(W.MagazineCapacity[0] - W.AmmoCount[0], 0), Runtime);
     W.ReloadComplete();
     if (W.IsInState('Active') && W.IdleAnims.Length > 0)
     {
@@ -355,6 +384,8 @@ function Complete()
         W.ToggleAdditiveBobAnim(!W.bUsingSights);
     }
     if (CompleteSound != None) W.PlayAkEvent(CompleteSound, true, false, false,
+        class'VRReloadAudio'.static.NearField(Bridge, SoundAt));
+    if (CompleteLayerSound != None) W.PlayAkEvent(CompleteLayerSound, true, false, false,
         class'VRReloadAudio'.static.NearField(Bridge, SoundAt));
     Owner.Pulse(3, 1.0, 0.08);
     Unbind();
@@ -387,7 +418,7 @@ function Unbind()
     RestoreAnimation();
     bActive = false;
     if (ActionPose != None) ActionPose.Cancel();
-    if (HintMesh != None) HintMesh.SetHidden(true);
+    HidePipeHints();
     // Do not run VRManualPump's ammunition/chamber bookkeeping.
     Runtime = None;
     // A failed preflight never installed controls or owned this AnimTree.
@@ -395,7 +426,7 @@ function Unbind()
     super.Unbind();
     bControlsBound = false;
     Outward = None; ReturnPath = None; HeldNode = None; HeldMesh = None;
-    ExtendSound = None; RetractSound = None; CompleteSound = None;
+    ExtendSound = None; RetractSound = None; CompleteSound = None; CompleteLayerSound = None;
     bReturning = false; Amount = 0;
 }
 
@@ -407,7 +438,7 @@ function PlaceVisuals()
     local int I;
     if (!SessionValid())
     {
-        if (HintMesh != None) HintMesh.SetHidden(true);
+        HidePipeHints();
         if (ActionPose != None) ActionPose.Cancel();
         return;
     }
@@ -433,33 +464,40 @@ function PlaceVisuals()
     PlaceHint();
 }
 
-// A stock-material marker identifies the actual next contact; no fictional
-// magazine prop or whole-gun glow is created for these pipes.
+function HidePipeHints()
+{
+    local int I;
+    for (I = 0; I < ArrayCount(PipeHints); ++I)
+        if (PipeHints[I] != None) PipeHints[I].Hide();
+}
+
+// Both original pipe surfaces carry the same amber action cue as a bolt or
+// lever. Each follows its own live bone throughout extension and return.
 function PlaceHint()
 {
-    local vector At, TowardEye;
+    local float Phase, Alpha;
     if (!Bridge.bReloadHints || bEngaged || Owner.Now() - HintSince < Owner.HintDelay)
-    { if (HintMesh != None) HintMesh.SetHidden(true); return; }
-    if (HintMesh == None)
-    {
-        HintMaterial = new(Bridge) class'MaterialInstanceConstant';
-        HintMaterial.SetParent(Material'WEP_AutoTurret_EMIT.Turret_Laser_Dot_SM_PM');
-        HintMaterial.SetScalarParameterValue('0blue_1red', 1);
-        HintMesh = Owner.MakeComponent(StaticMesh'FX_Wep_Laser_MESH.laser_dot_SM', HintMaterial);
-    }
-    At = Contact(); TowardEye = Normal(Bridge.HeadPosition - At);
-    HintMesh.SetDepthPriorityGroup(HeldMesh.DepthPriorityGroup);
-    HintMesh.SetTranslation(At + TowardEye * 1.5);
-    HintMesh.SetRotation(rotator(-TowardEye)); HintMesh.SetScale(1.5);
-    HintMesh.SetHidden(false); HintMesh.ForceUpdate(true);
+    { HidePipeHints(); return; }
+    Phase = ((Owner.Now() - HintSince - Owner.HintDelay) / FMax(Owner.GlowPulse, 0.05)) % 2.0;
+    Alpha = Owner.GlowAlpha * (0.35 + 0.65 * (0.5 - 0.5 * Cos(Phase * Pi)));
+    PipeHints[0].Place(Gun, "Pipe1", 'RW_Barrel01', Alpha, true);
+    PipeHints[1].Place(Gun, "Pipe2", 'RW_Barrel02', Alpha, true);
+}
+
+function string ReloadPrompt(KFWeapon W)
+{
+    if (W != Gun || !AcceptsGun(W) || !SessionValid() || !Bridge.bReloadHints) return "";
+    if (!bEngaged) return "GRIP PIPE";
+    return bReturning ? "RETURN PIPE" : "EXTEND PIPE";
 }
 
 function Shutdown()
 {
+    local int I;
     Abort();
     if (ActionPose != None) { ActionPose.Destroy(); ActionPose = None; }
-    if (HintMesh != None && Bridge != None) Bridge.DetachComponent(HintMesh);
-    HintMesh = None; HintMaterial = None;
+    for (I = 0; I < ArrayCount(PipeHints); ++I)
+        if (PipeHints[I] != None) { PipeHints[I].Shutdown(); PipeHints[I] = None; }
     Owner = None; Bridge = None;
 }
 

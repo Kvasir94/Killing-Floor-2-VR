@@ -61,11 +61,11 @@ simulated function bool InitializePanel(VRSpatialHUD NewOwner, int Index)
         || ParentMaterial.BlendMode != BLEND_Translucent || ParentMaterial.bDisableDepthTest
         || !ParentMaterial.GetTextureParameterValue('Texture_D', ExistingTexture)) return false;
     // Each texture matches its quad's aspect (weapon readout 12 x 4.8 cm is
-    // 2.5:1), and native HudTextAlpha registers exactly these twelve panels.
+    // 2.5:1), and native HudTextAlpha registers exactly these fourteen panels.
     // Panel 5, the pouch counter, shares the weapon readout target size;
-    // panels 6-11 are 512 x 256 teammate tags.
-    Height = Index == 0 ? 512 : ((Index < 3 || Index == 5) ? 320 : (Index == 3 ? 512 : 256));
-    Width = Index == 0 ? 1024 : ((Index < 3 || Index == 5) ? 800 : (Index >= 6 ? 512 : 1024));
+    // panels 6-11 are 512 x 256 teammate tags; 12 is the second pouch card.
+    Height = (Index == 0 || Index == 3 || Index == 13) ? 512 : ((Index < 3 || Index == 5 || Index == 12) ? 320 : 256);
+    Width = (Index == 0 || Index == 13) ? 1024 : ((Index < 3 || Index == 5 || Index == 12) ? 800 : (Index >= 6 ? 512 : 1024));
     Display = ScriptedTexture(class'ScriptedTexture'.static.Create(Width, Height, PF_A8R8G8B8, MakeLinearColor(0,0,0,0)));
     if (Display == None) return false;
     // The target already performs sRGB encoding. A second Canvas gamma
@@ -82,7 +82,7 @@ simulated function bool InitializePanel(VRSpatialHUD NewOwner, int Index)
     DisplayMaterial.SetScalarParameterValue('Scalar_Glow_Intensity', Index == 0 ? 0.6 : 0.24);
     DisplayMaterial.SetScalarParameterValue('Scalar_Opacity', 1.0);
     Surface.SetMaterial(0, DisplayMaterial);
-    Surface.SetDepthPriorityGroup((Index == 3 || Index == 4) ? SDPG_Foreground : SDPG_World);
+    Surface.SetDepthPriorityGroup((Index == 3 || Index == 4 || Index == 13) ? SDPG_Foreground : SDPG_World);
     SetCollisionType(COLLIDE_NoCollision);
     SetCollision(false, false);
     Surface.SetActorCollision(false, false);
@@ -112,7 +112,14 @@ simulated function bool InitializePanel(VRSpatialHUD NewOwner, int Index)
 simulated function RenderDisplay(Canvas C)
 {
     if (DisplayOwner == None || C == None) return;
-    DisplayOwner.RenderPanel(PanelIndex, C);
+    if (!DisplayOwner.RenderPanel(PanelIndex, C))
+    {
+        // A cleared startup target is not a completed replacement. Retry when
+        // initialization/value sampling has supplied actual content.
+        bDrawn = false;
+        if (Display != None) Display.bNeedsUpdate = true;
+        return;
+    }
     bDrawn = true;
     // Survives content invalidation during a weapon swap. Stock suppression
     // follows resource readiness, while bDrawn prevents stale spatial values.

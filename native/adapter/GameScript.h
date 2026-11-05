@@ -188,6 +188,19 @@ public:
         if (!Accessible(object,0x58)) return nullptr;
         return reinterpret_cast<Find>(base_+(explicitProfile_ ? profile_.findFunction : build::Rva(profile_.findFunction)))(object,Intern(function),0);
     }
+    // ProcessInternal dispatches remote calls before interpreting bytecode.
+    // Reserved weapon markers intercepted at its entry still need that step,
+    // but must never fall through to stock ammo assignment if no route exists.
+    // Pinned client/server dispatch slots are 0x230/0x228 respectively.
+    bool DispatchRemote(void* object,void* function,const void* parameters) {
+        const auto slot=profile_.processEventSlot+0x18;
+        if (!Accessible(object,sizeof(void*)) || !function || !parameters) return false;
+        auto* table=At<void*>(object,0);
+        if (!Accessible(table,slot+sizeof(void*))) return false;
+        using Dispatch=int(*)(void*,void*,const void*,void*);
+        auto dispatch=At<Dispatch>(table,slot);
+        return dispatch && dispatch(object,function,parameters,nullptr)!=0;
+    }
     bool Invoke(void* object,void* function,void* parameters) {
         if (!Accessible(object,0x58) || !Accessible(function,0xf8) ||
             At<std::uint16_t>(function,0xd4)!=0) return false;

@@ -256,15 +256,11 @@ simulated function ConfigureTrackedPresentation(VRHandsBridge B)
 // is away the hand keeps its grip but the rig's axe bone is hidden.
 simulated function UpdateTrackedPresentation(VRHandsBridge B)
 {
-    local int Bone;
     ApplyMaterials();
     if (MySkelMesh == None) return;
-    Bone = MySkelMesh.MatchRefBone('RW_Weapon');
     // On the draw frame the rig is not yet attached and its visibility array
-    // is empty; IsBoneHidden/HideBone then fail a native bounds assertion.
-    if (Bone == INDEX_NONE || !MySkelMesh.bAttached || Bone >= MySkelMesh.BoneVisibilityStates.Length) return;
-    if (bAxeAway && !MySkelMesh.IsBoneHidden(Bone)) MySkelMesh.HideBone(Bone, PBO_None);
-    else if (!bAxeAway && MySkelMesh.IsBoneHidden(Bone)) MySkelMesh.UnHideBone(Bone);
+    // is empty; VRBoneVisibility leaves it until the arrays exist.
+    class'VRBoneVisibility'.static.SetVisible(MySkelMesh, 'RW_Weapon', !bAxeAway);
 }
 
 simulated event Tick(float DeltaTime)
@@ -286,6 +282,7 @@ reliable server function ServerThrow(int Hand, vector At, vector Measured, rotat
     local vector Center;
     P = KFPawn_Human(Instigator);
     if (P == None || P.Health <= 0 || P.Controller == None || P.Controller.Pawn != P
+        || !class'VRPhysicalInteraction'.static.Allowed(P)
         || Owner != P || InvManager != P.InvManager || Hand < 0 || Hand > 1
         || !CanThrowHand(self, Hand) || bAxeAway || ThrownAxe != None || WorldInfo.RealTimeSeconds < NextThrowTime
         || !class'VRGrenadeThrow'.static.Bounded(At - P.Location, 240)

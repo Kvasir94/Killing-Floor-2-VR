@@ -1,6 +1,6 @@
 # Alpha feedback: what we most want to hear
 
-Post public bug reports in GitHub Issues. Say which store, headset,
+Post public bug reports in [GitHub Issues](https://github.com/Kvasir94/Killing-Floor-2-VR/issues). Say which headset,
 GPU and play mode (Solo / Host / Join, VR / Desktop) you used, and attach the
 "Save logs for a bug report" ZIP when something broke. Review it before sharing.
 Short, specific answers beat long ones:
@@ -19,7 +19,8 @@ Short, specific answers beat long ones:
   Where did it break?
 - Melee and punches: do swings register when you expect? Is hit-stop satisfying
   or does it feel like lag? Are gun bashes discoverable?
-- Physical reloads default OFF (VR SETTINGS > INTERACTION > RELOAD MODE).
+- Physical reloads are off by default; the default is button reloads
+  (VR SETTINGS > Reloading).
   If you selected Physical or Physical + Pump: which weapons felt right, which
   felt fiddly, and would you want this on by default once the whole arsenal has it?
 - Manual pump (shotguns): fun or chore?
@@ -44,21 +45,21 @@ Short, specific answers beat long ones:
   what you expected? Up stands from a stick crouch before jumping.
 - Seated players: does seated mode put the floor and menus where you need them?
 
-## 4. Hands, holsters and grabbing
+## 4. Hands and support carry
 
-- Body holsters are OFF by default. If you turned them on: are the slots where
-  your hands naturally go? Did you grab the wrong thing?
 - Transfer/brace grip defaults to Latched; support grip defaults to Hold.
   Which choices do you prefer and why? Primary items stay equipped either way.
-- Zed grabbing (Solo ON by default): fun, overpowered, or janky? Would you
-  want it on in multiplayer?
+- With support-hand carry enabled, can you work bolts/pumps and regrip without
+  losing the weapon or its paid ammunition?
 - The new glove hands and watch art: do they look right at arm's length and
   under map lighting? Any clipping with weapons?
 
 ## 5. Performance
 
-- With the default Performance tier at 100% render scale, what frame rate did
+- With the default Quality preset at 100% render scale, what frame rate did
   you get, and on what GPU and headset? Did you raise or lower either setting?
+- DLSS is on Auto by default. On what GPU did VR Settings > Graphics show
+  DLSS running, and did it look right or soft?
 - Which maps or situations tanked frame rate (big waves, fire, boss)?
 - Quest users: Link, Air Link, Virtual Desktop or Steam Link, and did one
   behave noticeably better?
@@ -74,7 +75,7 @@ Short, specific answers beat long ones:
 
 ## 7. Open design questions (opinions welcome)
 
-- Should Performance / 100% stay the default, or should first launch pick a
+- Should Quality / 100% stay the default, or should first launch pick a
   preset per headset?
 - Should the VR menu open on the Menu button, the two-stick chord, or both?
 - Is anything here that we should drop entirely rather than polish?

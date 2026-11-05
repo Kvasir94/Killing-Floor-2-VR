@@ -1,5 +1,11 @@
 # Offline native input replay
 
+> **Explicit-request diagnostic only.** This format/reference is not a build
+> gate or routine playtest workflow. Run or extend runtime automation only when
+> explicitly requested; follow [contributor workflow](../AGENTS.md).
+> Examples do not establish compatibility or headset/online acceptance for a
+> different package. Normal play uses the release launcher.
+
 This developer input source feeds the normal `VRHandsBridge.NativeHandsUpdate`
 callback. The production bridge converts poses and updates `HandInventory` once
 per game tick. Replays must not also write bridge inputs, call inventory updates,

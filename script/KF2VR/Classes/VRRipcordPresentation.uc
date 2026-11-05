@@ -409,11 +409,7 @@ simulated function bool InSpans(array<HiddenSpan> Spans, float T)
 
 simulated function ShowBone(name Bone, bool bShow)
 {
-    local int Index;
-    Index = Rig.MatchRefBone(Bone);
-    if (Index == INDEX_NONE || Index >= Rig.BoneVisibilityStates.Length || Rig.IsBoneHidden(Index) != bShow) return;
-    if (bShow) Rig.UnHideBone(Index);
-    else Rig.HideBone(Index, PBO_None);
+    class'VRBoneVisibility'.static.SetVisible(Rig, Bone, bShow);
 }
 
 // Tracer glow along the take's GlowKeys; the seated hook hidden while it is out on the line.

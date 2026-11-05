@@ -1,0 +1,950 @@
+{
+  "schema": "kf2vr/retained-ammo-test-plan/1",
+  "purpose": "Scenario plan and enumerated source catalog, not runtime acceptance or source-text regression assertions",
+  "detailed_recovery_plan": "tools/replay/ammo_recovery_plan.json",
+  "presets": {
+    "Classic": {
+      "id": 0,
+      "physical": false,
+      "manual": false,
+      "free_cycle": false,
+      "chamber": false,
+      "loss": false,
+      "recovery": false,
+      "support_carry": true
+    },
+    "Interactive": {
+      "id": 1,
+      "physical": true,
+      "manual": true,
+      "free_cycle": false,
+      "chamber": false,
+      "loss": false,
+      "recovery": false,
+      "support_carry": true
+    },
+    "Advanced": {
+      "id": 2,
+      "physical": true,
+      "manual": true,
+      "free_cycle": true,
+      "chamber": true,
+      "loss": true,
+      "recovery": true,
+      "support_carry": true
+    },
+    "Custom": {
+      "id": 3,
+      "policy": "preserve independently configured choices; test all chamber/loss/recovery combinations"
+    }
+  },
+  "catalogs": {
+    "VRReloadCatalog": [
+      {
+        "index": 0,
+        "weapon": "KFWeap_Pistol_Colt1911",
+        "catalog_flags": {}
+      },
+      {
+        "index": 1,
+        "weapon": "KFWeap_Pistol_Deagle",
+        "catalog_flags": {}
+      },
+      {
+        "index": 2,
+        "weapon": "KFWeap_Pistol_Medic",
+        "catalog_flags": {}
+      },
+      {
+        "index": 3,
+        "weapon": "KFWeap_AssaultRifle_AK12",
+        "catalog_flags": {}
+      },
+      {
+        "index": 4,
+        "weapon": "KFWeap_AssaultRifle_Bullpup",
+        "catalog_flags": {}
+      },
+      {
+        "index": 5,
+        "weapon": "KFWeap_Pistol_9mm",
+        "catalog_flags": {}
+      },
+      {
+        "index": 6,
+        "weapon": "KFWeap_Rifle_M14EBR",
+        "catalog_flags": {}
+      },
+      {
+        "index": 7,
+        "weapon": "KFWeap_Shotgun_AA12",
+        "catalog_flags": {}
+      },
+      {
+        "index": 8,
+        "weapon": "KFWeap_SMG_Medic",
+        "catalog_flags": {}
+      },
+      {
+        "index": 9,
+        "weapon": "KFWeap_AssaultRifle_AR15",
+        "catalog_flags": {}
+      },
+      {
+        "index": 10,
+        "weapon": "KFWeap_AssaultRifle_SCAR",
+        "catalog_flags": {}
+      },
+      {
+        "index": 11,
+        "weapon": "KFWeap_SMG_MP7",
+        "catalog_flags": {}
+      },
+      {
+        "index": 12,
+        "weapon": "KFWeap_SMG_Kriss",
+        "catalog_flags": {}
+      },
+      {
+        "index": 13,
+        "weapon": "KFWeap_SMG_P90",
+        "catalog_flags": {}
+      },
+      {
+        "index": 14,
+        "weapon": "KFWeap_AssaultRifle_Thompson",
+        "catalog_flags": {
+          "ActionKind": "1"
+        }
+      },
+      {
+        "index": 15,
+        "weapon": "KFWeap_SMG_Mac10",
+        "catalog_flags": {
+          "ActionKind": "1"
+        }
+      },
+      {
+        "index": 16,
+        "weapon": "KFWeap_AssaultRifle_G36C",
+        "catalog_flags": {}
+      },
+      {
+        "index": 17,
+        "weapon": "KFWeap_ZedMKIII",
+        "catalog_flags": {
+          "ActionKind": "2"
+        }
+      },
+      {
+        "index": 18,
+        "weapon": "KFWeap_HRG_Stunner",
+        "catalog_flags": {}
+      },
+      {
+        "index": 19,
+        "weapon": "KFWeap_Shotgun_S12",
+        "catalog_flags": {}
+      },
+      {
+        "index": 20,
+        "weapon": "KFWeap_SMG_HK_UMP",
+        "catalog_flags": {
+          "ActionKind": "3"
+        }
+      },
+      {
+        "index": 21,
+        "weapon": "KFWeap_SMG_MP5RAS",
+        "catalog_flags": {
+          "ActionKind": "3"
+        }
+      },
+      {
+        "index": 22,
+        "weapon": "KFWeap_Shotgun_Medic",
+        "catalog_flags": {}
+      },
+      {
+        "index": 23,
+        "weapon": "KFWeap_AssaultRifle_Medic",
+        "catalog_flags": {}
+      },
+      {
+        "index": 24,
+        "weapon": "KFWeap_Pistol_G18C",
+        "catalog_flags": {}
+      },
+      {
+        "index": 25,
+        "weapon": "KFWeap_HRG_93R",
+        "catalog_flags": {}
+      },
+      {
+        "index": 26,
+        "weapon": "KFWeap_HRG_Energy",
+        "catalog_flags": {
+          "ActionKind": "2"
+        }
+      },
+      {
+        "index": 27,
+        "weapon": "KFWeap_AssaultRifle_MKB42",
+        "catalog_flags": {
+          "ActionKind": "1"
+        }
+      },
+      {
+        "index": 28,
+        "weapon": "KFWeap_AssaultRifle_FAMAS",
+        "catalog_flags": {}
+      },
+      {
+        "index": 29,
+        "weapon": "KFWeap_AssaultRifle_FNFal",
+        "catalog_flags": {}
+      },
+      {
+        "index": 30,
+        "weapon": "KFWeap_AssaultRifle_M16M203",
+        "catalog_flags": {}
+      },
+      {
+        "index": 31,
+        "weapon": "KFWeap_Pistol_AF2011",
+        "catalog_flags": {}
+      },
+      {
+        "index": 32,
+        "weapon": "KFWeap_Pistol_Blunderbuss",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Cylinder"
+        }
+      },
+      {
+        "index": 33,
+        "weapon": "KFWeap_Shotgun_Nailgun",
+        "catalog_flags": {
+          "ActionKind": "2"
+        }
+      },
+      {
+        "index": 34,
+        "weapon": "KFWeap_HRG_Nailgun",
+        "catalog_flags": {
+          "ActionKind": "2"
+        }
+      },
+      {
+        "index": 35,
+        "weapon": "KFWeap_AssaultRifle_HRGIncendiaryRifle",
+        "catalog_flags": {}
+      },
+      {
+        "index": 36,
+        "weapon": "KFWeap_AssaultRifle_HRGTeslauncher",
+        "catalog_flags": {}
+      },
+      {
+        "index": 37,
+        "weapon": "KFWeap_AssaultRifle_MedicRifleGrenadeLauncher",
+        "catalog_flags": {}
+      },
+      {
+        "index": 38,
+        "weapon": "KFWeap_HRG_Boomy",
+        "catalog_flags": {
+          "ActionKind": "1"
+        }
+      },
+      {
+        "index": 39,
+        "weapon": "KFWeap_SMG_G18",
+        "catalog_flags": {}
+      },
+      {
+        "index": 40,
+        "weapon": "KFWeap_AssaultRifle_LazerCutter",
+        "catalog_flags": {
+          "ActionKind": "2"
+        }
+      },
+      {
+        "index": 41,
+        "weapon": "KFWeap_AssaultRifle_Microwave",
+        "catalog_flags": {
+          "ActionKind": "2"
+        }
+      },
+      {
+        "index": 42,
+        "weapon": "KFWeap_HVStormCannon",
+        "catalog_flags": {
+          "ActionKind": "2"
+        }
+      },
+      {
+        "index": 43,
+        "weapon": "KFWeap_Shotgun_HZ12",
+        "catalog_flags": {
+          "LoadedBone": "RW_Magazine1"
+        }
+      },
+      {
+        "index": 44,
+        "weapon": "KFWeap_HRG_SonicGun",
+        "catalog_flags": {
+          "LoadedBone": "RW_Magazine1"
+        }
+      },
+      {
+        "index": 45,
+        "weapon": "KFWeap_RocketLauncher_SealSqueal",
+        "catalog_flags": {
+          "LoadedBone": "RW_Magazine1"
+        }
+      },
+      {
+        "index": 46,
+        "weapon": "KFWeap_RocketLauncher_Seeker6",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine1"
+        }
+      },
+      {
+        "index": 47,
+        "weapon": "KFWeap_HRG_Locust",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine1"
+        }
+      },
+      {
+        "index": 48,
+        "weapon": "KFWeap_RocketLauncher_ThermiteBore",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine"
+        }
+      },
+      {
+        "index": 49,
+        "weapon": "KFWeap_ShrinkRayGun",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine"
+        }
+      },
+      {
+        "index": 50,
+        "weapon": "KFWeap_Minigun",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine"
+        }
+      },
+      {
+        "index": 51,
+        "weapon": "KFWeap_Flame_CaulkBurn",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine1"
+        }
+      },
+      {
+        "index": 52,
+        "weapon": "KFWeap_Flame_Flamethrower",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_GasTank1"
+        }
+      },
+      {
+        "index": 53,
+        "weapon": "KFWeap_Beam_Microwave",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine1"
+        }
+      },
+      {
+        "index": 54,
+        "weapon": "KFWeap_HRG_EMP_ArcGenerator",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine1"
+        }
+      },
+      {
+        "index": 55,
+        "weapon": "KFWeap_Blunt_MedicBat",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine1"
+        }
+      },
+      {
+        "index": 56,
+        "weapon": "KFWeap_GravityImploder",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine1"
+        }
+      },
+      {
+        "index": 57,
+        "weapon": "KFWeap_Pistol_Bladed",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Container"
+        }
+      },
+      {
+        "index": 58,
+        "weapon": "KFWeap_RocketLauncher_RPG7",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Grenade1",
+          "bNoEject": "true"
+        }
+      },
+      {
+        "index": 59,
+        "weapon": "KFWeap_HRG_MedicMissile",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Grenade1",
+          "bNoEject": "true"
+        }
+      },
+      {
+        "index": 60,
+        "weapon": "KFWeap_Rifle_ParasiteImplanter",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine"
+        }
+      },
+      {
+        "index": 61,
+        "weapon": "KFWeap_Ice_FreezeThrower",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine1",
+          "bSeatAtNotify": "true"
+        }
+      },
+      {
+        "index": 62,
+        "weapon": "KFWeap_HRG_Healthrower",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine1",
+          "bSeatAtNotify": "true"
+        }
+      },
+      {
+        "index": 63,
+        "weapon": "KFWeap_HRG_BallisticBouncer",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine",
+          "bSeatAtNotify": "true"
+        }
+      },
+      {
+        "index": 64,
+        "weapon": "KFWeap_Mine_Reconstructor",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Magazine",
+          "bSeatAtNotify": "true"
+        }
+      },
+      {
+        "index": 65,
+        "weapon": "KFWeap_Blunt_Pulverizer",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Mag1"
+        }
+      },
+      {
+        "index": 66,
+        "weapon": "KFWeap_AssaultRifle_Doshinegun",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Notes2",
+          "bSeatAtNotify": "true",
+          "bNoEject": "true",
+          "bParkedLoaded": "true"
+        }
+      },
+      {
+        "index": 67,
+        "weapon": "KFWeap_Bow_Crossbow",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Projectile",
+          "bNoEject": "true",
+          "bPlateauInsert": "true",
+          "bProjectilePlateau": "true"
+        }
+      },
+      {
+        "index": 68,
+        "weapon": "KFWeap_HRG_Crossboom",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Projectile",
+          "bNoEject": "true",
+          "bPlateauInsert": "true",
+          "bProjectilePlateau": "true"
+        }
+      },
+      {
+        "index": 69,
+        "weapon": "KFWeap_Rifle_RailGun",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Bullets1",
+          "bNoEject": "true",
+          "bPlateauInsert": "true",
+          "bProjectilePlateau": "true"
+        }
+      },
+      {
+        "index": 70,
+        "weapon": "KFWeap_Rifle_HRGIncision",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Bullets1",
+          "bNoEject": "true",
+          "bPlateauInsert": "true",
+          "bProjectilePlateau": "true"
+        }
+      },
+      {
+        "index": 71,
+        "weapon": "KFWeap_Bow_CompoundBow",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "RW_Weapon",
+          "bNoEject": "true",
+          "bPlateauInsert": "true",
+          "bProjectilePlateau": "true"
+        }
+      },
+      {
+        "index": 72,
+        "weapon": "KFWeap_Eviscerator",
+        "catalog_flags": {
+          "ActionKind": "2",
+          "LoadedBone": "Magazine1",
+          "bPlateauInsert": "true",
+          "bProjectilePlateau": "true"
+        }
+      }
+    ],
+    "VRPumpCatalog": [
+      {
+        "index": 0,
+        "weapon": "KFWeap_Shotgun_MB500",
+        "catalog_flags": {}
+      },
+      {
+        "index": 1,
+        "weapon": "KFWeap_Shotgun_DragonsBreath",
+        "catalog_flags": {}
+      },
+      {
+        "index": 2,
+        "weapon": "KFWeap_Shotgun_M4",
+        "catalog_flags": {}
+      },
+      {
+        "index": 3,
+        "weapon": "KFWeap_Rifle_Winchester1894",
+        "catalog_flags": {}
+      },
+      {
+        "index": 4,
+        "weapon": "KFWeap_Rifle_CenterfireMB464",
+        "catalog_flags": {}
+      },
+      {
+        "index": 5,
+        "weapon": "KFWeap_GrenadeLauncher_M32",
+        "catalog_flags": {}
+      },
+      {
+        "index": 6,
+        "weapon": "KFWeap_Rifle_FrostShotgunAxe",
+        "catalog_flags": {}
+      }
+    ],
+    "VRCycleCatalog": [
+      {
+        "index": 0,
+        "weapon": "KFWeap_Rifle_MosinNagant",
+        "catalog_flags": {}
+      },
+      {
+        "index": 1,
+        "weapon": "KFWeap_Rifle_Winchester1894",
+        "catalog_flags": {}
+      },
+      {
+        "index": 2,
+        "weapon": "KFWeap_Rifle_CenterfireMB464",
+        "catalog_flags": {}
+      }
+    ],
+    "VRBreakCatalog": [
+      {
+        "index": 0,
+        "weapon": "KFWeap_Shotgun_DoubleBarrel",
+        "catalog_flags": {
+          "Capacity": "2"
+        }
+      },
+      {
+        "index": 1,
+        "weapon": "KFWeap_GrenadeLauncher_M79",
+        "catalog_flags": {
+          "Capacity": "1"
+        }
+      },
+      {
+        "index": 2,
+        "weapon": "KFWeap_GrenadeLauncher_HX25",
+        "catalog_flags": {
+          "Capacity": "1"
+        }
+      },
+      {
+        "index": 3,
+        "weapon": "KFWeap_HRG_Dragonbreath",
+        "catalog_flags": {
+          "Capacity": "4"
+        }
+      },
+      {
+        "index": 4,
+        "weapon": "KFWeap_Rifle_M99",
+        "catalog_flags": {
+          "Capacity": "1"
+        }
+      },
+      {
+        "index": 5,
+        "weapon": "KFWeap_Rifle_MosinNagant",
+        "catalog_flags": {
+          "Capacity": "5"
+        }
+      },
+      {
+        "index": 6,
+        "weapon": "KFWeap_Revolver_SW500",
+        "catalog_flags": {
+          "Capacity": "5"
+        }
+      },
+      {
+        "index": 7,
+        "weapon": "KFWeap_Pistol_ChiappaRhino",
+        "catalog_flags": {
+          "Capacity": "6"
+        }
+      },
+      {
+        "index": 8,
+        "weapon": "KFWeap_LMG_Stoner63A",
+        "catalog_flags": {
+          "Capacity": "75"
+        }
+      },
+      {
+        "index": 9,
+        "weapon": "KFWeap_HRG_BarrierRifle",
+        "catalog_flags": {
+          "Capacity": "60"
+        }
+      },
+      {
+        "index": 10,
+        "weapon": "KFWeap_LMG_MG3",
+        "catalog_flags": {
+          "Capacity": "75"
+        }
+      },
+      {
+        "index": 11,
+        "weapon": "KFWeap_Revolver_Rem1858",
+        "catalog_flags": {
+          "Capacity": "6"
+        }
+      },
+      {
+        "index": 12,
+        "weapon": "KFWeap_Shotgun_HRG_Kaboomstick",
+        "catalog_flags": {
+          "Capacity": "2"
+        }
+      },
+      {
+        "index": 13,
+        "weapon": "KFWeap_Shotgun_ElephantGun",
+        "catalog_flags": {
+          "Capacity": "4"
+        }
+      },
+      {
+        "index": 14,
+        "weapon": "KFWeap_HRG_Revolver_Buckshot",
+        "catalog_flags": {
+          "Capacity": "5"
+        }
+      },
+      {
+        "index": 15,
+        "weapon": "KFWeap_Pistol_Flare",
+        "catalog_flags": {
+          "Capacity": "6"
+        }
+      },
+      {
+        "index": 16,
+        "weapon": "KFWeap_Pistol_HRGWinterbite",
+        "catalog_flags": {
+          "Capacity": "6"
+        }
+      },
+      {
+        "index": 17,
+        "weapon": "KFWeap_Pistol_HRGScorcher",
+        "catalog_flags": {
+          "Capacity": "1"
+        }
+      },
+      {
+        "index": 18,
+        "weapon": "KFWeap_HRG_CranialPopper",
+        "catalog_flags": {
+          "Capacity": "7"
+        }
+      },
+      {
+        "index": 19,
+        "weapon": "KFWeap_Rifle_Hemogoblin",
+        "catalog_flags": {
+          "Capacity": "7"
+        }
+      }
+    ]
+  },
+  "interpretation": {
+    "ActionKind1": "open bolt; no invented persistent chamber/+1; Thompson, Mac10, MKB42, Boomy catalog members",
+    "ActionKind2": "no manual action step; energy, tanks, rockets and projectiles use their own stock resources",
+    "ActionKind3": "notch-lock action MP5/UMP; tracked feed remains exact-class audited",
+    "chamber": "VRWeaponRuntime.TracksMagazineFeedClass gates single feeds; AF2011 has two; revolvers use cylinder capacity with no +1",
+    "paid_magazine": "VRMagazineCarryRecipe.Supports excludes no-eject, parked, plateau, notify-seat, cylinder, gas-tank and blade-container cases; catalog membership alone does not imply recoverable magazine",
+    "insert_policy": "VRMagazinePayloadLedger.Insert production policy LOAD ALL; preserve paid excess even above target perk capacity",
+    "loss_off": "removed gun rounds return to reserve, payload actual paid rounds zero; cosmetic rounds must not be charged again",
+    "recovery_off": "do not assume destruction; observer must distinguish inability to grab from retired/destroyed ledger contents"
+  },
+  "invariants": [
+    "Same exact owned actor and pawn lifetime; unique removal serials and payload source/family",
+    "Gun loaded + shared reserve once + live paid escrow + confirmed shots + accepted discarded live ammo = observed initial total + explicit grants only",
+    "Prop Rounds/Carrier/CarrierHand agree with authority ledger; zero shells never return ammo",
+    "Recovery claim/release changes no total; pouch credits only actual capacity room and leaves excess leased",
+    "Insertion consumes one payload once; repeat/late receipt cannot refill or double debit",
+    "Native magazine/chamber flags change availability, never add ammunition",
+    "Partial action stroke or empty chamber emits no phantom cartridge; full stroke creates one accepted effect per actual extracted chamber",
+    "Manual ejection uses existing live/spent assets and action audio; firing-only muzzle flash/recoil must stay unchanged"
+  ],
+  "dimensions": {
+    "reload": [
+      "manual free hand",
+      "hip with both hands occupied",
+      "left/right mirrored",
+      "normal/dual paired",
+      "tactical partial",
+      "empty",
+      "zero reserve"
+    ],
+    "interruption": [
+      "before removal",
+      "after paid removal",
+      "after insert before rack",
+      "partial rack",
+      "switch/stow/redraw",
+      "menu/tracking cancellation",
+      "death/respawn",
+      "map travel"
+    ],
+    "resource": [
+      "partly full dropped magazine exact count",
+      "hand pickup",
+      "Alyx pull then hand pickup",
+      "release/reclaim",
+      "compatible reinsert",
+      "incompatible reject",
+      "pouch full",
+      "pouch partial room",
+      "all-paid excess insert",
+      "lost/discarded magazine policy"
+    ],
+    "ejection": [
+      "automatic shot spent case reference",
+      "manual loaded live round",
+      "manual empty",
+      "spent pump/bolt/lever",
+      "AF2011 paired rounds",
+      "revolver partially fired cylinder",
+      "break-action mixed live/spent barrels",
+      "port world position/quaternion/velocity",
+      "action audio",
+      "no firing flash/recoil"
+    ],
+    "local_catch": [
+      "same hand",
+      "other hand",
+      "airborne miss delayed return",
+      "empty/partial/tactical +1",
+      "magazine out escrow retained",
+      "unpaid reload cancellation",
+      "cannot capture hand owned by reload/recovery/gravity"
+    ]
+  },
+  "executable_now": {
+    "normal/dual": "existing advanced tapes exercise 9mm real shots, accepted removed magazine(s), authoritative settled loaded/reserve/escrow and native capability; no complete insertion/recovery coverage",
+    "normal magazine families": "declared SingleWeaponPath setup admits 9mm, AR15 and Thompson through ordinary stock grant/draw and paid-magazine support checks; reuses the existing normal tape with unchanged readiness and conservation assertions"
+  },
+  "gaps": [
+    "No existing native tape targets magwell insertion, loose-mag hand/Alyx recovery, pouch accounting, or exact manual rack geometry across catalogs",
+    "Only 9mm normal/paired, AR15 and Thompson are exposed by the bounded preparer; catalog enumeration does not establish runtime coverage for other mechanisms",
+    "Existing hold observer intentionally fails on identity switching or ammo increase, so cannot serve as complete reload/lifecycle observer unchanged",
+    "No existing capture/effect assertion proves visible live-vs-spent ejection, port transform or action audio; source finding is not rendered reproduction",
+    "Rev40 includes local toss/catch, but the existing hold tape does not exercise release/catch or lifecycle transitions; those remain unmeasured",
+    "Standalone observer does not validate Host/Join authority, true map travel, or headset feel"
+  ],
+  "references": [
+    {
+      "url": "https://www.sigsauer.com/media/sigsauer/resources/OPERATORS_MANUAL_P320_8501909-01_REV16_WEB_FILE_1.pdf",
+      "use": "section9.7.2 partial magazine reload retains chambered cartridge; real-equivalent sanity reference, not authority to change KF2 policy"
+    }
+  ],
+  "manual_ejection_source_gaps": [
+    {
+      "weapon": "KFWeap_AssaultRifle_Bullpup",
+      "mesh": "Wep_1stP_L85A2_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_G36C",
+      "mesh": "WEP_1stP_G36C_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_FAMAS",
+      "mesh": "WEP_1stP_Famas_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_HRGTeslauncher",
+      "mesh": "WEP_1stP_HRG_Teslauncher_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_MedicRifleGrenadeLauncher",
+      "mesh": "Wep_1stP_Medic_GrenadeLauncher_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    }
+  ],
+  "manual_ejection_source_gaps_prior_rev40": [
+    {
+      "weapon": "KFWeap_AssaultRifle_AK12",
+      "mesh": "Wep_1stP_AK12_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_Bullpup",
+      "mesh": "Wep_1stP_L85A2_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_AR15",
+      "mesh": "Wep_1stP_AR15_9mm_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_SCAR",
+      "mesh": "Wep_1stP_SCAR_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_SMG_MP7",
+      "mesh": "Wep_1stP_MP7_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_SMG_P90",
+      "mesh": "Wep_1stP_P90_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_G36C",
+      "mesh": "WEP_1stP_G36C_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_Shotgun_S12",
+      "mesh": "Wep_1stP_Saiga12_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_Shotgun_Medic",
+      "mesh": "Wep_1stP_Medic_Shotgun_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_Medic",
+      "mesh": "Wep_1stP_Medic_Assault_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_FAMAS",
+      "mesh": "WEP_1stP_Famas_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_FNFal",
+      "mesh": "WEP_1stP_FNFAL_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_M16M203",
+      "mesh": "Wep_1stP_M16_M203_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_HRGIncendiaryRifle",
+      "mesh": "WEP_1stP_HRG_IncendiaryRifle_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_HRGTeslauncher",
+      "mesh": "WEP_1stP_HRG_Teslauncher_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    },
+    {
+      "weapon": "KFWeap_AssaultRifle_MedicRifleGrenadeLauncher",
+      "mesh": "Wep_1stP_Medic_GrenadeLauncher_Rig",
+      "status": "source-only-gap-not-rendered-reproduction"
+    }
+  ],
+  "manual_ejection_source_snapshot": "rev40 code4b9ef238; source/asset admission only, no rendered test acceptance"
+}

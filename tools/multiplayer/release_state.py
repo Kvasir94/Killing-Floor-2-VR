@@ -13,15 +13,24 @@ def workspace_sources(root):
     paths = set()
     for folder in ("script/KF2VR", "script/KF2VRNet", "script/KF2VRNetClient", "script/KF2Breacher"):
         paths.update((root / folder).rglob("*.uc"))
-    for folder in ("native/adapter", "native/vrcore", "native/xr", "native/portal"):
+    paths.update((root / "script/RangeMapTools").rglob("*.uc"))
+    paths.update(p for p in (root / "native/tools/rangemap").rglob("*")
+                 if p.is_file() and (p.suffix in (".cpp", ".h", ".hpp") or p.name == "CMakeLists.txt"))
+    for name in ("tools/author_vr_range.py", "tools/build-vr-range.ps1", "tools/validate_range_map.py"):
+        if (root / name).is_file():
+            paths.add(root / name)
+    for folder in ("native/adapter", "native/vrcore", "native/xr"):
         paths.update(p for p in (root / folder).rglob("*") if p.is_file()
                      and (p.suffix in (".h", ".hpp", ".cpp", ".asm") or p.name == "CMakeLists.txt"))
     # Offline tests are not shipped or imported by play. Their edits must not
     # invalidate an otherwise matching playable package.
     paths.update(p for p in (root / "tools/multiplayer").glob("*.py")
                  if not p.name.startswith("test_"))
+    for folder in ("tools/workshop", "tools/epic-pack"):
+        paths.update(p for p in (root / folder).rglob("*") if p.is_file()
+                     and p.suffix in (".py", ".ps1", ".cmd", ".bat", ".vdf", ".jpg"))
     paths.update(root / name for name in ("CMakeLists.txt", "third_party/xr-sdks.cmake", "Play-KF2VR.cmd", "Play-KF2VR-TestMap.cmd",
-        "tools/play-main.ps1", "tools/play-gui.ps1", "tools/vr-defaults.json", "tools/vr-defaults.ps1", "tools/test-online-play.ps1",
+        "tools/play-main.ps1", "tools/vr-defaults.json", "tools/settings-definition.json", "tools/vr-defaults.ps1", "tools/test-online-play.ps1",
         "tools/dependency-pins.json", "tools/install-multiplayer-server.ps1", "tools/build-kf2vr.ps1", "tools/build-lock.ps1", "tools/build-multiplayer-native.ps1", "tools/build-multiplayer-scripts.ps1",
         "tools/multiplayer/linux-desktop.sh", "docs/LINUX-DESKTOP.md", "docs/EPIC-DESKTOP.md"))
     for name in ("tools/ngx-pins.json", "third_party/NVIDIA-DLSS-LICENSE.txt", "third_party/AMD-CAS-LICENSE.txt",

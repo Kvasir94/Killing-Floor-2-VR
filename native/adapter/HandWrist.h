@@ -30,4 +30,9 @@ inline Vec3 WristFromGrip(const Vec3& gripOrigin, const Quat& aimRotation,
     return gripOrigin+aimRotation.Rotate(WristOffsetForHand(rightHandOffset,hand));
 }
 
+inline Vec3 GripFromWrist(const Vec3& wrist, const Quat& aimRotation,
+                          const Vec3& rightHandOffset, unsigned hand) {
+    return wrist-aimRotation.Rotate(WristOffsetForHand(rightHandOffset,hand));
+}
+
 }  // namespace kf2vr::adapter

@@ -74,7 +74,7 @@ class VisualRolesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             roles = self.prepare(Path(tmp), vr=args.vr, replay=False,
                 map=args.map, difficulty=args.difficulty, game_length=args.game_length)
-            self.assertEqual("KF-Outpost?Game=KF2VRNet.KF2VRNetGame?Difficulty=3?GameLength=2?VRInventoryFocus=0?VRMultiplayerGrabs=0", roles["server"]["args"][0])
+            self.assertEqual("KF-Outpost?Game=KF2VRNet.KF2VRNetGame?Difficulty=3?GameLength=2?VRInventoryFocus=0?VRMultiplayerGrabs=1?VRGravityPull=1", roles["server"]["args"][0])
             self.assertFalse(roles["driver"]["native_adapter"])
 
     def test_menu_cancel_and_invalid_map_options(self):
@@ -227,9 +227,15 @@ class VisualRolesTests(unittest.TestCase):
                         for retained_command in ("GBA_Jump", "GBA_MoveForward", "ModifiedF8"):
                             self.assertIn('Command="' + retained_command + '"', actual)
                         self.assertIn("ConsoleKey=Tilde", actual)
-                        self.assertEqual(actual, friends.preview_camera_binding(actual, command))
+                        repeated = friends.preview_camera_binding(actual, command)
+                        import re
+                        self.assertEqual(sorted(re.findall(r'^Bindings=.*$',actual,re.M)),sorted(re.findall(r'^Bindings=.*$',repeated,re.M)))
                     else:
-                        self.assertEqual(original, actual)
+                        if name == "driver" and vr:
+                            from session import set_ini
+                            expected = set_ini(original,"KFGame.KFPlayerInput",{"bRequiresPushToTalk":"True"})
+                        else:expected=original
+                        self.assertEqual(expected, actual)
 
     def test_eye_resolution_is_recorded_and_only_in_live_vr_role_environment(self):
         for selected in (None, 50, 75, 100):

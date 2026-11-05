@@ -3,14 +3,33 @@
 #include <cmath>
 
 namespace kf2vr::adapter {
-// The input owner applies the horizontal deadzone. Beyond it, smooth yaw
-// uses the configured steady rate, independent of stick deflection.
-inline float ScaleSmoothTurnAxis(float axis,float scale) {
-    if (!std::isfinite(axis)) return 0.f;
-    if (!std::isfinite(scale)) scale=.5f;
-    if (axis == 0.f) return 0.f;
-    return std::copysign(std::min(std::clamp(scale,.1f,2.f),1.f),axis);
-}
+// Smooth turn is a yaw rate applied directly to the controller, like snap
+// turn. Routing it through KF2's gamepad look made TURN SPEED meaningless:
+// the stock response curve maps 75% to about half and 100% to 1.3x its
+// rate, everything above 100% clamped to full deflection, and aim-assist
+// friction near Zeds, sprint (0.675x) and view smoothing changed it further
+// (playtest 011320). 100% is 120 degrees a second; 75% matches the old
+// default's ~90. The input owner applies the horizontal deadzone; beyond it
+// the rate is steady, independent of deflection.
+constexpr float kSmoothTurnDegreesPerSecond=120.f;
+class SmoothTurnInput {
+    float remainder_=0.f;
+public:
+    void Reset() { remainder_=0.f; }
+    // Whole Unreal yaw units (65536 per turn) to apply this tick; the
+    // fraction carries over so slow frames and fast frames turn alike.
+    int Update(float axis,bool available,float scale,double seconds) {
+        if (!available || !std::isfinite(axis) || axis==0.f || !std::isfinite(seconds) || seconds<=0.0) {
+            Reset(); return 0;
+        }
+        if (!std::isfinite(scale)) scale=1.f;
+        const double step=std::min(seconds,.1)*std::clamp(scale,.1f,2.f)*kSmoothTurnDegreesPerSecond*65536.0/360.0;
+        const double total=std::copysign(step,static_cast<double>(axis))+remainder_;
+        const double whole=std::trunc(total);
+        remainder_=static_cast<float>(total-whole);
+        return static_cast<int>(whole);
+    }
+};
 // Frame-rate independent, release-to-arm controls. Loss, travel and a held
 // control on entry cannot produce a delayed turn or menu activation.
 class SnapTurnInput {

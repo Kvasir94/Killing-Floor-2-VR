@@ -3,9 +3,6 @@
 // This object never requests a grab, support attachment, fire or inventory action.
 class VRFreeHandPose extends Object config(Game);
 
-// Donor authored poses are the default for supported held stock grenades.
-var config bool bAuthoredGrenadeGrip;
-
 struct FingerJoint
 {
     var name Bone;
@@ -23,13 +20,33 @@ var quat WristBasis[2];
 // Wrist-mounted art must use these same axes as the rendered hand.
 var vector LocalForward[2], LocalThumb[2], LocalPalm[2];
 var float Amount[2];
+// Gravity pull: 1 reaching (spread toward a highlighted item), 2 claw (locked
+// or pulling), blended in over the ordinary grip curl.
+var float GravityBlend[2];
+var float ReachDegrees[16], LockDegrees[16];
+var byte GravityShape[2];
 var bool bReady;
 var VRHandsBridge BoundBridge;
+var byte bWorldCatchPose[2];
+var quat WorldCatchFingers[30];
 
-function SetAuthoredGrenadeGrip(bool bEnabled)
+function SetWorldCatchFinger(int Hand, int Joint, quat Q)
 {
-    bAuthoredGrenadeGrip = bEnabled;
-    SaveConfig();
+    if (Hand >= 0 && Hand <= 1 && Joint >= 0 && Joint < 15)
+        WorldCatchFingers[Hand * 15 + Joint] = Q;
+}
+
+function BeginWorldCatchPose(int Hand)
+{
+    if (Hand < 0 || Hand > 1) return;
+    bWorldCatchPose[Hand] = 1;
+    Apply();
+}
+
+function EndWorldCatchPose(int Hand)
+{
+    if (Hand < 0 || Hand > 1 || bWorldCatchPose[Hand] == 0) return;
+    bWorldCatchPose[Hand] = 0;
     Apply();
 }
 
@@ -155,49 +172,120 @@ function bool Bind(VRHandsBridge B)
 function Apply()
 {
     local int I, Hand, GrenadeProfile[2];
+    local byte Grapple[2];
     local float Alpha, LiftAlpha;
     local quat Curl, Authored;
     local VRChestGrenade Grenade;
     if (!bReady) return;
     GrenadeProfile[0] = -1;
     GrenadeProfile[1] = -1;
-    if (bAuthoredGrenadeGrip && BoundBridge != None && BoundBridge.HandInventory != None
+    // A held stock grenade always takes its authored pose (Kvasir94, 2026-11-04).
+    if (BoundBridge != None && BoundBridge.HandInventory != None
         && BoundBridge.HandInventory.Input != None)
         Grenade = BoundBridge.HandInventory.Input.Grenade;
     if (Grenade != None && Grenade.HeldClass != None)
         for (Hand = 0; Hand < 2; ++Hand)
             if (Grenade.IsHeld(Hand))
                 GrenadeProfile[Hand] = class'VRGrenadeGripPose'.static.ProfileFor(Grenade.HeldClass.Name);
+    for (Hand = 0; Hand < 2; ++Hand) Grapple[Hand] = GrappleRegion(Hand);
     for (I = 0; I < Joints.Length; ++I)
     {
+        // The existing root hand bridges the exact contact until its already
+        // authored attached grip takes over. Reference bone lengths stay put.
+        if (bWorldCatchPose[Joints[I].Hand] != 0)
+        {
+            Joints[I].Control.bAddRotation = false;
+            Joints[I].Control.BoneRotationSpace = BCS_OtherBoneSpace;
+            Joints[I].Control.RotationSpaceBoneName = BoundBridge.HandBone(Joints[I].Hand);
+            Joints[I].Control.BoneRotation = QuatToRotator(WorldCatchFingers[I]);
+            Joints[I].Control.ControlStrength = 1;
+            Joints[I].Control.StrengthTarget = 1;
+            continue;
+        }
+        Joints[I].Control.bAddRotation = true;
+        Joints[I].Control.BoneRotationSpace = BCS_BoneSpace;
+        Joints[I].Control.RotationSpaceBoneName = '';
         Alpha = Amount[Joints[I].Hand];
         LiftAlpha = Joints[I].OppositionDegrees != 0 ? FMin(1, Alpha * 1.8) : Alpha;
         Curl = QuatFromAxisAndAngle(Joints[I].Axis, Joints[I].Degrees * Pi / 180.0 * LiftAlpha);
         if (Joints[I].OppositionDegrees != 0)
             Curl = QuatProduct(QuatFromAxisAndAngle(Joints[I].OppositionAxis,
                 Joints[I].OppositionDegrees * Pi / 180.0 * Alpha), Curl);
+        if (GravityBlend[Joints[I].Hand] > 0.001)
+            Curl = QuatSlerp(Curl, GravityCurl(I), GravityBlend[Joints[I].Hand], true);
         // Only exact stock classes in the catalog receive an authored pose.
         if (class'VRGrenadeGripPose'.static.Read(GrenadeProfile[Joints[I].Hand],
             Joints[I].Hand, I % 15, Authored)) Curl = Authored;
+        // Melee item 15: a hand holding a Zed part closes onto it in the
+        // authored B&S-style grapple pose (VRGrapplePose), with the grip.
+        else if (class'VRGrapplePose'.static.Read(Grapple[Joints[I].Hand], Joints[I].Hand, I % 15, Authored))
+            Curl = QuatSlerp(QuatFromAxisAndAngle(vect(1,0,0), 0), Authored, FClamp(Alpha, 0, 1), true);
         Joints[I].Control.BoneRotation = QuatToRotator(Curl);
         Joints[I].Control.ControlStrength = 1;
         Joints[I].Control.StrengthTarget = 1;
     }
 }
 
+// Gravity pull hand shapes. Locked or pulling uses Half-Life: Alyx's own half
+// grab (its right hand's @grab_curl frame 40, decoded from
+// alyx_hand_right.vmdl_c and fitted to this hand's curl and thumb opposition
+// controls by matching each digit's segment directions in the palm frame;
+// tools/author_grenade_grips.py hand() reproduces these controls). While an
+// item is highlighted the hand opens past relaxed, fingers straightened toward
+// it and the thumb lifted clear (Alyx's own open pose was reviewed and rejected).
+// Index = finger * 3 + joint - 1; [15] is the thumb opposition, all degrees.
+function quat GravityCurl(int I)
+{
+    local int Index, Hand;
+    local float Degrees, Opposition;
+    local quat Curl;
+    Hand = Joints[I].Hand;
+    Index = I - (I / 15) * 15;
+    Degrees = GravityShape[Hand] == 1 ? ReachDegrees[Index] : LockDegrees[Index];
+    Curl = QuatFromAxisAndAngle(Joints[I].Axis, Degrees * Pi / 180.0);
+    if (Joints[I].OppositionDegrees != 0)
+    {
+        Opposition = GravityShape[Hand] == 1 ? ReachDegrees[15] : LockDegrees[15];
+        Curl = QuatProduct(QuatFromAxisAndAngle(Joints[I].OppositionAxis, Opposition * Pi / 180.0), Curl);
+    }
+    return Curl;
+}
+
+function byte GravityPose(int Hand)
+{
+    if (BoundBridge == None || BoundBridge.HandInventory == None || BoundBridge.HandInventory.GravityPull == None) return 0;
+    return BoundBridge.HandInventory.GravityPull.PoseFor(Hand);
+}
+
+// The B&S grapple region of the Zed part this hand holds, 0 for none (gibs,
+// empty hands, B&S2 interactions off, or VRHandsBridge.bLegacyMeleeGrapplePose).
+function byte GrappleRegion(int Hand)
+{
+    local VRZedGrab Grab;
+    if (BoundBridge == None || BoundBridge.UseLegacyMelee(BoundBridge.bLegacyMeleeGrapplePose) || BoundBridge.HandInventory == None) return 0;
+    Grab = BoundBridge.HandInventory.ZedGrab;
+    if (Grab == None || !Grab.Grabs[Hand].bActive || Grab.Grabs[Hand].bGib || Grab.Grabs[Hand].Pawn == None) return 0;
+    return class'VRGrapplePose'.static.RegionForBone(Grab.Grabs[Hand].BoneName);
+}
+
 // Advance once per simulation tick, never once per eye/late pose refresh.
 function Advance(VRHandsBridge B, float DeltaTime)
 {
     local int Hand;
-    local float Target, Blend;
+    local float Target, Blend, ShapeBlend;
+    local byte Shape;
     if (DeltaTime <= 0 || DeltaTime != DeltaTime) return;
     Blend = 1 - Exp(-FMin(DeltaTime, 1) / 0.035);
+    ShapeBlend = 1 - Exp(-FMin(DeltaTime, 1) / 0.06);
     for (Hand = 0; Hand < 2; ++Hand)
     {
         Target = Hand == 0 ? B.LeftGripValue : B.RightGripValue;
         if ((B.NativeGripActiveMask & B.NativeValidMask & (1 << Hand)) == 0 || Target != Target) Target = 0;
         Target = FClamp(Target, 0, 1);
         Amount[Hand] += (Target - Amount[Hand]) * Blend;
+        Shape = GravityPose(Hand);
+        if (Shape != 0) GravityShape[Hand] = Shape;
+        GravityBlend[Hand] += ((Shape != 0 ? 1.0 : 0.0) - GravityBlend[Hand]) * ShapeBlend;
     }
     Apply();
 }
@@ -209,4 +297,36 @@ function quat WristRotation(int Hand, rotator ControllerRotation)
 
 defaultproperties
 {
+    ReachDegrees(0)=-24.75
+    ReachDegrees(1)=9.0
+    ReachDegrees(2)=3.0
+    ReachDegrees(3)=-12.0
+    ReachDegrees(4)=-6.75
+    ReachDegrees(5)=-2.5
+    ReachDegrees(6)=-13.2
+    ReachDegrees(7)=-6.75
+    ReachDegrees(8)=-2.5
+    ReachDegrees(9)=-14.4
+    ReachDegrees(10)=-6.75
+    ReachDegrees(11)=-2.5
+    ReachDegrees(12)=-15.6
+    ReachDegrees(13)=-6.75
+    ReachDegrees(14)=-2.5
+    ReachDegrees(15)=0.0
+    LockDegrees(0)=34.0
+    LockDegrees(1)=11.0
+    LockDegrees(2)=8.0
+    LockDegrees(3)=0.0
+    LockDegrees(4)=7.0
+    LockDegrees(5)=-11.0
+    LockDegrees(6)=-11.0
+    LockDegrees(7)=32.0
+    LockDegrees(8)=-38.0
+    LockDegrees(9)=-15.0
+    LockDegrees(10)=26.0
+    LockDegrees(11)=-34.0
+    LockDegrees(12)=-6.0
+    LockDegrees(13)=2.0
+    LockDegrees(14)=-26.0
+    LockDegrees(15)=-27.0
 }

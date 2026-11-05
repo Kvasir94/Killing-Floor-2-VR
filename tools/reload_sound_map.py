@@ -406,6 +406,9 @@ OVERRIDES = {
     # The drum's spinner turns on the stock clip, not with the hand.
     ('KFWeap_AssaultRifle_HRGTeslauncher', 'Play_WEP_Medic_GrenadeLauncher_Spinner'): 8,
     ('KFWeap_AssaultRifle_MedicRifleGrenadeLauncher', 'Play_WEP_Medic_GrenadeLauncher_Spinner'): 8,
+    # The 501's B handling layer leads its charging-handle rear stroke; the
+    # nearby magazine contact otherwise wins the broad motion window.
+    ('KFWeap_AssaultRifle_MedicRifleGrenadeLauncher', 'Play_WEP_Medic_GrenadeLauncher_ReloadEmpty_B'): 4,
     # One insert sound, contact and seat within one motion window: the seat.
     ('KFWeap_AssaultRifle_Microwave', 'Play_WEP_Helios_Handling_Mag_In'): 3,
     ('KFWeap_RocketLauncher_ThermiteBore', 'Play_WEP_Thermite_Mag_In'): 3,

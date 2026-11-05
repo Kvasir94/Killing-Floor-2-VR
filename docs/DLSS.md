@@ -1,14 +1,14 @@
 # Experimental DLSS
 
-DLSS is Off by default. In the portable launcher, Solo, Host and Join expose Off, DLAA, Quality, Balanced, Performance and Ultra Performance. NVIDIA RTX hardware and a compatible driver are required. This is Super Resolution/DLAA, not frame generation. Motion vectors describe camera motion only, so moving hands and enemies can show artifacts. Headset and real online play remain the acceptance tests.
+DLSS defaults to Auto: Quality on a GPU where DLSS starts, ordinary rendering everywhere else, with no error. In the portable launcher, Solo, Host and Join expose Auto, Off, DLAA, Quality, Balanced, Performance and Ultra Performance. DLSS itself needs NVIDIA RTX hardware and a compatible driver; on other GPUs the headset menu shows Auto as OFF ON THIS GPU, and an explicit mode as UNAVAILABLE ON THIS GPU. This is Super Resolution/DLAA, not frame generation. Motion vectors combine the eye's own camera motion with KF2's per-object velocity pass, so tracked hands, held guns, Zeds and gore carry their real motion. With DLSS on, the session runs that velocity pass (MotionBlur on, quality 2) and the adapter skips the blur itself; motion blur only draws if the player turns on Cinematic Motion Blur. See re/09-velocity-pass.md. Headset and real online play remain the acceptance tests.
 
-The eye render percentage sets output resolution. DLSS reduces input resolution within that output; DLAA keeps full input resolution. Both eyes share jitter and keep separate histories. If either evaluation fails, both complete ordinary eye images fill the headset outputs through the normal atlas blit, and subsequent pairs use ordinary sizing. Off follows the ordinary copy path. Menu/world resets discard history; large camera cuts also discard it. Allocation/device failures can still prevent presenting a frame.
+The eye render percentage sets output resolution. DLSS reduces input resolution within that output; DLAA keeps full input resolution. Both eyes share jitter and keep separate histories. Successful eyes copy directly into the output atlas, without saving backup images. If either evaluation fails, that pair is withheld and subsequent pairs use ordinary sizing. Off follows the ordinary copy path. Menu/world resets discard history; large camera cuts also discard it. Allocation/device failures can still prevent presenting a frame.
 
 Portable options: `--dlss quality --dlss-sharpness 0`, or `--dlss off`. Sharpness is an integer from 0 to 100, initially 0. Explicit non-Off DLSS requires VR. Settings are personal, including when joining; joining does not overwrite host/loadout preferences. Malformed saved options fall back to Off/0; malformed JSON is preserved and must be repaired before saving.
 
 `--hide-bile-lens` is initially on for VR; `--no-hide-bile-lens` restores Bloat screen splatter. It suppresses the stock puke lens class and subclasses, not damage or poisoning. Steam and Epic Solo deliver the same typed graphics options. Epic multiplayer restrictions remain unchanged. No arbitrary environment forwarding is allowed.
 
-Build with `tools/fetch-ngx.ps1`, then `tools/build-kf2vr.ps1 -NoSelect -Dlss`. The official NVIDIA v310.7.0 SDK commit, all header/library/license hashes and runtime hash are pinned in `tools/ngx-pins.json`. The runtime stays in the verified package Native folder. Build receipts and frozen reuse include its identity. Without `-Dlss`, the adapter builds with an Off stub and no NGX dependency; math tests remain available.
+Build with `tools/fetch-ngx.ps1`, then `tools/build-kf2vr.ps1 -NoSelect`. Every playable build includes DLSS support; the legacy `-Dlss` switch is accepted but no longer needed, and explicitly disabling it is rejected. The official NVIDIA v310.7.0 SDK commit, all header/library/license hashes and runtime hash are pinned in `tools/ngx-pins.json`. The runtime stays in the verified package Native folder. Build receipts and frozen reuse include its identity. Packaging rejects Off-only adapters. DLSS rendering remains Off by default and can be enabled in the launcher on compatible hardware. CPU-only math tests remain available without the SDK when the adapter DLL is not built.
 
 NVIDIA DLSS/NGX is separately licensed by NVIDIA, not covered by this project's MIT licence. See `third_party/NVIDIA-DLSS-LICENSE.txt` (distributed as `notices/NVIDIA-DLSS-LICENSE.txt`). This software contains source code provided by NVIDIA Corporation. NVIDIA GeForce RTX and NVIDIA RTX are NVIDIA trademarks. SDK use can create `%LOCALAPPDATA%\KF2VR\ngx`; NVIDIA's licence permits over-the-air updates. Neither offline operation nor vendor-runtime byte reproducibility is promised. Close the game before removing that cache.
 
@@ -20,12 +20,12 @@ approval and mark-placement coverage for that release. Future distributors must
 review NVIDIA's licence obligations for their own distribution; including a
 notice alone does not complete them.
 
-Single-pass stereo is an experimental Steam option from optimumbox's
-`0e972979` contribution, initially On for Steam VR (saved Off choices remain).
-`--no-single-pass` or root `-SinglePass Off` restores sequential stereo. It renders
-both eye rectangles together, with the author's visibility, shadow and HBAO
-handling preserved. The combined render target is capped at 8192 pixels wide.
-DLSS still retains complete source images for pair-wide failure fallback.
+Single-pass stereo is an experimental Steam path from optimumbox's `0e972979`
+contribution. Since 2026-11-05 it is always on in VR, together with the
+separate render thread, for performance; neither is an option. It renders both
+eye rectangles together, with the author's visibility, shadow and HBAO handling
+preserved; the combined render target is capped at 8192 pixels wide.
+DLSS uses no routine source-eye backup textures or copies.
 
 HBAO and reflections are initially On; `--no-hbao` and `--no-reflections`
 disable them. `--hide-blood-lens` is initially On, independently of

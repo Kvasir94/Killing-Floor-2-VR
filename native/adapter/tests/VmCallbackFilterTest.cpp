@@ -64,6 +64,8 @@ int main() {
             "array-dispatched effect receipts must remain eligible");
         Check(Filter::Groups(Callback::GetWeaponStartTraceLocation)==Filter::FinishAim,
             "explicit-item and no-item trace fallback must run after the original body");
+        Check(Filter::Groups(Callback::CalculateSpread)==Filter::FinishAim,
+            "custom pellet fan direction is routed after stock angular parameters are evaluated");
         {
             using namespace kf2vr::adapter;
             std::array<std::byte,64> buffer{};

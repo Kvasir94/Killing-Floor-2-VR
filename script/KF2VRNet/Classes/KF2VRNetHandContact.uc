@@ -55,10 +55,11 @@ function Tick(float DeltaTime)
 {
     local KF2VRNetPlayerController PC;
     local KFPawn_Human Body;
-    local vector Position, HandVelocity;
+    local KF2VRRangePractice Practice;
+    local vector Position;
     local byte Pose;
     local int Revision, Hand, I, J;
-    local float Now, Dt;
+    local float Now;
     Super.Tick(DeltaTime);
     if (Role != ROLE_Authority) return;
     Now = WorldInfo.RealTimeSeconds;
@@ -74,34 +75,21 @@ function Tick(float DeltaTime)
         for (Hand = 0; Hand < 2; ++Hand)
         {
             if (!PC.NetChannel.ContactHand(Hand, Body, Position, Pose, Revision)) continue;
-            for (I = 0; I < Hands.Length; ++I)
-                if (Hands[I].Body == Body && Hands[I].Hand == Hand) break;
-            if (I == Hands.Length)
-            {
-                Hands.Add(1);
-                Hands[I].Body = Body;
-                Hands[I].Hand = Hand;
-                Hands[I].Revision = Revision;
-                Hands[I].Position = Position;
-                Hands[I].From = Position;
-                Hands[I].Time = Now;
-            }
-            Hands[I].bSeen = true;
-            Hands[I].Pose = Pose;
-            if (Hands[I].Revision == Revision) continue;
-            Dt = Now - Hands[I].Time;
-            HandVelocity = (Position - Hands[I].Position) / FMax(Dt, class'KF2VRNetTypes'.const.ClientPoseInterval);
-            if (Dt > MaxSampleGap || VSizeSq(HandVelocity) > MaxHandSpeed * MaxHandSpeed)
-            {
-                HandVelocity = vect(0,0,0);
-                Hands[I].From = Position;
-            }
-            Hands[I].Velocity = HandVelocity;
-            Hands[I].Position = Position;
-            Hands[I].Time = Now;
-            Hands[I].Revision = Revision;
-            Hands[I].bMoved = true;
+            TrackHand(Body, Hand, Position, Pose, Revision, Now);
         }
+    }
+    foreach WorldInfo.AllActors(class'KF2VRRangePractice', Practice)
+    {
+        for (Hand = 0; Hand < 2; ++Hand)
+            if (Practice.ContactHand(Hand, Body, Position, Pose, Revision))
+                TrackHand(Body, Hand, Position, Pose, Revision, Now);
+        if (Practice.LocalPose!=None)
+            for (Hand=0; Hand<2; ++Hand)
+            {
+                Body=Practice.LocalPose.TargetPawn;
+                if (Practice.PlayerContactHand(Body,Hand,Position,Pose,Revision))
+                    TrackHand(Body,Hand,Position,Pose,Revision,Now);
+            }
     }
     for (I = Hands.Length - 1; I >= 0; --I)
         if (!Hands[I].bSeen) Hands.Remove(I, 1);
@@ -111,6 +99,40 @@ function Tick(float DeltaTime)
         for (J = I + 1; J < Hands.Length; ++J)
             if (Hands[I].Body != Hands[J].Body && (Hands[I].bMoved || Hands[J].bMoved))
                 TryContact(I, J, Now);
+}
+
+function TrackHand(KFPawn_Human Body, int Hand, vector Position, byte Pose, int Revision, float Now)
+{
+    local int I;
+    local float Dt;
+    local vector HandVelocity;
+    for (I = 0; I < Hands.Length; ++I)
+        if (Hands[I].Body == Body && Hands[I].Hand == Hand) break;
+    if (I == Hands.Length)
+    {
+        Hands.Add(1);
+        Hands[I].Body = Body;
+        Hands[I].Hand = Hand;
+        Hands[I].Revision = Revision;
+        Hands[I].Position = Position;
+        Hands[I].From = Position;
+        Hands[I].Time = Now;
+    }
+    Hands[I].bSeen = true;
+    Hands[I].Pose = Pose;
+    if (Hands[I].Revision == Revision) return;
+    Dt = Now - Hands[I].Time;
+    HandVelocity = (Position - Hands[I].Position) / FMax(Dt, class'KF2VRNetTypes'.const.ClientPoseInterval);
+    if (Dt > MaxSampleGap || VSizeSq(HandVelocity) > MaxHandSpeed * MaxHandSpeed)
+    {
+        HandVelocity = vect(0,0,0);
+        Hands[I].From = Position;
+    }
+    Hands[I].Velocity = HandVelocity;
+    Hands[I].Position = Position;
+    Hands[I].Time = Now;
+    Hands[I].Revision = Revision;
+    Hands[I].bMoved = true;
 }
 
 function TryContact(int I, int J, float Now)
@@ -157,7 +179,7 @@ function TryContact(int I, int J, float Now)
         PC.ClientHandContact(Kind, Contact, Hands[I].Body, Hands[I].Hand, Hands[J].Body, Hands[J].Hand);
     // The stock "thanks" voice line, under the dialog manager's own cooldowns.
     Game = KFGameInfo(WorldInfo.Game);
-    if (Game != None && Game.DialogManager != None)
+    if (Game != None && Game.DialogManager != None && Hands[J].Body.Controller != None)
         Game.DialogManager.PlayVoiceCommandDialog(Hands[J].Body, 9);
 }
 

@@ -5,7 +5,7 @@ param()
 $ErrorActionPreference = 'Stop'
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..')).TrimEnd('\','/')
 . (Join-Path $project 'tools/script-sources.ps1')
-. (Join-Path $project 'tools/portal-combined.ps1')
+. (Join-Path $project 'tools/combined-state.ps1')
 $tokens = $null; $parseErrors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $project 'tools/refresh-combined-native.ps1'),[ref]$tokens,[ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors.Message -join "`n") }
@@ -45,7 +45,7 @@ try {
     $null = Write-FixtureFile (Join-Path $fixture 'CMakeLists.txt') 'Synthetic project source'
     $null = Write-FixtureFile (Join-Path $fixture 'third_party/xr-sdks.cmake') 'Synthetic dependency declaration'
     $null = Write-FixtureFile (Join-Path $fixture 'tools/refresh-combined-native.ps1') 'Synthetic caller identity'
-    foreach ($directory in @('native/adapter','native/vrcore','native/xr','native/portal')) {
+    foreach ($directory in @('native/adapter','native/vrcore','native/xr')) {
         $null = Write-FixtureFile (Join-Path $fixture ($directory+'/test.cpp')) ('Synthetic source for '+$directory)
     }
     $null = Write-FixtureFile (Join-Path $sources 'Classes/Synthetic.uc') 'class Synthetic extends Object;'
@@ -57,7 +57,7 @@ try {
     $newNativeHash = Write-FixtureFile (Join-Path $nativeRoot 'native/adapter/Release/dinput8.dll') 'Synthetic new native adapter'
     $newLoaderHash = Write-FixtureFile (Join-Path $nativeRoot 'native/adapter/Release/openxr_loader.dll') 'Synthetic new loader'
     $art = @()
-    foreach ($name in @('KF2VRSource.upk','KF2VREngineer.upk','KF2VRPortal.upk')) {
+    foreach ($name in @('KF2VRSource.upk','KF2VREngineer.upk')) {
         $path = Join-Path $output $name
         $hash = Write-FixtureFile $path ('Synthetic art '+$name)
         $receipt = Join-Path $prior ('Provenance/'+$name+'.json')
@@ -71,8 +71,7 @@ try {
     $null = Write-FixtureFile (Join-Path $output 'Unlisted.upk') 'Must not copy unknown package'
     $null = Write-FixtureFile (Join-Path $sources 'unlisted.txt') 'Must not copy unknown source'
     $record = [ordered]@{
-        schema='kf2vr/combined-script-build/1'; success=$true; verification_ready=$true; prepared_only=$false
-        portals_enabled=$false
+        schema='kf2vr/combined-script-build/2'; success=$true; verification_ready=$true; prepared_only=$false
         sdk_sha256=('1'*64); snapshot_root=$sources; output_root=$output
         sources_sha256=(Get-PackageSourceHashes $sources); input_sources_sha256=@{synthetic='old-script-source-hash'}
         package_sha256=$packageHash; hand_assets=@{package_sha256=$handsHash}; localization_sha256=$localizationHash
@@ -85,8 +84,7 @@ try {
     $record | ConvertTo-Json -Depth 15 | Set-Content -LiteralPath $recordPath -Encoding UTF8
     $before = Get-FixtureHashes $prior
     $refreshed = Invoke-CombinedNativeRefresh $fixture $prior $nativeRoot
-    $state = Get-CombinedPortalState $fixture $refreshed
-    Assert-True ($state.Build.portals_enabled -is [bool] -and -not $state.Build.portals_enabled) 'Native refresh must preserve disabled Portal registration.'
+    $state = Get-CombinedBuildState $fixture $refreshed
     $after = $state.Build
     Assert-True ((Get-FixtureHashes $prior) -ceq $before) 'The original snapshot and all receipts must remain byte-identical.'
     Assert-True ($after.operation -eq 'native-refresh' -and $after.success -and $after.verification_ready) 'Refresh must identify its operation and pass the existing source gate.'
@@ -105,8 +103,8 @@ try {
         Assert-True ($entry.path.StartsWith($refreshed+'\') -and $entry.provenance.StartsWith($refreshed+'\')) 'Runtime and artifact receipt paths must point inside the new snapshot.'
     }
     $second = Invoke-CombinedNativeRefresh $fixture $refreshed $nativeRoot
-    Assert-True ($second -ne $refreshed -and (Get-CombinedPortalState $fixture $second).Build.package_sha256 -eq $packageHash) 'Repeated refreshes must create distinct valid snapshots.'
-    $secondRecord = (Get-CombinedPortalState $fixture $second).Build
+    Assert-True ($second -ne $refreshed -and (Get-CombinedBuildState $fixture $second).Build.package_sha256 -eq $packageHash) 'Repeated refreshes must create distinct valid snapshots.'
+    $secondRecord = (Get-CombinedBuildState $fixture $second).Build
     Assert-True ($secondRecord.script_reuse.compiler_errors -eq 0 -and $secondRecord.script_reuse.compiler_warnings -eq 0 -and (Test-Path -LiteralPath $secondRecord.script_reuse.compiler_log)) 'Repeated refreshes must retain compiler evidence as explicitly reused provenance.'
     Assert-Rejected { Invoke-CombinedNativeRefresh $fixture $prior (Join-Path $fixture 'outside-build') } 'A native build outside the workspace build root must be rejected.'
     $nativeBytes = [IO.File]::ReadAllBytes((Join-Path $prior 'Native/dinput8.dll'))

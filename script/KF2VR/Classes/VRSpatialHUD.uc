@@ -6,8 +6,11 @@ struct HUDWeaponReadout
 {
     var KFWeapon Weapon;
     var int Magazine, Capacity, Reserve, Secondary, SecondaryReserve;
-    var string WeaponLabel, AmmoLabel, StateLabel, ModeLabel;
-    var bool bUsesAmmo, bSecondary, bReloading;
+    var int DoshBalance, DoshCost;
+    var string WeaponLabel, AmmoLabel, StateLabel, ModeLabel, ReloadPrompt, SecondaryPrompt;
+    // Feed or action state that blocks the trigger: MAGAZINE OUT, CHAMBERED, RACK, PUMP, CYCLE.
+    var string FeedLabel;
+    var bool bUsesAmmo, bSecondary, bReloading, bDosh, bSecondaryReload, bPhysicalSecondary;
     var float Charge; // 0..1 while a charge weapon is winding up, else -1
     var Texture2D WeaponImage, FireModeImage, SecondaryImage;
 };
@@ -20,16 +23,17 @@ enum EStockHUDArt
     HA_Battery, HA_Grenade, HA_Trader, HA_Hazard, HA_Blood
 };
 var Texture2D StockArt[11];
-var Texture2D PerkImage, PrestigeImage, GrenadeImage, ObjectiveImage;
+var Texture2D PerkImage, PrestigeImage, GrenadeImage;
 var string PerkImagePath, PrestigeImagePath, GrenadeImagePath;
 
 var VRHandsBridge Bridge;
 var KFPlayerController PC;
-// 0 status, 1-2 weapon readouts, 3 session, 4 alert, 5 pouch counter and
-// 6-11 teammate tags (the stock friendly bars, drawn in the world).
+// 0 status, 1-2 weapon readouts, 3 unused (the retired session readout, #86),
+// 4 alert, 5 left pouch counter and
+// 6-11 teammate tags, 12 right pouch, 13 full priority/boss-introduction text.
 const TeammateFirst = 6;
 const TeammateSlots = 6;
-var VRHUDPanel Panels[12];
+var VRHUDPanel Panels[14];
 var KFPawn_Human Teammates[6];
 var KFGFxMoviePlayer_HUD SourceMovie;
 var GFxObject SourceWidgets[3];
@@ -47,32 +51,59 @@ var float WatchAspect;
 var Font WatchFont, WatchDigitFont;
 var Texture2D WatchGlass, WatchGlow;
 var Texture2D ReadoutSmoke;
-var float LastPlacement, LastValues, SessionRevealUntil;
-// The pouch counter lingers briefly after the look or reach ends.
-var float PouchVisibleUntil;
-var string PreviousSession;
+var float LastPlacement, LastValues;
+// Indexed by physical pouch side; counters linger after the look or reach ends.
+var float PouchVisibleUntil[2];
+// Confirmed deposits are presentation receipts, never an ammunition ledger.
+// Indexed by physical pouch side, independently of the gun's current hand.
+struct MagazineDepositNotice
+{
+    var KFWeapon Target;
+    var byte AmmoSlot;
+    var int Credited;
+    var float Started;
+};
+struct MagazineDepositReceipt
+{
+    var KFWeapon Target;
+    var int Serial;
+};
+var MagazineDepositNotice MagazineDeposits[2];
+var array<MagazineDepositReceipt> MagazineDepositReceipts;
 var bool bSessionUrgent;
-var string ContentKey[12];
-var int HealthValue, HealthLimit, ArmorValue, ArmorLimit, Charge, Dosh, Grenades, Weight, WeightLimit, Battery;
-var int XPPercent, ObjectiveReward;
+var string ContentKey[14];
+var int HealthValue, HealthLimit, ArmorValue, ArmorLimit, Charge, Dosh, Grenades, Battery;
+var int XPPercent;
 var HUDWeaponReadout Ammo[2]; // actual left/right ownership, never Pawn.Weapon mirrored twice
 var string PerkLabel, WaveLabel, SessionValue, SessionLabel, BossLabel;
 var float BossHealth;
 var bool bBossActive;
-var string ObjectiveTitle, ObjectiveText;
-var string WavePriorityTitle, WavePriorityText;
+var string WavePriorityTitle;
+// Stock callbacks advance gameplay sequencing. The VR copy retains complete
+// payloads for at least five seconds so hidden Scaleform intros cannot erase it.
+var string PriorityNoticeTitle, PriorityNoticeText, PriorityNoticeIconPath, CachedNoticeIconPath;
+var string BossIntroTitle, BossIntroText;
+var int PriorityNoticeLifeTime, PriorityNoticeType;
+var bool bPriorityNoticeActive, bBossIntroActive, bNoticeLayoutDirty, bWavePriorityCaptured;
+var float PriorityNoticeStarted, BossIntroStarted, NoticeHeight;
+var bool bPriorityCompletionPending;
+var int PriorityNoticePage, BossIntroPage, NoticeRows;
+var int NoticeGeneration, NoticeRenderedGeneration;
+var int PriorityTitleLines, BossTitleLines;
+var array<string> PriorityNoticeLines, BossIntroLines;
+var Texture2D PriorityNoticeIcon;
 var string InteractionPromptText, InteractionPromptButton;
 var string InteractionHoldText, InteractionHoldButton;
 var string MapNoticeText, MapCounterText;
+var string RenderedMapNotice, RenderedMapCounter;
+var bool bInteractionRendered;
 var float ObjectiveProgress;
-var float WavePriorityUntil, InteractionPromptUntil;
+var float InteractionPromptUntil;
 var bool bGlobalDamage, bFlashlight, bSessionSupported, bObjectiveWarning, bWaveActive;
 // Rack 'Em Up / Rhythm Method: the perk pushes the streak to the HUD movie on
 // every hit and every decay tick, so this mirrors a pushed value rather than
 // polling a private perk counter. The streak can exceed Max; the damage bonus
 // is what caps, not the count the player is watching.
-var int RhythmCount, RhythmMax;
-var float RhythmUntil;
 var float TraderDistance, TraderBearingAngle;
 var int TraderElevationDiff;
 var bool bTraderNavActive;
@@ -86,13 +117,34 @@ var int PreviousWatchArmor;
 var float WatchArmorWarningUntil;
 var string WatchAlertLabel;
 var bool bWatchAlertCritical;
+// Latest incoming player chat replaces the supplies strip after a wrist glance.
+var string ChatSender, ChatText;
+var KFPawn_Human ChatPawn;
+var bool bChatUnread, bChatPingTried, bWatchChatText;
+var float ChatShownUntil, ChatBuzzAt;
+var color ChatBlue;
+var PointLightComponent ChatLight, ChatLightTemplate;
+var AkEvent ChatPing;
 var VRHUDStatus StatusFeed;
 var VRCommandoHealthbars CommandoHealthbars;
 var VRZedMarkers ZedMarkers;
+var VRObjectiveMarker ObjectiveMarker;
 var VRLockOnMarkers LockOnMarkers;
 var VRDamagePopups DamagePopups;
 var float NextDamagePopupInitTime;
 var bool bDamagePopupAuthorityFeed;
+struct PendingDamageNumber
+{
+    var int Amount;
+    var vector At;
+    var class<KFDamageType> Kind;
+    var bool bHeadshot;
+    var float RealTime, GameTime;
+};
+var array<PendingDamageNumber> PendingDamageNumbers;
+var KFPawn_Human DamagePopupPawn;
+var int DamagePopupCalibration, DamagePopupRoom;
+const DamagePopupRecoverySeconds = 0.35;
 var color Ink, Muted, Accent, Amber, Red, Track, Backing;
 // Money reads in dosh green on every readout.
 var color DoshGreen, ReadoutBacking;
@@ -107,8 +159,9 @@ simulated function bool InitializeHUD(VRHandsBridge B)
     Bridge = B;
     PC = B.PC;
     if (!LoadStockArt()) return false;
-    for (I = 0; I < 12; ++I)
+    for (I = 0; I < ArrayCount(Panels); ++I)
     {
+        if (I == 3) continue;
         Panels[I] = Spawn(class'VRHUDPanel', self);
         if (Panels[I] == None || !Panels[I].InitializePanel(self, I)) return false;
     }
@@ -117,6 +170,8 @@ simulated function bool InitializeHUD(VRHandsBridge B)
     if (CommandoHealthbars != None) CommandoHealthbars.Initialize(self);
     ZedMarkers = Spawn(class'VRZedMarkers', self);
     if (ZedMarkers != None && !ZedMarkers.Initialize(self)) { ZedMarkers.Destroy(); ZedMarkers = None; }
+    ObjectiveMarker = Spawn(class'VRObjectiveMarker', self);
+    if (ObjectiveMarker != None) ObjectiveMarker.HUDOwner = self;
     LockOnMarkers = Spawn(class'VRLockOnMarkers', self);
     if (LockOnMarkers != None && !LockOnMarkers.Initialize(self)) { LockOnMarkers.Destroy(); LockOnMarkers = None; }
     UpdateDamagePopups();
@@ -124,10 +179,17 @@ simulated function bool InitializeHUD(VRHandsBridge B)
     // InitializeHUD is called from bridge Tick, never from a render callback.
     // Use the standard creation path; this is a fresh HUD movie, not an RTT
     // rebind of an active movie. All stock callbacks remain in the subclass.
-    if (PC.MyHUD != None && PC.MyHUD.Class == class'KFGFxHudWrapper')
+    if (PC.MyHUD != None && (PC.MyHUD.Class == class'KFGFxHudWrapper'
+        || PC.MyHUD.Class == class'VRHUDSafeWrapper'))
         PC.ClientSetHUD(class'VRHUDWrapper');
-    `log("KF2VR_HUD initialized wristWorldDepth=1 sessionForeground=1 surfaces=12 independentHandAmmo=1 redrawOnChange=1 stockArtwork=1");
+    `log("KF2VR_HUD initialized wristWorldDepth=1 sessionForeground=1 surfaces=14 independentHandAmmo=1 redrawOnChange=1 stockArtwork=1");
     return true;
+}
+
+// The headset is live for this HUD, whether or not its panels show this frame.
+simulated function bool OwnsFlatNotices()
+{
+    return bInitialized && Bridge != None && PC != None && PC == Bridge.PC && Bridge.IsLocalVRContext();
 }
 
 simulated function bool ContextValid()
@@ -146,8 +208,17 @@ simulated function bool ContextValid()
 simulated function RefreshSource()
 {
     local int I;
+    local VRHUDMovie OldMovie;
     if (SourceMovie != PC.MyGFxHUD)
     {
+        OldMovie = VRHUDMovie(SourceMovie);
+        if (OldMovie != None && OldMovie.SpatialHUD == self)
+        {
+            OldMovie.RestorePriorityNotice(); OldMovie.RestoreBossIntroduction();
+            OldMovie.SpatialHUD = None;
+        }
+        ClearCapturedPriorityMessages();
+        ClearBossIntroduction();
         // Resolution/travel recreates proxies. Never send commands through a
         // closed movie's retained widget handles.
         SourceMovie = PC.MyGFxHUD;
@@ -163,24 +234,87 @@ simulated function RefreshSource()
     StatusFeed = VRHUDStatus(SourceMovie.PlayerStatusContainer);
 }
 
-simulated function bool CaptureWavePriorityMessage(string Title, string Detail, int LifeTime)
+simulated function InvalidateNoticeLayout()
+{
+    ++NoticeGeneration;
+    bNoticeLayoutDirty = true;
+    if (Panels[13] != None && Panels[13].Display != None) Panels[13].Display.bNeedsUpdate = true;
+}
+
+simulated function CapturePriorityNotice(string Title, string Detail, int LifeTime, int MessageType, string IconPath)
+{
+    PriorityNoticeTitle = Title; PriorityNoticeText = Detail;
+    PriorityNoticeLifeTime = Max(5, LifeTime); PriorityNoticeType = MessageType; PriorityNoticeIconPath = IconPath;
+    PriorityNoticeStarted = WorldInfo.RealTimeSeconds; PriorityNoticePage = 0;
+    bPriorityCompletionPending = false;
+    bPriorityNoticeActive = Title != "";
+    InvalidateNoticeLayout();
+}
+
+simulated function ClearCapturedPriorityMessages()
+{
+    bPriorityCompletionPending = false;
+    bPriorityNoticeActive = false;
+    PriorityNoticeTitle = ""; PriorityNoticeText = ""; PriorityNoticeIconPath = "";
+    WavePriorityTitle = "";
+    bWavePriorityCaptured = false;
+    InvalidateNoticeLayout();
+    if (Panels[0] != None && Panels[0].Display != None) Panels[0].Display.bNeedsUpdate = true;
+    if (Panels[4] != None && Panels[4].Display != None) Panels[4].Display.bNeedsUpdate = true;
+}
+
+// Scaleform may complete its hidden animation after only its intro. Retain
+// the captured text for its readable lifetime while stock advances its queue.
+simulated function CompleteCapturedPriorityMessages()
+{
+    if (bPriorityNoticeActive && WorldInfo.RealTimeSeconds < PriorityNoticeStarted + PriorityNoticeLifeTime)
+        bPriorityCompletionPending = true;
+    else ClearCapturedPriorityMessages();
+}
+
+simulated function CaptureBossIntroduction(string Title, string Detail)
+{
+    BossIntroTitle = Title; BossIntroText = Detail;
+    BossIntroStarted = WorldInfo.RealTimeSeconds; BossIntroPage = 0;
+    bBossIntroActive = Title != "";
+    InvalidateNoticeLayout();
+}
+
+simulated function ClearBossIntroduction()
+{
+    bBossIntroActive = false; BossIntroTitle = ""; BossIntroText = "";
+    InvalidateNoticeLayout();
+}
+
+simulated function bool PriorityNoticePresented()
+{
+    return bPriorityNoticeActive && NoticeGeneration == NoticeRenderedGeneration
+        && ContextValid() && Panels[13] != None && Panels[13].bPresented;
+}
+
+simulated function bool BossIntroductionPresented()
+{
+    return bBossIntroActive && NoticeGeneration == NoticeRenderedGeneration
+        && ContextValid() && Panels[13] != None && Panels[13].bPresented;
+}
+
+simulated function bool CaptureWavePriorityMessage(string Title, string Detail, int LifeTime, int MessageType, string IconPath)
 {
     local bool bRepeat;
     if (!ContextValid() || !bSessionSupported || Title == "") return false;
-    // The stock callback re-fires this every frame; log only a new notice.
+    // Use the same complete, wrapped payload as other priority notices. The
+    // watch footer is an annunciator; it cannot replace the wave-clear banner.
     bRepeat = WavePriorityActive() && WavePriorityTitle == Title;
     WavePriorityTitle = Title;
-    WavePriorityText = Detail;
-    // Stock lifetimes are seconds. Bound this visual-only receipt so a bad
-    // callback cannot leave a permanent world alert.
-    WavePriorityUntil = WorldInfo.RealTimeSeconds + Clamp(LifeTime, 1, 15);
-    if (Panels[4] != None && Panels[4].Display != None) Panels[4].Display.bNeedsUpdate = true;
+    bWavePriorityCaptured = true;
+    CapturePriorityNotice(Title, Detail, LifeTime, MessageType, IconPath);
+    if (Panels[0] != None && Panels[0].Display != None) Panels[0].Display.bNeedsUpdate = true;
     if (!bRepeat)
     {
         `log("KF2VR_HUD wave_priority spatial=1 title=" $ Title $ " lifetime=" $ LifeTime);
         // On the watch the notice is out of view until the wrist turns; a
         // short buzz on that hand says there is something to read.
-        if (Bridge.bWristwatchHUD) PulseWatchHand(0.35, 0.12);
+        if (WatchVisible()) PulseWatchHand(0.35, 0.12);
     }
     return true;
 }
@@ -189,40 +323,159 @@ simulated function PulseWatchHand(float Strength, float Duration)
 {
     local int Hand;
     Hand = 1 - Clamp(Bridge.PreferredWeaponHand, 0, 1);
-    if (Bridge.NativeHapticMask == 0) { Bridge.NativeHapticStrength = 0; Bridge.NativeHapticDuration = 0; }
-    Bridge.NativeHapticMask = Bridge.NativeHapticMask | (1 << Hand);
-    Bridge.NativeHapticStrength = FMax(Bridge.NativeHapticStrength, Strength);
-    Bridge.NativeHapticDuration = FMax(Bridge.NativeHapticDuration, Duration);
+    Bridge.QueueHandHaptic(1 << Hand, Strength, Duration);
+}
+
+simulated function ReceiveChat(string Sender, string Message)
+{
+    if (Bridge == None || !WatchVisible() || PC == None || PC != Bridge.PC
+        || Bridge.Human == None || PC.Pawn != Bridge.Human || Bridge.Human.Health <= 0 || Message == "") return;
+    ChatPawn = Bridge.Human;
+    ChatSender = Sender;
+    ChatText = Message;
+    bChatUnread = true;
+    ChatShownUntil = 0;
+    ChatBuzzAt = 0;
+    if (ContextValid())
+    {
+        PulseWatchHand(0.6, 0.12);
+        ChatBuzzAt = WorldInfo.RealTimeSeconds + 0.22;
+        if (!bChatPingTried)
+        {
+            bChatPingTried = true;
+            ChatPing = AkEvent(DynamicLoadObject("WW_UI_PlayerCharacter.Play_UI_Collectible_Hit", class'AkEvent', true));
+        }
+        if (ChatPing != None) PC.PlaySoundBase(ChatPing, true);
+    }
+}
+
+simulated function SilenceWatchChat()
+{
+    ChatBuzzAt = 0;
+    SetChatLight(false);
+}
+
+simulated function ClearWatchChat()
+{
+    SilenceWatchChat();
+    ChatPawn = None;
+    ChatSender = ""; ChatText = "";
+    bChatUnread = false;
+    ChatShownUntil = 0;
+}
+
+simulated function bool ChatShowing()
+{
+    return ChatText != "" && ChatShownUntil > WorldInfo.RealTimeSeconds;
+}
+
+// Use the very same rendered transform that placed the watch this frame.
+simulated function UpdateWatchChat(vector Position, rotator Orientation)
+{
+    local float Now;
+    local int Hand;
+    Hand = 1 - Clamp(Bridge.PreferredWeaponHand, 0, 1);
+    if (!bSessionSupported || !Panels[0].bPresented || Bridge.NativeHeadTracked == 0
+        || (Bridge.NativeValidMask & (1 << Hand)) == 0)
+    {
+        SilenceWatchChat();
+        return;
+    }
+    Now = WorldInfo.RealTimeSeconds;
+    if (ChatBuzzAt > 0 && Now >= ChatBuzzAt)
+    {
+        ChatBuzzAt = 0;
+        PulseWatchHand(0.6, 0.12);
+    }
+    // The display front is its -X face. Do not acknowledge a hidden panel.
+    if (bChatUnread && (Normal(Bridge.HeadPosition - Position) dot -vector(Orientation)) >= 0.6)
+    {
+        bChatUnread = false;
+        ChatShownUntil = Now + 8.0;
+    }
+    if (ChatShownUntil > 0 && Now >= ChatShownUntil) ChatShownUntil = 0;
+    SetChatLight(bChatUnread, Position, Orientation);
+}
+
+simulated function SetChatLight(bool bOn, optional vector Position, optional rotator Orientation)
+{
+    if (!bOn)
+    {
+        if (ChatLight != None && ChatLight.bEnabled) ChatLight.SetEnabled(false);
+        return;
+    }
+    if (ChatLight == None)
+    {
+        ChatLight = new(self) class'PointLightComponent'(ChatLightTemplate);
+        AttachComponent(ChatLight);
+        ChatLight.SetRadius(48.0);
+    }
+    ChatLight.SetTranslation((Position - vector(Orientation) * 2.0 - Location) << Rotation);
+    ChatLight.SetLightProperties(1.4 * (0.25 + 0.75 * Square(Sin(WorldInfo.RealTimeSeconds * Pi * 1.1))), ChatBlue);
+    if (!ChatLight.bEnabled) ChatLight.SetEnabled(true);
+}
+
+simulated function WatchChat(Canvas C, float X, float Width)
+{
+    local string First, Second;
+    local int Split, I, Center;
+    // Player names and localized chat use stock Unicode glyphs, not the watch atlas.
+    bWatchChatText = true;
+    First = ChatText;
+    if (Len(First) > 26)
+    {
+        Center = Len(First) / 2;
+        Split = Center;
+        for (I = 0; I < Center; ++I)
+        {
+            if (Mid(First, Center - I, 1) == " ") { Split = Center - I; break; }
+            if (Mid(First, Center + I, 1) == " ") { Split = Center + I; break; }
+        }
+        // Hard splitting must retain the character at Split.
+        Second = Mid(First, Split + (Mid(First, Split, 1) == " " ? 1 : 0));
+        First = Left(First, Split);
+    }
+    Text(C, "FROM" @ ChatSender, X, 326, Width, 28, ChatBlue, true);
+    Text(C, First, X, 354, Width, Second != "" ? 24 : 44, WatchInk, true);
+    if (Second != "") Text(C, Second, X, 378, Width, 24, WatchInk, true);
+    bWatchChatText = false;
 }
 
 simulated function bool WavePriorityActive()
 {
-    return WavePriorityTitle != "" && WavePriorityUntil > WorldInfo.RealTimeSeconds;
+    return bWavePriorityCaptured && WavePriorityTitle != "";
 }
 
-simulated function bool FloatingWaveNotice()
+simulated function bool WavePriorityPresented()
 {
-    return WavePriorityActive() && !Bridge.bWristwatchHUD;
+    // A watch title is only an annunciator, never the complete stock payload.
+    return WavePriorityActive() && PriorityNoticePresented();
 }
 
 simulated function bool CaptureInteractionMessage(string Text, string KeyBind, float Duration,
     optional string HoldText, optional string HoldButton)
 {
     if (!ContextValid() || !bSessionSupported || Text == "") return false;
+    bInteractionRendered = false;
     InteractionPromptText = Text;
-    if (KeyBind == "" || Caps(KeyBind) == "E" || Caps(KeyBind) == "USE")
-        InteractionPromptButton = "EMPTY-HAND TRIGGER";
-    else InteractionPromptButton = Caps(KeyBind);
+    // The movie maps verified use actions explicitly. An empty binding on a
+    // grab/EMP status warning is intentional, not an empty-hand use action.
+    InteractionPromptButton = Caps(KeyBind);
     InteractionHoldText = HoldText;
     InteractionHoldButton = HoldButton;
-    if (Duration <= 0) Duration = 2.5;
-    InteractionPromptUntil = WorldInfo.RealTimeSeconds + FClamp(Duration, 0.5, 10.0);
+    // Stock keeps a zero-duration prompt (doors, trader, ammo, objectives) up
+    // until HideInteractionMessage, which clears this copy too. Expiring it
+    // early handed the prompt back to the flat stock widget at the bottom of
+    // each eye for as long as the player stood there (playtest 011320).
+    if (Duration <= 0) InteractionPromptUntil = WorldInfo.RealTimeSeconds + 3600.0;
+    else InteractionPromptUntil = WorldInfo.RealTimeSeconds + FMax(Duration, 0.5) + 0.25;
     if (Panels[4] != None && Panels[4].Display != None) Panels[4].Display.bNeedsUpdate = true;
     return true;
 }
 
 simulated function ClearInteractionMessage()
 {
+    bInteractionRendered = false;
     InteractionPromptText = "";
     InteractionPromptButton = "";
     InteractionHoldText = "";
@@ -231,33 +484,25 @@ simulated function ClearInteractionMessage()
     if (Panels[4] != None && Panels[4].Display != None) Panels[4].Display.bNeedsUpdate = true;
 }
 
-simulated function bool CaptureRhythmCounter(int Count, int Limit)
-{
-    if (!ContextValid() || !bSessionSupported) return false;
-    RhythmCount = Max(0, Count);
-    RhythmMax = Clamp(Limit, 1, 16);
-    // The perk stops pushing when the skill is dropped or the body changes.
-    // A streak that stops updating expires rather than sticking at its peak.
-    RhythmUntil = RhythmCount > 0 ? WorldInfo.RealTimeSeconds + 12.0 : 0.0;
-    if (Panels[3] != None && Panels[3].Display != None) Panels[3].Display.bNeedsUpdate = true;
-    return true;
-}
-
-simulated function ClearRhythmCounter()
-{
-    RhythmCount = 0;
-    RhythmUntil = 0;
-    if (Panels[3] != None && Panels[3].Display != None) Panels[3].Display.bNeedsUpdate = true;
-}
-
-simulated function bool RhythmCounterActive()
-{
-    return RhythmCount > 0 && RhythmUntil > WorldInfo.RealTimeSeconds;
-}
-
 simulated function bool InteractionPromptActive()
 {
     return InteractionPromptText != "" && InteractionPromptUntil > WorldInfo.RealTimeSeconds;
+}
+
+// Captured content can share a surface with higher-priority rows. Suppress
+// its stock fallback only after those exact rows were drawn and placed.
+simulated function bool InteractionPromptPresented()
+{
+    return ContextValid() && InteractionPromptActive() && bInteractionRendered
+        && Panels[4] != None && Panels[4].bPresented;
+}
+
+// The Rack 'Em Up / Rhythm Method streak has no VR surface for now (#86): its
+// per-tier sound carries it. The stock flat counter must never sit between
+// the eyes, so it stays hidden for the whole VR session.
+simulated function bool SuppressStockRhythmCounter()
+{
+    return ContextValid();
 }
 
 simulated function bool CommandoHealthbarsActive()
@@ -287,7 +532,8 @@ simulated function bool CaptureMapMessages(string Notice, string Counter)
         MapCounterText = Counter;
         if (Panels[4] != None && Panels[4].Display != None) Panels[4].Display.bNeedsUpdate = true;
     }
-    return MapMessagesActive() && Panels[4] != None && Panels[4].bPresented;
+    return MapMessagesActive() && Panels[4] != None && Panels[4].bPresented
+        && RenderedMapNotice == MapNoticeText && RenderedMapCounter == MapCounterText;
 }
 
 simulated function HideSource(int Index, bool bHide)
@@ -342,27 +588,44 @@ simulated function HideBossSource(bool bHide)
 simulated function SuspendHUD()
 {
     local int I;
-    PouchVisibleUntil = 0;
+    SilenceWatchChat();
+    // Menus/tracking conceal the watch temporarily; pawn/session changes own its lifetime.
+    if (ChatPawn != None && (Bridge == None || PC == None || PC != Bridge.PC
+        || PC.Pawn != ChatPawn || Bridge.Human != ChatPawn || ChatPawn.Health <= 0
+        || Bridge.NativeConnection <= 0)) ClearWatchChat();
+    bInteractionRendered = false;
+    RenderedMapNotice = ""; RenderedMapCounter = "";
+    PouchVisibleUntil[0] = 0; PouchVisibleUntil[1] = 0;
+    MagazineDeposits[0].Target = None; MagazineDeposits[1].Target = None;
     if (PC != None) RefreshSource();
     for (I = 0; I < 3; ++I)
     {
         if (Panels[I] != None) Panels[I].HidePanel();
         HideSource(I, false);
     }
-    if (Panels[3] != None) Panels[3].HidePanel();
     if (Panels[4] != None) Panels[4].HidePanel();
     if (Panels[5] != None) Panels[5].HidePanel();
+    if (Panels[12] != None) Panels[12].HidePanel();
+    if (Panels[13] != None) Panels[13].HidePanel();
     for (I = 0; I < TeammateSlots; ++I)
     {
         Teammates[I] = None;
         if (Panels[TeammateFirst + I] != None) Panels[TeammateFirst + I].HidePanel();
     }
     HideBossSource(false);
+    if (VRHUDMovie(SourceMovie) != None)
+    {
+        VRHUDMovie(SourceMovie).RestorePriorityNotice();
+        VRHUDMovie(SourceMovie).RestoreBossIntroduction();
+        VRHUDMovie(SourceMovie).SyncContentVisibility();
+    }
     if (CommandoHealthbars != None) CommandoHealthbars.HideAll();
     if (ZedMarkers != None) ZedMarkers.HideAll();
     if (LockOnMarkers != None) LockOnMarkers.HideAll();
     if (Bridge != None) Bridge.LockSource = None;
     if (DamagePopups != None) DamagePopups.HideAll();
+    PendingDamageNumbers.Length = 0;
+    DamagePopupPawn = None;
     bWatchValuesReady = false;
 
     WatchArmorWarningUntil = 0;
@@ -372,7 +635,8 @@ simulated function SuspendHUD()
 simulated function bool GetWeaponReadoutTransform(int HandIndex, out vector Position, out rotator Orientation)
 {
     local KFWeapon W;
-    local int Profile;
+    local VRWeaponRuntime R;
+    local int Profile, LayoutHand;
     local name RootBone;
     local vector Offset;
     local Quat RootRotation;
@@ -389,11 +653,23 @@ simulated function bool GetWeaponReadoutTransform(int HandIndex, out vector Posi
     Offset = vect(-5,12,10);
     Offset.X += FClamp(Bridge.WeaponAmmoReadoutForward, -12.0, 12.0);
     Offset.Z += FClamp(Bridge.WeaponAmmoReadoutHeight, -12.0, 12.0);
-    if (HandIndex == 0) Offset.Y = -Offset.Y;
+    LayoutHand = HandIndex;
+    if (Bridge.HandInventory != None)
+    {
+        R = Bridge.HandInventory.GetHeldForHand(HandIndex);
+        if (R != None && R.PrimaryHand < 0 && R.CarryPrimaryHand >= 0)
+            LayoutHand = R.CarryPrimaryHand;
+    }
+    if (LayoutHand == 0) Offset.Y = -Offset.Y;
     Position = W.MySkelMesh.GetBoneLocation(RootBone) + QuatRotateVector(RootRotation, Offset);
     // Cube's display front points along local -X.
     Orientation = rotator(Position - Bridge.HeadPosition);
     return true;
+}
+
+simulated function bool WatchVisible()
+{
+    return Bridge != None && (Bridge.bWristwatchHUD || (Bridge.CalibrationPanel != None && Bridge.CalibrationPanel.WatchFitActive()));
 }
 
 simulated function bool GetWristwatchTransform(out vector Position, out rotator Orientation)
@@ -402,7 +678,7 @@ simulated function bool GetWristwatchTransform(out vector Position, out rotator 
     local vector Fwd, Thm, Plm, XAxis, YAxis, ZAxis;
     local quat BoneQ;
 
-    if (!Bridge.bWristwatchHUD) return false;
+    if (!WatchVisible()) return false;
     StatusHand = 1 - Clamp(Bridge.PreferredWeaponHand, 0, 1);
     if (StatusHand < 0 || StatusHand > 1) return false;
     // Hand tracking check
@@ -449,6 +725,7 @@ simulated function PlaceWristwatch()
     // Resource readiness survives contextual concealment.
     Panels[0].PlacePanel(Position, Orientation,
         vect(11.4688, 4.7104, 0) * FClamp(Bridge.WristwatchScale, 0.5, 2.0), bVisible);
+    UpdateWatchChat(Position, Orientation);
 }
 
 simulated function PlaceWeaponReadout(int HandIndex)
@@ -462,12 +739,23 @@ simulated function PlaceWeaponReadout(int HandIndex)
         vect(15,6,0) * FClamp(Bridge.WeaponAmmoReadoutScale, 0.5, 2.0), bVisible);
 }
 
+simulated function int PouchReserve(KFWeapon W, optional byte Slot)
+{
+    if (W == None) return 0;
+    if (Bridge != None && Bridge.HandInventory != None && Bridge.HandInventory.Input != None
+        && Bridge.HandInventory.Input.Reloads != None)
+        return Bridge.HandInventory.Input.Reloads.ReserveForHUD(W, Slot);
+    return Bridge.PouchReserve(W, Slot);
+}
+
 simulated function VRWeaponRuntime PouchRuntime(int HandIndex)
 {
     local VRInteractiveReload R;
     if (Bridge == None || Bridge.HandInventory == None || Bridge.HandInventory.Input == None) return None;
     R = Bridge.HandInventory.Input.Reloads;
     if (R == None || R.BeltShells == None) return None;
+    if (R.Secondary != None && R.Secondary.bActive && R.Secondary.GunHand == HandIndex)
+        return R.Secondary.Runtime;
     return R.BeltShells.RuntimeForHand(HandIndex);
 }
 
@@ -476,6 +764,7 @@ simulated function VRWeaponRuntime PouchRuntime(int HandIndex)
 simulated function bool PouchEntry(int HandIndex)
 {
     local VRWeaponRuntime R;
+    if (HandIndex < 0 || HandIndex > 1) return false;
     if (Ammo[HandIndex].Weapon == None || !Ammo[HandIndex].bUsesAmmo) return false;
     R = PouchRuntime(HandIndex);
     return R != None && R.PrimaryHand == HandIndex && R.Item == Ammo[HandIndex].Weapon;
@@ -497,7 +786,65 @@ simulated function bool PouchHovered(int HandIndex)
     local VRInteractiveReload R;
     if (Bridge == None || Bridge.HandInventory == None || Bridge.HandInventory.Input == None) return false;
     R = Bridge.HandInventory.Input.Reloads;
+    if (R != None && R.Secondary != None && R.Secondary.bActive
+        && R.Secondary.GunHand == HandIndex && R.Secondary.PouchHovered()) return true;
     return R != None && R.BeltShells != None && R.BeltShells.Hovered(Ammo[HandIndex].Weapon, HandIndex);
+}
+
+// Call only after authority confirms the actual reserve credit. Consume a
+// receipt even while hidden so reopening the HUD cannot replay a stale toast.
+simulated function NotifyMagazineDeposit(KFWeapon TargetW, int ActualCredited, byte PouchSide, int ReceiptSerial, optional byte AmmoSlot)
+{
+    local int I;
+    local MagazineDepositReceipt Receipt;
+    if (TargetW == None || ActualCredited <= 0 || PouchSide > 1 || ReceiptSerial <= 0) return;
+    for (I = 0; I < MagazineDepositReceipts.Length; ++I)
+        if (MagazineDepositReceipts[I].Target == TargetW && MagazineDepositReceipts[I].Serial == ReceiptSerial) return;
+    Receipt.Target = TargetW; Receipt.Serial = ReceiptSerial;
+    MagazineDepositReceipts.AddItem(Receipt);
+    if (!ContextValid() || !Bridge.bWeaponAmmoReadouts || Bridge.NativeHeadTracked == 0
+        || TargetW.bDeleteMe || TargetW.Owner != Bridge.Human) return;
+    if (MagazineDepositActive(PouchSide) && MagazineDeposits[PouchSide].Target == TargetW
+        && MagazineDeposits[PouchSide].AmmoSlot == AmmoSlot)
+        MagazineDeposits[PouchSide].Credited += Min(ActualCredited, MaxInt - MagazineDeposits[PouchSide].Credited);
+    else
+    {
+        MagazineDeposits[PouchSide].Target = TargetW;
+        MagazineDeposits[PouchSide].AmmoSlot = AmmoSlot;
+        MagazineDeposits[PouchSide].Credited = ActualCredited;
+    }
+    MagazineDeposits[PouchSide].Started = WorldInfo.RealTimeSeconds;
+    // Reserve accessors may have changed between the normal 20 Hz HUD reads.
+    ReadWeapon(0); ReadWeapon(1);
+    Dirty(PouchSide == 0 ? 5 : 12, PouchKey());
+}
+
+simulated function bool MagazineDepositActive(int Side)
+{
+    local KFWeapon W;
+    local float Age;
+    W = MagazineDeposits[Side].Target;
+    Age = WorldInfo.RealTimeSeconds - MagazineDeposits[Side].Started;
+    return W != None && !W.bDeleteMe && W.Owner == Bridge.Human
+        && MagazineDeposits[Side].Credited > 0 && Age >= 0 && Age < 0.9;
+}
+
+// A paired member may share reserve with the held member, but an airborne
+// member's escrow is separate. Compare with THIS pouch's displayed weapon,
+// never the other hand's matching gun or a secondary-ammo counter.
+simulated function bool MagazineDepositMatchesPouch(int Hand, int Side)
+{
+    local KFWeapon TargetW, PouchW;
+    local VRWeaponPair Pair;
+    if (!PouchEntry(Hand) || Ammo[Hand].bSecondaryReload || MagazineDeposits[Side].AmmoSlot != 0) return false;
+    TargetW = MagazineDeposits[Side].Target;
+    PouchW = Ammo[Hand].Weapon;
+    if (TargetW == PouchW) return true;
+    Pair = class'VRWeaponPair'.static.ForMember(TargetW);
+    return Pair != None && Pair.PairState == 2 && Pair.Human == Bridge.Human
+        && Pair.IsMember(TargetW) && Pair.IsMember(PouchW)
+        && !Pair.WorldReleased(TargetW) && !Pair.WorldReleased(PouchW)
+        && class'VRWeaponPair'.static.ForMember(PouchW) == Pair;
 }
 
 simulated function string PouchKey()
@@ -509,32 +856,79 @@ simulated function string PouchKey()
     R = Bridge.HandInventory.Input.Reloads;
     if (R == None || R.BeltShells == None) return "";
     for (Hand = 0; Hand < 2; ++Hand)
+    {
         Key @= string(Ammo[Hand].Weapon) @ PouchEntry(Hand) @ Ammo[Hand].WeaponLabel
-            @ Ammo[Hand].Reserve @ Ammo[Hand].Capacity @ string(Ammo[Hand].WeaponImage)
-            @ PouchHovered(Hand) @ R.BeltShells.UsesHip(Hand) @ string(R.BeltShells.HipSession(Hand));
+            @ Ammo[Hand].Reserve @ Ammo[Hand].Capacity @ Ammo[Hand].bSecondaryReload
+            @ Ammo[Hand].bPhysicalSecondary @ Ammo[Hand].SecondaryReserve
+            @ string(Ammo[Hand].SecondaryImage) @ Ammo[Hand].DoshBalance @ Ammo[Hand].DoshCost @ string(Ammo[Hand].WeaponImage)
+            @ PouchHovered(Hand) @ R.BeltShells.UsesHip(Hand) @ string(R.BeltShells.HipSession(Hand))
+            @ PouchDisplayHand(Hand);
+        if (MagazineDepositActive(Hand))
+            Key @= string(MagazineDeposits[Hand].Target) @ MagazineDeposits[Hand].Credited @ MagazineDeposits[Hand].AmmoSlot
+                @ int((WorldInfo.RealTimeSeconds - MagazineDeposits[Hand].Started) * 60)
+                @ MagazineDepositMatchesPouch(0, Hand) @ MagazineDepositMatchesPouch(1, Hand);
+    }
     return Key @ SharedPouchReserve();
 }
 
 // Shown while the player looks down at the pouch or brings a hand to it.
 simulated function PlacePouchCounter()
 {
+    PlaceSidePouchCounter(0, 5);
+    PlaceSidePouchCounter(1, 12);
+}
+
+simulated function int PouchSideForHand(int Hand)
+{
+    if (!Ammo[Hand].bSecondaryReload && Bridge.HandInventory != None
+        && Bridge.HandInventory.Input != None && Bridge.HandInventory.Input.Reloads != None
+        && Bridge.HandInventory.Input.Reloads.BeltShells != None)
+        return Bridge.HandInventory.Input.Reloads.BeltShells.PouchHand(Hand);
+    return 1 - Hand;
+}
+
+// Hip and free-hand reloads can nominate the same physical pouch. Its one
+// card follows the actionable session, then the hip gun, then an idle gun.
+// An unassigned side still has its own panel for confirmed deposit feedback.
+simulated function int PouchDisplayHand(int Side)
+{
+    local VRInteractiveReload R;
+    local int H, Best, Priority, BestPriority;
+    Best = -1; BestPriority = -1;
+    if (Bridge.HandInventory == None || Bridge.HandInventory.Input == None) return Best;
+    R = Bridge.HandInventory.Input.Reloads;
+    if (R == None || R.BeltShells == None) return Best;
+    for (H = 0; H < 2; ++H)
+    {
+        if (!PouchEntry(H) || PouchSideForHand(H) != Side) continue;
+        Priority = R.BeltShells.UsesHip(H) ? 1 : 0;
+        if (R.BeltShells.HipSession(H) != None) Priority = 2;
+        if ((R.bActive && R.Gun == Ammo[H].Weapon)
+            || (R.Secondary != None && R.Secondary.bActive && R.Secondary.Gun == Ammo[H].Weapon)) Priority = 3;
+        if (Priority > BestPriority) { Best = H; BestPriority = Priority; }
+    }
+    return Best;
+}
+
+simulated function PlaceSidePouchCounter(int Side, int Panel)
+{
     local VRInteractiveReload R;
     local vector Pouch, Position;
     local vector HeadForward, HeadRight, HeadUp, PanelNormal, PanelRight, PanelUp;
-    local int H, Count, GunHand;
-    local bool bNear;
-    Count = (PouchEntry(0) ? 1 : 0) + (PouchEntry(1) ? 1 : 0);
+    local int H, GunHand;
+    local bool bNear, bDeposit;
+    GunHand = PouchDisplayHand(Side);
+    bDeposit = MagazineDepositActive(Side);
     if (!Bridge.bWeaponAmmoReadouts || Bridge.NativeHeadTracked == 0
-        || Count == 0)
+        || (!PouchEntry(GunHand) && !bDeposit))
     {
-        PouchVisibleUntil = 0;
-        Panels[5].PlacePanel(vect(0,0,0), rot(0,0,0), vect(16,6.4,0), false);
+        MagazineDeposits[Side].Target = None;
+        PouchVisibleUntil[Side] = 0;
+        Panels[Panel].PlacePanel(vect(0,0,0), rot(0,0,0), vect(16,6.4,0), false);
         return;
     }
     R = Bridge.HandInventory.Input.Reloads;
-    for (GunHand = 0; GunHand < 2; ++GunHand)
-        if (PouchEntry(GunHand)) Pouch += R.BeltShells.PositionForHand(GunHand);
-    Pouch /= Count;
+    Pouch = R.BeltPositionFor(Side);
     // Use the same fresh, calibrated world headset frame as the card's roll.
     // The stock camera can lag or clamp controller pitch; stereo retains the
     // residual HMD pose, so its gaze is not necessarily GetPlayerViewPoint's.
@@ -544,12 +938,10 @@ simulated function PlacePouchCounter()
     // Within about 35 degrees of the visible card, or a palm at the pouch.
     // Looking at the readout must reveal it even before reaching for ammo.
     bNear = (HeadForward dot Normal(Position - Bridge.HeadPosition)) > 0.82;
-    for (GunHand = 0; GunHand < 2 && !bNear; ++GunHand)
-        if (PouchEntry(GunHand))
-            for (H = 0; H < 2 && !bNear; ++H)
-                bNear = (Bridge.NativeValidMask & (1 << H)) != 0
-                    && VSize(Bridge.PalmPosition(H) - R.BeltShells.PositionForHand(GunHand)) < 22;
-    if (bNear) PouchVisibleUntil = WorldInfo.RealTimeSeconds + 0.4;
+    for (H = 0; H < 2 && !bNear; ++H)
+        bNear = (Bridge.NativeValidMask & (1 << H)) != 0
+            && VSize(Bridge.PalmPosition(H) - Pouch) < 22;
+    if (bNear) PouchVisibleUntil[Side] = WorldInfo.RealTimeSeconds + 0.4;
     // Cube's front is -X, text runs across +Y and up +Z. A direction-only
     // rotator fixes roll against world up, which becomes ambiguous looking
     // straight down. Project the headset's right axis onto the card instead.
@@ -559,8 +951,8 @@ simulated function PlacePouchCounter()
     PanelRight = Normal(PanelRight);
     PanelUp = Normal(PanelNormal cross PanelRight);
     // Keep icon and digit size stable when the other gun is stowed.
-    Panels[5].PlacePanel(Position, OrthoRotation(PanelNormal, PanelRight, PanelUp),
-        vect(16,6.4,0) * FClamp(Bridge.WeaponAmmoReadoutScale, 0.5, 2.0), WorldInfo.RealTimeSeconds < PouchVisibleUntil);
+    Panels[Panel].PlacePanel(Position, OrthoRotation(PanelNormal, PanelRight, PanelUp),
+        vect(18,7.2,0) * FClamp(Bridge.WeaponAmmoReadoutScale, 0.5, 2.0), bDeposit || WorldInfo.RealTimeSeconds < PouchVisibleUntil[Side]);
 }
 
 // Stock KF2 draws teammate name, health, armor and perk with Canvas at a
@@ -635,6 +1027,9 @@ simulated function bool HasTeammateTag(KFPawn_Human P)
 simulated function UpdateDisplay()
 {
     if (!ContextValid()) { SuspendHUD(); return; }
+    if (bPriorityCompletionPending && WorldInfo.RealTimeSeconds >= PriorityNoticeStarted + PriorityNoticeLifeTime)
+        ClearCapturedPriorityMessages();
+    if (ChatPawn != None && ChatPawn != Bridge.Human) ClearWatchChat();
     LastPlacement = WorldInfo.RealTimeSeconds;
     RefreshSource();
     if (VRHUDMovie(SourceMovie) != None) VRHUDMovie(SourceMovie).SyncMapMessages();
@@ -647,27 +1042,28 @@ simulated function UpdateDisplay()
         ReadValues();
         LastValues = WorldInfo.RealTimeSeconds;
     }
-    if (Bridge.bWristwatchHUD)
+    if (WatchVisible())
         PlaceWristwatch();
     else
+    {
+        SilenceWatchChat();
         Panels[0].PlacePanel(Bridge.HudStatusPosition, Bridge.HudStatusRotation, Bridge.HudStatusSize, (Bridge.NativeHudMask & 1) != 0);
+    }
     PlaceWeaponReadout(0);
     PlaceWeaponReadout(1);
     // Hip/free-hand session mapping can change without an ownership change.
     Dirty(5, PouchKey());
+    Dirty(12, PouchKey());
     PlacePouchCounter();
     PlaceTeammateTags();
-    // With the watch, wave, zeds left, boss health, trader time/direction and
-    // wave notices live on the wrist, and the floating session readout is
-    // never shown -- not even on a look up (playtest 2026-09-26: redundant).
-    // The alert strip carries interaction prompts alone. The panel stays
-    // ready, so the stock flat widget it replaces remains hidden.
-    Panels[3].PlacePanel(Bridge.HudSessionPosition, Bridge.HudSessionRotation, Bridge.HudSessionSize, (Bridge.NativeHudMask & 8) != 0 && bSessionSupported
-        && !Bridge.bWristwatchHUD
-        && (Bridge.NativeHudDetail != 0 || WorldInfo.RealTimeSeconds < SessionRevealUntil || bSessionUrgent));
+    // Session values and the wave-notice annunciator live on the watch; full
+    // wave notices use the notice panel and the alert strip carries map
+    // messages and interaction prompts. There is no floating session readout
+    // (#86), so the stock wave/boss widgets stay hidden for the whole session.
     Panels[4].PlacePanel(Bridge.HudAlertPosition, Bridge.HudAlertRotation, Bridge.HudAlertSize,
         (Bridge.NativeHudMask & 16) != 0 && (MapMessagesActive()
-            || (bSessionSupported && (FloatingWaveNotice() || InteractionPromptActive()))));
+            || (bSessionSupported && InteractionPromptActive())));
+    PlaceNoticePanel();
     if (VRHUDMovie(SourceMovie) != None) VRHUDMovie(SourceMovie).SyncMapMessages();
     // Readiness is independent of wrist visibility. Turning the wrist down
     // must conceal the stats, not restore the flat HUD beneath the eyes.
@@ -675,8 +1071,8 @@ simulated function UpdateDisplay()
     HideSource(1, Panels[0].bReady
         && (Ammo[0].Weapon == None || Panels[1].bReady)
         && (Ammo[1].Weapon == None || Panels[2].bReady));
-    HideSource(2, Panels[3].bReady && bSessionSupported);
-    HideBossSource(bBossActive && Panels[3].bReady);
+    HideSource(2, bSessionSupported);
+    HideBossSource(bBossActive);
     if (CommandoHealthbars != None) CommandoHealthbars.UpdateHealthbars();
     if (ZedMarkers != None) ZedMarkers.UpdateMarkers();
     Bridge.LockSource = LockOnWeapon();
@@ -694,29 +1090,52 @@ simulated function ReceiveScoredDamage(KFPawn_Monster Victim, int Amount, class<
     // Claim this feed even while the display is off, so enabling later cannot
     // poll old history for a hit already handled by the precise callback.
     bDamagePopupAuthorityFeed = true;
-    At = Victim.Location + vect(0,0,1) * (Victim.GetCollisionHeight() * 1.15 * Victim.CurrentBodyScale);
-    ReceiveDamagePopup(Amount, At, Kind, Victim.LastHeadShotReceivedTime == WorldInfo.TimeSeconds);
+    At = class'VRDamagePopups'.static.DamageLocation(Victim);
+    ReceiveDamagePopup(Amount, At, Kind, Victim.HitFxInfo.HitBoneIndex == 0);
 }
 // An authority-owned per-hit event. Optional visuals do not change damage;
 // network sessions never poll unreplicated monster history in addition.
 simulated function ReceiveDamagePopup(int Amount, vector At, class<KFDamageType> Kind, bool bHeadshot)
 {
-    if (Bridge == None || PC == None || !Bridge.bDamagePopups || Amount <= 0) return;
+    local PendingDamageNumber Pending;
+    if (Bridge == None || PC == None || !Bridge.bDamagePopups || Amount <= 0
+        || !ContextValid() || !class'VRGrenadeThrow'.static.Bounded(At, 100000000)) return;
     bDamagePopupAuthorityFeed = true;
     UpdateDamagePopups();
-    if (DamagePopups == None) return;
-    DamagePopups.AddDamage(Amount, At, Kind, bHeadshot);
+    if (DamagePopups != None) DamagePopups.AddDamage(Amount, At, Kind, bHeadshot);
+    else
+    {
+        if (PendingDamageNumbers.Length >= class'VRDamagePopups'.const.MaxPopups) PendingDamageNumbers.Remove(0, 1);
+        Pending.Amount = Amount; Pending.At = At; Pending.Kind = Kind; Pending.bHeadshot = bHeadshot;
+        Pending.RealTime = WorldInfo.RealTimeSeconds; Pending.GameTime = WorldInfo.TimeSeconds;
+        PendingDamageNumbers.AddItem(Pending);
+    }
 }
 
 // The menu preference can change after HUD creation. Keep its pool lazy and
 // respect the live value instead of latching it for the entire pawn lifetime.
 simulated function UpdateDamagePopups()
 {
-    if (Bridge == None || !Bridge.bDamagePopups)
+    local int I;
+    if (Bridge == None || !Bridge.bDamagePopups || !ContextValid())
     {
         if (DamagePopups != None) DamagePopups.HideAll();
+        PendingDamageNumbers.Length = 0; DamagePopupPawn = None;
         return;
     }
+    if (DamagePopupPawn != Bridge.Human || DamagePopupCalibration != Bridge.NativeCalibrationEpoch
+        || DamagePopupRoom != Bridge.NativeRoomSpaceEpoch)
+    {
+        PendingDamageNumbers.Length = 0;
+        if (DamagePopups != None) DamagePopups.HideAll();
+        DamagePopupPawn = Bridge.Human;
+        DamagePopupCalibration = Bridge.NativeCalibrationEpoch;
+        DamagePopupRoom = Bridge.NativeRoomSpaceEpoch;
+    }
+    while (PendingDamageNumbers.Length > 0 && (WorldInfo.RealTimeSeconds < PendingDamageNumbers[0].RealTime
+        || WorldInfo.RealTimeSeconds - PendingDamageNumbers[0].RealTime > DamagePopupRecoverySeconds))
+        PendingDamageNumbers.Remove(0, 1);
+    if (DamagePopups != None && DamagePopups.bDeleteMe) DamagePopups = None;
     if (DamagePopups == None && WorldInfo.RealTimeSeconds >= NextDamagePopupInitTime)
     {
         NextDamagePopupInitTime = WorldInfo.RealTimeSeconds + 5.0;
@@ -731,6 +1150,11 @@ simulated function UpdateDamagePopups()
     if (DamagePopups != None)
     {
         DamagePopups.bAuthoritativeFeed = bDamagePopupAuthorityFeed;
+        for (I = 0; I < PendingDamageNumbers.Length; ++I)
+            DamagePopups.AddDamage(PendingDamageNumbers[I].Amount, PendingDamageNumbers[I].At,
+                PendingDamageNumbers[I].Kind, PendingDamageNumbers[I].bHeadshot,
+                FMax(0, WorldInfo.TimeSeconds - PendingDamageNumbers[I].GameTime));
+        PendingDamageNumbers.Length = 0;
         DamagePopups.UpdatePopups();
     }
 }
@@ -768,10 +1192,10 @@ simulated function ReadValues()
     ArmorValue = Bridge.Human.Armor; ArmorLimit = Max(1, Bridge.Human.MaxArmor);
     Battery = Bridge.Human.BatteryCharge; bFlashlight = Bridge.Human.bFlashlightOn;
     Inv = KFInventoryManager(Bridge.Human.InvManager);
-    Charge = 0; Grenades = 0; Weight = 0; WeightLimit = 0;
+    Charge = 0; Grenades = 0;
     if (Inv != None)
     {
-        Grenades = Inv.GrenadeCount; Weight = Inv.CurrentCarryBlocks; WeightLimit = Inv.MaxCarryBlocks;
+        Grenades = Inv.GrenadeCount;
         if (Inv.HealerWeapon != None && Inv.HealerWeapon.MagazineCapacity[0] > 0)
             Charge = Clamp(100 * Inv.HealerWeapon.AmmoCount[0] / Inv.HealerWeapon.MagazineCapacity[0], 0, 100);
     }
@@ -808,16 +1232,13 @@ simulated function ReadValues()
     // waves. Keep one spatial session surface so none of their wave notices
     // fall back to a flat HUD layout.
     bSessionSupported = GRI != None;
-    if (WavePriorityUntil <= WorldInfo.RealTimeSeconds)
+    if (!bWavePriorityCaptured)
     {
         WavePriorityTitle = "";
-        WavePriorityText = "";
-        WavePriorityUntil = 0;
     }
     WaveLabel = ""; SessionLabel = ""; SessionValue = ""; WaveNumber = ""; WaveClear = -1;
     BossLabel = ""; BossHealth = 0; bBossActive = false;
-    ObjectiveTitle = ""; ObjectiveText = ""; ObjectiveProgress = -1; ObjectiveReward = 0; bObjectiveWarning = false;
-    ObjectiveImage = None;
+    ObjectiveProgress = -1; bObjectiveWarning = false;
     bTraderNavActive = false;
     TraderDistance = 0;
     TraderBearingAngle = 0;
@@ -878,22 +1299,10 @@ simulated function ReadValues()
         Objective = GRI.ObjectiveInterface;
         if (GRI.CurrentObjective != None && Objective != None && Objective.IsActive() && Objective.ShouldShowObjectiveContainer())
         {
-            ObjectiveTitle = Objective.GetLocalizedShortDescription();
-            ObjectiveImage = Objective.GetIcon();
-            ObjectiveText = Objective.GetProgressText();
             Objective.GetLocalizedStatus(Status, Warning, Notification);
             bObjectiveWarning = Warning != 0;
-            ObjectiveReward = Objective.GetDoshReward();
-            if (Status != "") ObjectiveText = Status @ ObjectiveText;
             if (Objective.UsesProgress()) ObjectiveProgress = FClamp(Objective.GetProgress(), 0, 1);
-            if (Objective.HasFailedObjective()) ObjectiveText = "FAILED" @ ObjectiveText;
-            else if (Objective.IsComplete()) ObjectiveText = "COMPLETE" @ ObjectiveText;
         }
-    }
-    if (PreviousSession != (WaveLabel @ SessionLabel))
-    {
-        PreviousSession = WaveLabel @ SessionLabel;
-        SessionRevealUntil = WorldInfo.RealTimeSeconds + 4.0;
     }
     bSessionUrgent = bBossActive || (GRI != None &&
         (bWaveActive ? (GRI.AIRemaining > 0 && GRI.AIRemaining <= 5) : (Seconds > 0 && Seconds <= 20)));
@@ -906,15 +1315,10 @@ simulated function ReadValues()
         @ Dosh @ Grenades @ GrenadeLimit @ GrenadeImagePath @ BuffKey @ WatchAlertLabel @ bWatchAlertCritical
         @ bSessionSupported @ bWaveActive @ WaveNumber @ WaveLabel @ SessionLabel @ SessionValue @ int(WaveClear * 24)
         @ bBossActive @ BossLabel @ int(BossHealth * 100) @ bTraderNavActive @ (bTraderNavActive ? int(TraderBearingAngle * 8) : 0)
-        @ int(TraderDistance) @ TraderElevationDiff @ int(ObjectiveProgress * 100) @ bObjectiveWarning);
-    Dirty(3, WaveLabel @ SessionLabel @ SessionValue @ BossLabel @ int(BossHealth * 1000) @ bBossActive
-        @ ObjectiveTitle @ ObjectiveText @ int(ObjectiveProgress * 1000) @ ObjectiveReward @ bObjectiveWarning @ string(ObjectiveImage)
-        @ Dosh @ Bridge.NativeHudDetail
-        @ bTraderNavActive @ int(TraderDistance) @ int(TraderBearingAngle * 100) @ TraderElevationDiff
-        @ RhythmCounterActive() @ RhythmCount @ RhythmMax);
-    Dirty(4, WavePriorityTitle @ WavePriorityText @ int(FMax(0, WavePriorityUntil - WorldInfo.RealTimeSeconds) * 10)
-        @ InteractionPromptText @ InteractionPromptButton @ InteractionHoldText @ InteractionHoldButton
-        @ int(FMax(0, InteractionPromptUntil - WorldInfo.RealTimeSeconds) * 10));
+        @ int(TraderDistance) @ TraderElevationDiff @ int(ObjectiveProgress * 100) @ bObjectiveWarning
+        @ ChatShowing() @ ChatSender @ ChatText);
+    Dirty(4, InteractionPromptText @ InteractionPromptButton @ InteractionHoldText @ InteractionHoldButton
+        @ InteractionPromptActive());
 }
 
 simulated function UpdateWatchNotifications()
@@ -935,7 +1339,7 @@ simulated function UpdateWatchNotifications()
     bWatchAlertCritical = WatchAlertLabel != "";
     if (WatchAlertLabel == "" && WorldInfo.RealTimeSeconds < WatchArmorWarningUntil)
         WatchAlertLabel = ArmorValue <= 0 ? "ARMOR DEPLETED" : "LOW ARMOR";
-    if (WatchAlertLabel == "" && Bridge.bWristwatchHUD && WavePriorityActive())
+    if (WatchAlertLabel == "" && WatchVisible() && WavePriorityActive())
         WatchAlertLabel = Caps(WavePriorityTitle);
 }
 
@@ -943,16 +1347,19 @@ simulated function ReadWeapon(int HandIndex)
 {
     local VRWeaponRuntime R;
     local KFWeapon W;
+    local KFWeap_AssaultRifle_Doshinegun DoshGun;
     local HUDWeaponReadout A;
     local int FireMode;
-    W = Bridge.GetHUDWeapon(HandIndex);
+    if (Bridge.HandInventory != None) R = Bridge.HandInventory.GetHeldForHand(HandIndex);
+    W = R != None ? R.Item : Bridge.GetHUDWeapon(HandIndex);
     if (Ammo[HandIndex].Weapon != W)
     {
         Panels[HandIndex + 1].bDrawn = false;
-        // The hip texture shares both hands' reserves. Conceal the old
-        // ownership layout until its redraw, including transfers and swaps
+        // Conceal both pouch cards' old ownership until their redraw,
+        // including transfers and swaps
         // between weapons with identical icons and counts.
         Panels[5].bDrawn = false;
+        Panels[12].bDrawn = false;
     }
     A.Weapon = W; A.Capacity = 1; A.SecondaryReserve = -1; A.Charge = -1;
     if (W != None)
@@ -960,9 +1367,19 @@ simulated function ReadWeapon(int HandIndex)
         A.WeaponLabel = W.GetHumanReadableName();
         A.bUsesAmmo = W.UsesAmmo(); A.bSecondary = W.UsesSecondaryAmmo();
         A.Magazine = Max(0, W.AmmoCount[0]); A.Capacity = Max(1, W.MagazineCapacity[0]);
-        A.Reserve = Max(0, W.GetSpareAmmoForHUD());
+        A.Reserve = PouchReserve(W);
+        DoshGun = KFWeap_AssaultRifle_Doshinegun(W);
+        if (DoshGun != None)
+        {
+            A.bDosh = true;
+            A.DoshCost = Max(1, DoshGun.DoshCost);
+            A.DoshBalance = Max(Bridge.PouchDosh(W) - (Bridge.PouchReserve(W) - A.Reserve) * A.DoshCost, 0);
+            // Affordable notes are a HUD estimate, never a spare-ammo pool.
+            A.Reserve = PouchReserve(W);
+        }
         A.AmmoLabel = A.bUsesAmmo ? string(A.Magazine) : W.GetSpecialAmmoForHUD();
         A.Secondary = W.GetSecondaryAmmoForHUD(); A.SecondaryReserve = W.GetSecondarySpareAmmoForHUD();
+        if (class'VRSecondaryReloadCatalog'.static.Supported(W)) A.SecondaryReserve = PouchReserve(W, 1);
         A.bReloading = W.IsInState('Reloading');
         A.StateLabel = A.bReloading ? "RELOADING" : ((A.bUsesAmmo && A.Magazine == 0) ? "EMPTY" : (W.bUseAltFireMode ? "ALT FIRE" : "READY"));
         A.WeaponImage = W.WeaponSelectTexture;
@@ -971,18 +1388,59 @@ simulated function ReadWeapon(int HandIndex)
         if (Bridge.HandInventory != None)
         {
             R = Bridge.HandInventory.Registry.FindItem(W);
+            if (R != None && A.bUsesAmmo)
+            {
+                A.Magazine = R.PresentedAmmoCount();
+                A.AmmoLabel = R.AmmoCountLabel();
+            }
             if (R != None && (R.MagazineOut() || R.MagazineNeedsRack()))
             {
                 A.Magazine = R.MagazineDisplayAmmo();
-                A.AmmoLabel = string(A.Magazine);
-                if (R.MagazineOut()) A.StateLabel = R.MagazineHasChamber() ? "CHAMBERED" : "MAGAZINE OUT";
+                A.AmmoLabel = R.AmmoCountLabel();
+                if (R.MagazineOut()) A.StateLabel = (R.MagazineHasChamber() && R.RealisticAmmo()) ? "CHAMBERED" : "MAGAZINE OUT";
                 else A.StateLabel = "RACK";
+                A.FeedLabel = A.StateLabel;
             }
+            // A spent chamber the hand still owes reads as blocked, not READY.
+            else if (R != None && R.bManualPumpPending && W.HasAmmo(0))
+                A.FeedLabel = class'VRPumpCatalog'.static.PumpAction(W) ? "PUMP" : "CYCLE";
             if (R != None && R.AlternateKind() == 1)
             {
                 A.ModeLabel = R.ModeLabel();
                 A.StateLabel @= A.ModeLabel;
                 A.FireModeImage = W.FireModeIconPaths[R.SelectedMode];
+            }
+            if (Bridge.HandInventory.Input != None && Bridge.HandInventory.Input.Reloads != None)
+            {
+                if (Bridge.HandInventory.Input.Reloads.Mechanism != None)
+                    A.ReloadPrompt = Bridge.HandInventory.Input.Reloads.Mechanism.ReloadPrompt(W);
+                if (A.ReloadPrompt == "" && Bridge.HandInventory.Input.Reloads.Vampire != None)
+                    A.ReloadPrompt = Bridge.HandInventory.Input.Reloads.Vampire.ReloadPrompt(W);
+                if (A.ReloadPrompt == "" && Bridge.HandInventory.Input.Reloads.ServerMagazine != None)
+                    A.ReloadPrompt = Bridge.HandInventory.Input.Reloads.ServerMagazine.ReloadPrompt(W);
+                if (A.ReloadPrompt == "" && Bridge.HandInventory.Input.Reloads.Brawlers != None)
+                    A.ReloadPrompt = Bridge.HandInventory.Input.Reloads.Brawlers.ReloadPrompt(W);
+                if (A.ReloadPrompt == "" && Bridge.HandInventory.Input.Reloads.M32Action != None)
+                    A.ReloadPrompt = Bridge.HandInventory.Input.Reloads.M32Action.ReloadPrompt(W);
+                if (A.ReloadPrompt == "" && Bridge.HandInventory.Input.Reloads.FinishAction != None)
+                    A.ReloadPrompt = Bridge.HandInventory.Input.Reloads.FinishAction.ReloadPrompt(W);
+                if (A.ReloadPrompt == "" && Bridge.HandInventory.Input.Reloads.CrossbowCocking != None)
+                    A.ReloadPrompt = Bridge.HandInventory.Input.Reloads.CrossbowCocking.ReloadPrompt(W);
+                if (A.ReloadPrompt == "" && Bridge.HandInventory.Input.Reloads.BreakAction != None)
+                    A.ReloadPrompt = Bridge.HandInventory.Input.Reloads.BreakAction.ReloadPrompt(W);
+                if (Bridge.HandInventory.Input.Reloads.Brawlers != None
+                    && Bridge.HandInventory.Input.Reloads.Brawlers.BlocksFire(W))
+                {
+                    A.bReloading = true;
+                    A.StateLabel = "RELOADING";
+                }
+                A.bPhysicalSecondary = Bridge.HandInventory.Input.Reloads.Enabled()
+                    && class'VRSecondaryReload'.static.Supported(W);
+                if (A.bPhysicalSecondary && Bridge.HandInventory.Input.Reloads.Secondary != None)
+                {
+                    A.bSecondaryReload = Bridge.HandInventory.Input.Reloads.Secondary.BlocksFire(W);
+                    A.SecondaryPrompt = Bridge.HandInventory.Input.Reloads.Secondary.ReloadPrompt(W);
+                }
             }
         }
         A.SecondaryImage = W.SecondaryAmmoTexture;
@@ -990,9 +1448,11 @@ simulated function ReadWeapon(int HandIndex)
     }
     Ammo[HandIndex] = A;
     Dirty(HandIndex + 1, string(W) @ A.WeaponLabel @ A.AmmoLabel @ A.Magazine @ A.Capacity @ A.Reserve
-        @ A.bSecondary @ A.Secondary @ A.SecondaryReserve @ A.StateLabel
+        @ A.bSecondary @ A.Secondary @ A.SecondaryReserve @ A.StateLabel @ A.FeedLabel @ A.ReloadPrompt
+        @ A.bPhysicalSecondary @ A.bSecondaryReload @ A.SecondaryPrompt @ A.DoshBalance @ A.DoshCost
         @ string(A.WeaponImage) @ string(A.FireModeImage) @ string(A.SecondaryImage) @ int(A.Charge * 20));
     Dirty(5, PouchKey());
+    Dirty(12, PouchKey());
 }
 
 // Stock shows charge only through the 1P mesh and sounds. Each charge weapon
@@ -1001,6 +1461,13 @@ simulated function float ChargeFraction(KFWeapon W)
 {
     local KFWeap_AssaultRifle_LazerCutter Lazer;
     local KFWeap_Bow_CompoundBow Bow;
+    local float PhysicalCharge;
+    if (Bridge != None && Bridge.HandInventory != None && Bridge.HandInventory.Input != None
+        && Bridge.HandInventory.Input.Bow != None)
+    {
+        PhysicalCharge = Bridge.HandInventory.Input.Bow.DrawCharge(W);
+        if (PhysicalCharge >= 0) return PhysicalCharge;
+    }
     if (W.IsInState('HuskCannonCharge'))
         return FClamp(KFWeap_HuskCannon(W).ChargeTime / FMax(0.01, KFWeap_HuskCannon(W).MaxChargeTime), 0, 1);
     if (W.IsInState('MineReconstructorCharge'))
@@ -1071,7 +1538,7 @@ simulated function Text(Canvas C, string Value, float X, float Y, float Width, f
     local float XL, YL, Scale, XScale, Fit;
     local string ShortValue;
     if (Value == "") return;
-    C.Font = bWatchText ? GetWatchFont(bDigits) : class'KFGameEngine'.static.GetKFCanvasFont();
+    C.Font = bWatchText ? GetWatchFont(bDigits, Value) : class'KFGameEngine'.static.GetKFCanvasFont();
     if (C.Font == None) C.Font = class'Engine'.static.GetLargeFont();
     C.TextSize(Value, XL, YL);
     Scale = Height / FMax(1, YL);
@@ -1105,11 +1572,19 @@ simulated function Text(Canvas C, string Value, float X, float Y, float Width, f
 // Two faces over one bold atlas: tracked stencil lettering for labels, and a
 // tight crop of the same glyphs for instrument digits. Every glyph's ink lies
 // in the cell's first 36 columns, so the 38-column crop loses nothing.
-simulated function Font GetWatchFont(optional bool bDigits)
+simulated function Font GetWatchFont(optional bool bDigits, optional string Value)
 {
-    local int Code, Cell;
+    local int I, Code, Cell;
     local Texture2D Atlas;
     local Font F;
+    if (bWatchChatText) return class'KFGameEngine'.static.GetKFCanvasFont();
+    // Localized names/notices can exceed the instrument atlas's ASCII range.
+    // Select their font before measuring so fitting uses the rendered glyphs.
+    for (I = 0; I < Len(Value); ++I)
+    {
+        Code = Asc(Mid(Value, I, 1));
+        if (Code < 32 || Code >= 128) return class'KFGameEngine'.static.GetKFCanvasFont();
+    }
     F = bDigits ? WatchDigitFont : WatchFont;
     if (F != None) return F;
     Atlas = Texture2D(DynamicLoadObject("KF2VRHands.VRHorzineWatchFont", class'Texture2D', true));
@@ -1217,7 +1692,7 @@ simulated function WatchRule(Canvas C, float X, float Y, float Width)
 simulated function float WatchTag(Canvas C, string Label, float X, float Y, float Height, color Fill)
 {
     local float XL, YL, Width;
-    C.Font = GetWatchFont();
+    C.Font = GetWatchFont(false, Label);
     C.TextSize(Label, XL, YL);
     Width = XL * (Height * 0.78 / FMax(1, YL)) / WatchAspect + 24;
     Box(C, X, Y, Width, Height, Fill);
@@ -1238,16 +1713,12 @@ simulated function Segments(Canvas C, float X, float Y, float Width, float Heigh
         Box(C, X + I * (Cell + Gap), Y, Cell, Height, I < Lit ? Tint : WatchTrack);
 }
 
-// Instrument digits: unlit "burn-in" cells sit behind the lit value, the way
-// a worn segment display shows its dead segments. Both strings share one
-// scale and right edge so every digit lands on its own cell. Words such as
-// BOSS or ENDLESS have no cells and simply fit the slot.
+// Keep a stable numeric cell width without drawing decorative unlit digits.
 simulated function Readout(Canvas C, string Value, int Cells, float X, float Y, float Width, float Height, color Tint)
 {
     local string Ghost, Ch;
     local int I;
     local float XL, YL, Scale, XScale, Fit;
-    local color Dim;
     if (Value == "") return;
     for (I = 0; I < Len(Value); ++I)
     {
@@ -1266,13 +1737,6 @@ simulated function Readout(Canvas C, string Value, int Cells, float X, float Y, 
         Fit = Width / FMax(1, XL * XScale);
         Scale *= Fit; XScale *= Fit;
         Y += (Height - YL * Scale) * 0.5;
-    }
-    if (Ghost != "")
-    {
-        Dim = Tint; Dim.A = 26;
-        C.DrawColor = Dim;
-        C.SetPos(X + Width - XL * XScale, Y);
-        C.DrawText(Ghost, false, XScale, Scale);
     }
     C.TextSize(Value, XL, YL);
     C.DrawColor = MakeColor(0,0,0,Tint.A);
@@ -1402,27 +1866,6 @@ simulated function Frame(Canvas C, float X, float Y, float Width, float Height)
         MakeLinearColor(1,1,1,float(Backing.A) / 255.0), false, BLEND_Opaque);
 }
 
-// RACK 'EM UP  [+++--]  3
-// Pips show progress toward the damage cap; the number is the raw streak, which
-// keeps climbing past the cap exactly as the stock counter does. Amber at the
-// cap is the only colour change, because the bonus stops growing there.
-simulated function DrawRhythmCounter(Canvas C, float X, float Y, float Width)
-{
-    local int I;
-    local float PipWidth, PipGap, PipsLeft, LabelWidth;
-    local color Tint;
-    Tint = RhythmCount >= RhythmMax ? Amber : Accent;
-    LabelWidth = 250;
-    Text(C, "RACK 'EM UP", X, Y + 4, LabelWidth, 40, Muted);
-    Text(C, string(RhythmCount), X + Width - 80, Y - 4, 80, 56, Tint, true, true);
-    PipGap = 6;
-    PipsLeft = X + LabelWidth + 16;
-    PipWidth = FMax(6, (Width - LabelWidth - 112 - PipGap * (RhythmMax - 1)) / FMax(1, RhythmMax));
-    for (I = 0; I < RhythmMax; ++I)
-        Box(C, PipsLeft + I * (PipWidth + PipGap), Y + 10, PipWidth, 28,
-            I < RhythmCount ? Tint : Track);
-}
-
 // Display-only twin-pane monitor, laid out like a field instrument: the left
 // pane is a fixed vitals stack (health, armor, syringe), the right pane a
 // stamped mode plate over one hero readout, a context bar, a supplies strip
@@ -1433,9 +1876,14 @@ simulated function RenderWatchFace(Canvas C)
     local color HealthTint, ArmorTint, HealTint;
     local bool bLowHealth;
     local float TagWidth;
+    // The target can request its first draw before ReadValues has supplied
+    // health/armor capacities. Wait for that snapshot instead of dividing
+    // zero-valued startup fields or drawing false empty vitals.
+    if (C == None || Bridge == None || HealthLimit <= 0 || ArmorLimit <= 0
+        || !(C.ClipX > 0 && C.ClipY > 0)) return;
     bWatchText = true;
     WatchAspect = 1.0;
-    if (Bridge.bWristwatchHUD) WatchAspect = (11.4688 / 4.7104) / (C.ClipX / FMax(1, C.ClipY));
+    if (WatchVisible()) WatchAspect = (11.4688 / 4.7104) / (C.ClipX / FMax(1, C.ClipY));
     else if (Bridge.HudStatusSize.X > 0 && Bridge.HudStatusSize.Y > 0)
         WatchAspect = (Bridge.HudStatusSize.X / Bridge.HudStatusSize.Y) / (C.ClipX / FMax(1, C.ClipY));
     WatchAspect = FClamp(WatchAspect, 0.5, 2.0);
@@ -1490,8 +1938,7 @@ simulated function RenderWatchFace(Canvas C)
             Text(C, SessionLabel, 560, 110, 200, 34, WatchMuted);
             Readout(C, SessionLabel == "GET READY" ? "---" : SessionValue, 3, 680, 104, 304, 196,
                 bSessionUrgent ? Amber : WatchInk);
-            // A progress objective takes the wave bar's slot: the floating
-            // session readout that carried it is gone with the watch.
+            // Objective progress is shown only on the wristwatch.
             if (ObjectiveProgress >= 0)
             {
                 Text(C, "OBJ", 560, 300, 70, 30, bObjectiveWarning ? Amber : WatchMuted);
@@ -1500,7 +1947,7 @@ simulated function RenderWatchFace(Canvas C)
             }
             else if (WaveClear >= 0) Segments(C, 560, 308, 424, 14, 24, WaveClear, Amber, 4);
         }
-        WatchSupplies(C, 560, 424);
+        if (ChatShowing()) WatchChat(C, 560, 424); else WatchSupplies(C, 560, 424);
     }
     else
     {
@@ -1516,7 +1963,7 @@ simulated function RenderWatchFace(Canvas C)
             if (TraderElevationDiff != 0) WatchChevron(C, 952, 276, 32, TraderElevationDiff > 0, Amber);
         }
         else Text(C, "NO FIX", 822, 270, 162, 44, WatchMuted, true, true);
-        WatchSupplies(C, 560, 424);
+        if (ChatShowing()) WatchChat(C, 560, 424); else WatchSupplies(C, 560, 424);
     }
     WatchRule(C, 560, 404, 424);
     if (WatchAlertLabel != "")
@@ -1564,18 +2011,32 @@ simulated function ReadoutBackground(Canvas C, float X, float Y, float Width, fl
 simulated function RenderWeaponReadout(Canvas C, HUDWeaponReadout A)
 {
     local color Tint, DetailTint;
-    local string Detail, CountLabel;
+    local string Detail, CountLabel, SecondaryDetail;
     local float CountWidth, DetailWidth, GroupWidth, PanelWidth, PanelLeft, PanelHeight;
     local bool bSecondaryIcon, bCharge;
     if (A.Weapon == None || (!A.bUsesAmmo && A.AmmoLabel == "")) return;
-    CountLabel = A.bUsesAmmo ? string(A.Magazine) : A.AmmoLabel;
+    CountLabel = (A.bUsesAmmo && A.AmmoLabel == "") ? string(A.Magazine) : A.AmmoLabel;
     // Magazine only: the reserve is not shown on the gun.
-    if (A.bReloading) Detail = "RELOADING";
+    if (A.ReloadPrompt != "") Detail = A.ReloadPrompt;
+    else if (A.bReloading) Detail = "RELOADING";
+    else if (A.FeedLabel != "") Detail = A.FeedLabel;
+    else if (A.bDosh && A.Magazine == 0 && A.Reserve <= 0) Detail = "NEED " $ A.DoshCost $ " DOSH";
     else if (A.bUsesAmmo && A.Magazine == 0) Detail = A.Reserve > 0 ? "RELOAD" : "EMPTY";
+    else if (A.bDosh) Detail = A.DoshCost $ " DOSH / NOTE";
     else if (A.bSecondary) Detail = string(A.Secondary) $ (A.SecondaryReserve > 0 ? " / " $ A.SecondaryReserve : "");
     else Detail = A.ModeLabel;
     if (A.Charge >= 0 && !A.bReloading) Detail = A.Charge >= 0.999 ? "FULL CHARGE" : "CHARGE " $ int(A.Charge * 100) $ "%";
-    bSecondaryIcon = A.bSecondary && !A.bReloading && A.Magazine > 0 && A.SecondaryImage != None;
+    if (A.bPhysicalSecondary)
+    {
+        // Both feeds stay legible: a secondary action never replaces the
+        // primary count, magazine-out state or rack instruction.
+        Detail = A.ReloadPrompt != "" ? A.ReloadPrompt : A.StateLabel;
+        SecondaryDetail = "ALT " $ Max(0, A.Secondary);
+        if (A.SecondaryPrompt != "") SecondaryDetail $= " | " $ A.SecondaryPrompt;
+        else if (A.bSecondaryReload) SecondaryDetail $= " | RELOADING";
+        else if (Bridge.bReloadHints && A.Secondary == 0) SecondaryDetail $= " | DOUBLE TAP RELOAD";
+    }
+    bSecondaryIcon = !A.bPhysicalSecondary && A.bSecondary && !A.bDosh && !A.bReloading && A.Magazine > 0 && A.SecondaryImage != None;
     bCharge = A.Charge >= 0 && !A.bReloading;
     Tint = ReadoutInk;
     if (A.bUsesAmmo && A.Magazine <= A.Capacity * 0.25) Tint = Amber;
@@ -1585,19 +2046,27 @@ simulated function RenderWeaponReadout(Canvas C, HUDWeaponReadout A)
     // One centred stack, sized from both rows. EMPTY and RELOADING belong to
     // the count rather than an absent reserve/icon column. Keep wide special
     // ammo labels and secondary resources inside the same readable footprint.
-    CountWidth = FMin(640, TextWidth(C, CountLabel, 224));
+    CountWidth = FMin(640, TextWidth(C, CountLabel, A.bPhysicalSecondary ? 184 : 224));
     DetailWidth = FMin(bSecondaryIcon ? 576 : 640, TextWidth(C, Detail, 48));
     GroupWidth = DetailWidth + (bSecondaryIcon ? 64 : 0);
+    if (A.bPhysicalSecondary) GroupWidth = FMax(GroupWidth, FMin(640, TextWidth(C, SecondaryDetail, 36)));
     PanelWidth = FMax(320, FMax(CountWidth, GroupWidth) + 80);
     PanelLeft = (800 - PanelWidth) * 0.5;
-    PanelHeight = (Detail != "" || bCharge) ? 304 : 248;
+    PanelHeight = A.bPhysicalSecondary ? 304 : ((Detail != "" || bCharge) ? 304 : 248);
     ReadoutBackground(C, PanelLeft, 8, PanelWidth, PanelHeight);
     // Native HudTextAlpha supplies coverage, as on the wheel: one glyph pass
     // avoids an offset duplicate. Larger digits remain the primary reading.
-    Text(C, CountLabel, (800 - CountWidth) * 0.5, 12, CountWidth, 224, Tint, true, false, false, true);
+    Text(C, CountLabel, (800 - CountWidth) * 0.5, 12, CountWidth, A.bPhysicalSecondary ? 184 : 224, Tint, true, false, false, true);
     if (bSecondaryIcon)
         Art(C, A.SecondaryImage, (800 - GroupWidth) * 0.5, 260, 48, 48, ReadoutMuted);
-    Text(C, Detail, (800 - GroupWidth) * 0.5 + (bSecondaryIcon ? 64 : 0), 260,
+    if (A.bPhysicalSecondary)
+    {
+        Text(C, Detail, PanelLeft + 40, 202, PanelWidth - 80, 32, DetailTint, true, false, true, true);
+        Box(C, PanelLeft + 40, 244, PanelWidth - 80, 1, ReadoutMuted);
+        Text(C, SecondaryDetail, PanelLeft + 40, 256, PanelWidth - 80, 36,
+            A.bSecondaryReload ? Amber : ReadoutMuted, true, false, true, true);
+    }
+    else Text(C, Detail, (800 - GroupWidth) * 0.5 + (bSecondaryIcon ? 64 : 0), 260,
         DetailWidth, 48, DetailTint, true, false, false, true);
     // Charge is a real changing resource. Low magazines use amber digits and
     // empty ones add a red word; their old track read as a stray line.
@@ -1606,39 +2075,66 @@ simulated function RenderWeaponReadout(Canvas C, HUDWeaponReadout A)
             A.Charge >= 0.999 ? Amber : ReadoutInk, 10);
 }
 
-// Gun silhouettes identify independent pools; paired members share one
-// visually grouped count. Highlight the usable pouch without action jargon.
-simulated function RenderPouchPanel(Canvas C)
+// Each side identifies its own gun once. Paired cards retain the same single
+// pair-owned reserve count; rendering an icon never creates an ammunition pool.
+simulated function RenderPouchPanel(Canvas C, int Side)
 {
-    local int Hand, Count;
-    local float X, Width, ValueWidth;
-    local string Value;
-    local color Tint;
-    Count = (PouchEntry(0) ? 1 : 0) + (PouchEntry(1) ? 1 : 0);
-    if (Count == 0) return;
-    if (SharedPouchReserve())
+    local int Hand;
+    Hand = PouchDisplayHand(Side);
+    if (MagazineDepositActive(Side)) { DrawMagazineDeposit(C, Hand, Side); return; }
+    if (!PouchEntry(Hand)) return;
+    DrawPouchEntry(C, Ammo[Hand], 206, 388, PouchHovered(Hand));
+}
+
+simulated function DrawMagazineDeposit(Canvas C, int Hand, int Side)
+{
+    local int Reserve;
+    local float Fraction, Fade, Pop, Y, CreditWidth, ValueWidth, GroupWidth, X;
+    local color Tint, CreditTint;
+    local string Credit, Value;
+    local Texture2D Image;
+    local bool bEntry;
+    Fraction = FClamp((WorldInfo.RealTimeSeconds - MagazineDeposits[Side].Started) / 0.9, 0, 1);
+    Fade = 1 - FClamp((Fraction - 0.45) / 0.55, 0, 1);
+    Pop = 1 + 0.14 * Sin(FClamp(Fraction / 0.2, 0, 1) * Pi);
+    Credit = "+" $ MagazineDeposits[Side].Credited;
+    bEntry = PouchEntry(Hand);
+    Tint = MakeColor(ReadoutInk.R, ReadoutInk.G, ReadoutInk.B, int(230 * Fade));
+    CreditTint = MakeColor(ReadoutRed.R, ReadoutRed.G, ReadoutRed.B, int(255 * Fade));
+    CreditWidth = FMin(140, TextWidth(C, Credit, 68 * Pop));
+    if (!MagazineDepositMatchesPouch(Hand, Side) || Ammo[Hand].bPhysicalSecondary)
     {
-        ReadoutBackground(C, 112, 24, 576, 272, 0.65);
-        for (Hand = 0; Hand < 2; ++Hand)
-        {
-            Tint = MakeColor(ReadoutInk.R,ReadoutInk.G,ReadoutInk.B,210);
-            Art(C, Ammo[Hand].WeaponImage, 160 + Hand * 264, 52, 216, 96, Tint);
-        }
-        Value = string(Ammo[0].Reserve);
-        ValueWidth = FMin(TextWidth(C, Value, 160), 512);
-        Text(C, Value, 400 - ValueWidth * 0.5, 148, ValueWidth + 1, 160,
-            Ammo[0].Reserve <= 0 ? ReadoutRed : ReadoutInk, true, false, false, true);
+        // Keep the active pouch's own count and secondary columns untouched.
+        // The small recipient silhouette travels with the confirmed +X, so a
+        // stowed gun or the opposite hand cannot appear to refill this pouch.
+        if (bEntry) DrawPouchEntry(C, Ammo[Hand], 206, 388, PouchHovered(Hand));
+        X = bEntry ? 596 : 308;
+        Y = 132 - Fraction * 26;
+        ReadoutBackground(C, X - 8, Y - 12, 192, 168, 0.65 * Fade);
+        Image = MagazineDeposits[Side].Target.WeaponSelectTexture;
+        if (Image != None) Art(C, Image, X + 20, Y, 136, 60, Tint);
+        else Text(C, MagazineDeposits[Side].Target.GetHumanReadableName(), X, Y, 176, 36, Tint, true, false, true, true);
+        if (MagazineDeposits[Side].AmmoSlot == 1) Text(C, "M26", X, Y + 48, 176, 24, Tint, true, false, true, true);
+        Text(C, Credit, X + (176 - CreditWidth) * 0.5, Y + 68, CreditWidth + 1, 68 * Pop,
+            CreditTint, true, false, false, true);
         return;
     }
-    // One centered card or two side-by-side cards at the same physical scale.
-    Width = 388;
-    X = Count == 2 ? 12 : 206;
-    for (Hand = 0; Hand < 2; ++Hand)
-    {
-        if (!PouchEntry(Hand)) continue;
-        DrawPouchEntry(C, Ammo[Hand], X, Width, PouchHovered(Hand));
-        X += Width;
-    }
+    Tint = MakeColor(ReadoutInk.R, ReadoutInk.G, ReadoutInk.B, 230);
+    ReadoutBackground(C, 226, 24, 348, 272, 0.65);
+    Art(C, Ammo[Hand].WeaponImage, 270, 52, 260, 96, Tint);
+    Y = 202 - Fraction * 26;
+    Reserve = PouchReserve(Ammo[Hand].Weapon);
+    Value = string(Reserve);
+    ValueWidth = FMin(180, TextWidth(C, Value, 136));
+    GroupWidth = ValueWidth + 16 + CreditWidth;
+    X = (800 - GroupWidth) * 0.5;
+    Text(C, Value, X, 150, ValueWidth + 1, 136,
+        Reserve <= 0 ? ReadoutRed : ReadoutInk, true, false, false, true);
+    X += ValueWidth + 16;
+    // A small ember stripe and pop, within the existing blue pouch rig/card.
+    // No additional panel, ring or camera-facing notification is allocated.
+    Box(C, X - 7, Y + 9, 3, 40 * Pop, CreditTint);
+    Text(C, Credit, X, Y, CreditWidth + 1, 68 * Pop, CreditTint, true, false, false, true);
 }
 
 simulated function DrawPouchEntry(Canvas C, HUDWeaponReadout A, float X, float Width, bool bHovered)
@@ -1648,14 +2144,40 @@ simulated function DrawPouchEntry(Canvas C, HUDWeaponReadout A, float X, float W
     local float ValueWidth, ColumnWidth, IconWidth;
     HoverTint = MakeColor(90,200,255,170);
     Tint = bHovered ? MakeColor(90,200,255,230) : MakeColor(ReadoutInk.R,ReadoutInk.G,ReadoutInk.B,210);
-    ReadoutBackground(C, X + 20, 24, Width - 40, 272, 0.65);
+    // Quest 2 readability: a solid plate, and the two-pass
+    // drop shadow on every word and number for stroke weight against the
+    // belt and floor behind it, with slightly taller labels.
+    ReadoutBackground(C, X + 20, 24, Width - 40, 272, 1.0);
+    if (A.bPhysicalSecondary)
+    {
+        ColumnWidth = (Width - 64) * 0.5;
+        Art(C, A.WeaponImage, X + 32, 48, ColumnWidth - 8, 64, Tint);
+        Art(C, A.SecondaryImage, X + Width * 0.5 + (ColumnWidth - 56) * 0.5, 48, 56, 56, Tint);
+        Box(C, X + Width * 0.5 - 1, 64, 2, 196, ReadoutMuted);
+        Text(C, "PRIMARY", X + 32, 106, ColumnWidth - 8, 46, ReadoutInk, true, false, true, false);
+        Text(C, "SECONDARY", X + Width * 0.5 + 8, 106, ColumnWidth - 8, 46, ReadoutInk, true, false, true, false);
+        Text(C, string(A.Reserve), X + 32, 146, ColumnWidth - 8, 96,
+            A.Reserve <= 0 ? ReadoutRed : ReadoutInk, true, false, true, false);
+        Text(C, string(Max(0, A.SecondaryReserve)), X + Width * 0.5 + 8, 146, ColumnWidth - 8, 96,
+            A.SecondaryReserve <= 0 ? ReadoutRed : ReadoutInk, true, false, true, false);
+        return;
+    }
     ColumnWidth = Width - 64;
+    // Each side identifies its own pistol; paired reserve accounting is shared.
     IconWidth = FMin(260, ColumnWidth);
-    Art(C, A.WeaponImage, X + (Width - IconWidth) * 0.5, 52, IconWidth, 96, Tint);
-    Value = string(A.Reserve);
-    ValueWidth = FMin(TextWidth(C, Value, 160), ColumnWidth);
-    Text(C, Value, X + (Width - ValueWidth) * 0.5, 148, ValueWidth + 1, 160,
-        A.Reserve <= 0 ? ReadoutRed : ReadoutInk, true, false, false, true);
+    if (A.bSecondaryReload && A.SecondaryImage != None)
+        Art(C, A.SecondaryImage, X + (Width - 80) * 0.5, 52, 80, 80, Tint);
+    else Art(C, A.WeaponImage, X + (Width - IconWidth) * 0.5, 52, IconWidth, 96, Tint);
+    Value = A.bDosh ? "$" $ A.DoshBalance : string(A.Reserve);
+    ValueWidth = FMin(TextWidth(C, Value, A.bDosh ? 104 : 160), ColumnWidth);
+    Text(C, Value, X + (Width - ValueWidth) * 0.5, 148, ValueWidth + 1, A.bDosh ? 104 : 160,
+        A.Reserve <= 0 ? ReadoutRed : (A.bDosh ? DoshGreen : ReadoutInk), true, false, false, false);
+    if (A.bDosh)
+        Text(C, A.DoshCost $ " DOSH / NOTE", X + 32, 250, ColumnWidth, 46,
+            A.Reserve <= 0 ? ReadoutRed : ReadoutInk, true, false, true, false);
+    else if (A.bSecondaryReload)
+        Text(C, "SECONDARY", X + 32, 250, ColumnWidth, 46,
+            ReadoutInk, true, false, true, false);
     if (bHovered)
     {
         // A restrained shape cue accompanies colour; no changing vocabulary.
@@ -1703,50 +2225,10 @@ simulated function RenderPersonalPanel(int Index, Canvas C)
 {
     if (Index == 0)
     {
-        if (Bridge.bWristwatchHUD) RenderWatchFace(C);
+        if (WatchVisible()) RenderWatchFace(C);
         else RenderStatusPanel(C);
     }
     else if (Index == 1 || Index == 2) RenderWeaponReadout(C, Ammo[Index - 1]);
-}
-
-// A compact reticle-adjacent readout only during deliberate inspection,
-// transitions, the last few zeds, trader hurry-up, or a live boss encounter.
-simulated function RenderSessionPanel(Canvas C)
-{
-    local string Direction;
-    if (bBossActive)
-    {
-        Text(C, Caps(BossLabel), 176, 62, 672, 44, Ink, true);
-        Bar(C, 176, 128, 672, BossHealth, Accent, 10);
-    }
-    else
-    {
-        Art(C, StockArt[bWaveActive ? HA_Hazard : HA_Trader], 176, 56, 64, 64, bWaveActive ? Accent : Amber);
-        Text(C, SessionLabel == "GET READY" ? "GET READY" : SessionValue, 264, 32, 320, 106, Ink, true);
-        Text(C, bWaveActive ? WaveLabel : "TRADER", 610, 42, 250, 38, Muted);
-        if (!bWaveActive && bTraderNavActive)
-        {
-            Direction = TraderBearingAngle < -0.35 ? "< " : (TraderBearingAngle > 0.35 ? "> " : "");
-            Text(C, Direction $ int(TraderDistance) $ "m", 610, 92, 250, 42, Amber);
-        }
-        else if (bWaveActive && SessionValue != "BOSS" && SessionValue != "ENDLESS" && SessionLabel != "GET READY")
-            Text(C, "ZEDS LEFT", 610, 92, 250, 32, Muted);
-    }
-    if (Bridge.NativeHudDetail == 0) return;
-    if (ObjectiveTitle != "" || ObjectiveText != "")
-    {
-        Text(C, ObjectiveTitle, 176, 202, 672, 44, bObjectiveWarning ? Amber : Ink);
-        Text(C, ObjectiveText, 176, 261, 672, 34, Muted);
-        if (ObjectiveProgress >= 0) Bar(C, 176, 320, 672, ObjectiveProgress, Accent, 8);
-    }
-    else if (RhythmCounterActive()) DrawRhythmCounter(C, 176, 212, 672);
-    else if (!bWaveActive)
-    {
-        Text(C, Dosh @ "DOSH", 176, 202, 390, 48, DoshGreen, true);
-        Text(C, Weight $ "/" $ WeightLimit @ "KG", 610, 202, 250, 38, Muted, true);
-        if (TraderElevationDiff != 0)
-            Text(C, TraderElevationDiff > 0 ? "UPSTAIRS" : "DOWNSTAIRS", 176, 274, 672, 36, Muted);
-    }
 }
 
 simulated function RenderAlertPanel(Canvas C)
@@ -1774,17 +2256,6 @@ simulated function RenderAlertPanel(Canvas C)
                 Text(C, InteractionPromptText, 378, 190, 518, 38, Ink, true);
             }
         }
-        else if (FloatingWaveNotice())
-        {
-            Text(C, Caps(WavePriorityTitle), 128, 170, 768, 34, Ink, true);
-            Text(C, WavePriorityText, 128, 212, 768, 26, Muted);
-        }
-    }
-    else if (FloatingWaveNotice())
-    {
-        Text(C, Caps(WavePriorityTitle), 128, 58, 768, 64, Ink, true);
-        Box(C, 128, 140, 64, 4, Accent);
-        Text(C, WavePriorityText, 212, 138, 684, 38, Muted);
     }
     else if (InteractionPromptActive())
     {
@@ -1795,19 +2266,202 @@ simulated function RenderAlertPanel(Canvas C)
     }
 }
 
-simulated function RenderPanel(int Index, Canvas C)
+// Measure in physical panel units so a compact notice never widens glyphs or
+// shrinks a long paragraph into an unreadable single line. Newlines and words
+// are retained; a token wider than a line is split at measured glyph bounds.
+simulated function WrapNotice(Canvas C, string Value, float Height, out array<string> Lines)
 {
+    local string Paragraph, Remaining, Piece;
+    local int Newline, I, Fit, BreakAt;
+    local float XL, YL, NaturalHeight;
+    Lines.Length = 0;
+    C.Font = class'KFGameEngine'.static.GetKFCanvasFont();
+    if (C.Font == None) C.Font = class'Engine'.static.GetLargeFont();
+    C.TextSize("Ag", XL, YL); NaturalHeight = FMax(1, YL);
+    Value = Repl(Repl(Value, "<br/>", Chr(10)), "<br>", Chr(10));
+    Value = Repl(Repl(Value, Chr(13) $ Chr(10), Chr(10)), Chr(13), Chr(10));
+    Remaining = Repl(Value, Chr(9), " ");
+    while (Remaining != "")
+    {
+        Newline = InStr(Remaining, Chr(10));
+        Paragraph = Newline >= 0 ? Left(Remaining, Newline) : Remaining;
+        Remaining = Newline >= 0 ? Mid(Remaining, Newline + 1) : "";
+        if (Paragraph == "") Lines.AddItem("");
+        while (Paragraph != "")
+        {
+            Fit = Len(Paragraph);
+            for (I = 1; I <= Len(Paragraph); ++I)
+            {
+                C.TextSize(Left(Paragraph, I), XL, YL);
+                if (XL * Height / NaturalHeight > 54.0) { Fit = Max(1, I - 1); break; }
+            }
+            BreakAt = Fit;
+            if (Fit < Len(Paragraph))
+                for (I = Fit - 1; I > 0; --I)
+                    if (Mid(Paragraph, I, 1) == " ") { BreakAt = I; break; }
+            Piece = Left(Paragraph, BreakAt);
+            Lines.AddItem(Piece);
+            Paragraph = Mid(Paragraph, BreakAt);
+            while (Left(Paragraph, 1) == " ") Paragraph = Mid(Paragraph, 1);
+        }
+    }
+}
+
+simulated function BuildNoticeLayout(Canvas C)
+{
+    local array<string> Detail;
+    local int I;
+    if (!bNoticeLayoutDirty) return;
+    WrapNotice(C, PriorityNoticeTitle, 1.6, PriorityNoticeLines);
+    PriorityTitleLines = PriorityNoticeLines.Length;
+    WrapNotice(C, PriorityNoticeText, 1.3, Detail);
+    for (I = 0; I < Detail.Length; ++I) PriorityNoticeLines.AddItem(Detail[I]);
+    WrapNotice(C, BossIntroTitle, 1.6, BossIntroLines);
+    BossTitleLines = BossIntroLines.Length;
+    WrapNotice(C, BossIntroText, 1.3, Detail);
+    for (I = 0; I < Detail.Length; ++I) BossIntroLines.AddItem(Detail[I]);
+    CacheArt(PriorityNoticeIconPath, CachedNoticeIconPath, PriorityNoticeIcon);
+    bNoticeLayoutDirty = false;
+}
+
+simulated function int NoticePageCount(int Lines)
+{
+    return Max(1, (Lines + Max(1, NoticeRows) - 1) / Max(1, NoticeRows));
+}
+
+simulated function UpdateNoticePages()
+{
+    local int PriorityPage, BossPage;
+    NoticeRows = (bPriorityNoticeActive && bBossIntroActive) ? 5 : 10;
+    PriorityPage = int(FMax(0, WorldInfo.RealTimeSeconds - PriorityNoticeStarted) / 6.0) % NoticePageCount(PriorityNoticeLines.Length);
+    BossPage = int(FMax(0, WorldInfo.RealTimeSeconds - BossIntroStarted) / 6.0) % NoticePageCount(BossIntroLines.Length);
+    if (PriorityPage != PriorityNoticePage || BossPage != BossIntroPage)
+    {
+        PriorityNoticePage = PriorityPage; BossIntroPage = BossPage;
+        if (Panels[13] != None && Panels[13].Display != None) Panels[13].Display.bNeedsUpdate = true;
+    }
+}
+
+simulated function float NoticeCardHeight(int Lines)
+{
+    return 4.0 + Min(NoticeRows, Lines) * 1.8 + (NoticePageCount(Lines) > 1 ? 1.2 : 0.0);
+}
+
+simulated function PlaceNoticePanel()
+{
+    local vector Forward, Right, Up, AlertAt, At, Size;
+    local float Distance, AlertHeight;
+    local bool Visible;
+    UpdateNoticePages();
+    Visible = (bPriorityNoticeActive || bBossIntroActive) && NoticeRenderedGeneration == NoticeGeneration
+        && (Bridge.NativeHudMask & 16) != 0;
+    if (!Visible) { Panels[13].HidePanel(); return; }
+    GetAxes(Bridge.HudAlertRotation, Forward, Right, Up);
+    Distance = VSize(Bridge.HudAlertPosition - Bridge.HeadPosition);
+    if (Distance < 1) { Panels[13].HidePanel(); return; }
+    AlertAt = Bridge.HeadPosition + Normal(Bridge.HudAlertPosition - Bridge.HeadPosition) * 100.0;
+    AlertHeight = Bridge.HudAlertSize.Y * 100.0 / Distance;
+    At = AlertAt + Up * (AlertHeight * 0.5 + 3.0 + NoticeHeight * 0.5);
+    Size.X = 58.0; Size.Y = NoticeHeight;
+    Panels[13].PlacePanel(At, Bridge.HudAlertRotation, Size, true);
+}
+
+simulated function NoticeLine(Canvas C, string Value, float X, float Y, float Height, color Tint)
+{
+    local float XL, YL, SX, SY;
+    if (Value == "") return;
+    C.Font = class'KFGameEngine'.static.GetKFCanvasFont();
+    if (C.Font == None) C.Font = class'Engine'.static.GetLargeFont();
+    C.TextSize("Ag", XL, YL);
+    SX = Height * 1024.0 / (58.0 * FMax(1, YL));
+    SY = Height * 512.0 / (NoticeHeight * FMax(1, YL));
+    C.DrawColor = MakeColor(0,0,0,Tint.A);
+    C.SetPos((X + 0.08) * 1024.0 / 58.0, (Y + 0.08) * 512.0 / NoticeHeight);
+    C.DrawText(Value, false, SX, SY);
+    C.DrawColor = Tint;
+    C.SetPos(X * 1024.0 / 58.0, Y * 512.0 / NoticeHeight);
+    C.DrawText(Value, false, SX, SY);
+}
+
+simulated function RenderNoticeCard(Canvas C, bool bBoss, float Top)
+{
+    local int I, First, Count, TitleCount, Page, Pages;
+    local float Height, TextHeight;
+    local string Value;
+    local color Tint;
+    local bool bWave;
+    bWave = !bBoss && WavePriorityActive();
+    Count = bBoss ? BossIntroLines.Length : PriorityNoticeLines.Length;
+    TitleCount = bBoss ? BossTitleLines : PriorityTitleLines;
+    Page = bBoss ? BossIntroPage : PriorityNoticePage;
+    Pages = NoticePageCount(Count);
+    Height = NoticeCardHeight(Count);
+    Box(C, 0, Top * 512.0 / NoticeHeight, 1024, Height * 512.0 / NoticeHeight,
+        bWave ? MakeColor(90,8,12,235) : Backing);
+    Box(C, 0, Top * 512.0 / NoticeHeight, 6, Height * 512.0 / NoticeHeight, bBoss ? Amber : (bWave ? Red : Accent));
+    NoticeLine(C, bBoss ? "BOSS" : (bWave ? "WAVE" : "NOTICE"), 2, Top + 0.7, 0.8, bWave ? Ink : Amber);
+    if (!bBoss && PriorityNoticeIcon != None)
+    {
+        C.SetDrawColor(255,255,255,255);
+        C.SetPos(10.0 * 1024.0 / 58.0, (Top + 0.45) * 512.0 / NoticeHeight);
+        C.DrawTile(PriorityNoticeIcon, 1.8 * 1024.0 / 58.0, 1.8 * 512.0 / NoticeHeight,
+            0, 0, PriorityNoticeIcon.SizeX, PriorityNoticeIcon.SizeY);
+    }
+    First = Page * NoticeRows;
+    for (I = First; I < Min(Count, First + NoticeRows); ++I)
+    {
+        Value = bBoss ? BossIntroLines[I] : PriorityNoticeLines[I];
+        TextHeight = I < TitleCount ? 1.6 : 1.3;
+        Tint = (bWave || I < TitleCount) ? Ink : Muted;
+        NoticeLine(C, Value, 2, Top + 2.4 + (I - First) * 1.8, TextHeight, Tint);
+    }
+    if (Pages > 1) NoticeLine(C, string(Page + 1) $ "/" $ string(Pages), 49, Top + Height - 1.2, 0.8, Amber);
+}
+
+simulated function RenderNoticePanel(Canvas C)
+{
+    local float Top;
+    BuildNoticeLayout(C);
+    UpdateNoticePages();
+    NoticeHeight = 0;
+    if (bPriorityNoticeActive) NoticeHeight += NoticeCardHeight(PriorityNoticeLines.Length);
+    if (bBossIntroActive) NoticeHeight += NoticeCardHeight(BossIntroLines.Length);
+    if (bPriorityNoticeActive && bBossIntroActive) NoticeHeight += 1;
+    NoticeHeight = FClamp(NoticeHeight, 8, 32);
+    if (bPriorityNoticeActive)
+    {
+        RenderNoticeCard(C, false, 0);
+        Top = NoticeCardHeight(PriorityNoticeLines.Length) + 1;
+    }
+    if (bBossIntroActive) RenderNoticeCard(C, true, Top);
+    NoticeRenderedGeneration = NoticeGeneration;
+}
+
+simulated function bool RenderPanel(int Index, Canvas C)
+{
+    if (!bInitialized || Bridge == None || C == None || !(C.ClipX > 0 && C.ClipY > 0)) return false;
+    // ScriptedTexture may request its initial draw before the first value read.
+    if (Index == 0 && (HealthLimit <= 0 || ArmorLimit <= 0)) return false;
     if (Index < 3) RenderPersonalPanel(Index, C);
-    else if (Index == 3) RenderSessionPanel(C);
     else if (Index == 4) RenderAlertPanel(C);
-    else if (Index == 5) RenderPouchPanel(C);
+    else if (Index == 5 || Index == 12) RenderPouchPanel(C, Index == 5 ? 0 : 1);
+    else if (Index == 13) RenderNoticePanel(C);
     else RenderTeammateTag(C, Teammates[Index - TeammateFirst]);
+    // Suppress stock only after this payload has reached its actual surface.
+    if (Index == 4)
+    {
+        bInteractionRendered = InteractionPromptActive();
+        RenderedMapNotice = MapNoticeText;
+        RenderedMapCounter = MapCounterText;
+    }
+    return true;
 }
 
 simulated event Tick(float DeltaTime)
 {
     if (Bridge == None || Bridge.bDeleteMe) { Destroy(); return; }
     if (!ContextValid() || WorldInfo.RealTimeSeconds - LastPlacement > 0.25) SuspendHUD();
+    if (!WatchVisible()) SilenceWatchChat();
     if (InteractionPromptText != "" && WorldInfo.RealTimeSeconds > InteractionPromptUntil)
         ClearInteractionMessage();
 }
@@ -1817,18 +2471,29 @@ simulated event Destroyed()
     local int I;
     local VRHUDMovie Movie;
     SuspendHUD();
+    ClearWatchChat();
+    if (ChatLight != None) { DetachComponent(ChatLight); ChatLight = None; }
     if (CommandoHealthbars != None) { CommandoHealthbars.Destroy(); CommandoHealthbars = None; }
     if (ZedMarkers != None) { ZedMarkers.Destroy(); ZedMarkers = None; }
+    if (ObjectiveMarker != None) { ObjectiveMarker.Destroy(); ObjectiveMarker = None; }
     if (LockOnMarkers != None) { LockOnMarkers.Destroy(); LockOnMarkers = None; }
     if (DamagePopups != None) { DamagePopups.Destroy(); DamagePopups = None; }
     Movie = VRHUDMovie(SourceMovie);
     if (Movie != None && Movie.SpatialHUD == self) Movie.SpatialHUD = None;
-    for (I = 0; I < 12; ++I) if (Panels[I] != None) Panels[I].Destroy();
+    for (I = 0; I < ArrayCount(Panels); ++I) if (Panels[I] != None) Panels[I].Destroy();
     Super.Destroyed();
 }
 
 defaultproperties
 {
+    Begin Object Class=PointLightComponent Name=WatchChatGlow
+        FalloffExponent=2
+        bDisableSpecular=true
+        CastShadows=false
+        LightingChannels=(Indoor=true,Outdoor=true,Dynamic=true,bInitialized=true)
+    End Object
+    ChatLightTemplate=WatchChatGlow
+    ChatBlue=(R=64,G=168,B=255,A=255)
     RemoteRole=ROLE_None
     TickGroup=TG_PostUpdateWork
     Ink=(R=234,G=234,B=228,A=255)

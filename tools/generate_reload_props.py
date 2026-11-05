@@ -14,6 +14,10 @@ by name (the same probe the runtime uses); no per-weapon table.
 Also writes VRReloadRing.fbx: a flat, double-sided annulus of unit outer radius
 in the YZ plane, for the translucent target highlights.
 
+Audited rigs also supply VRAmmo_Live_<rig>.fbx: one complete cartridge
+from its own round bone, in that bone's frame, for visible manual chamber ejection.
+These are separate from their magazine props and keep the stock UVs/material.
+
 For the magazine rigs it also writes the reload-hint part shells, AS2-style
 part highlights (Arizona Sunshine 2 colours its magazine, grip/magwell and
 slide in the gun's shader; KF2 guns share one material, so these are thin
@@ -22,6 +26,12 @@ shells of the gun's own faces pushed 0.5 mm out along their normals):
   VRGlowSlide_<rig> the slide or bolt subtree (VRReloadCatalog RackBone)
   VRGlowWell_<rig>  the static frame faces around the seated magazine (grip
                     and magwell), in the RW_Weapon bone frame
+
+Secondary reloads have their own VRAmmo_Alt_<rig>, VRGlowAltAmmo_<rig>,
+VRGlowAltWell_<rig> and, when present, VRGlowAltAction_<rig>. These cut the
+actual slot-1 part rather than the primary magazine. Blast Brawlers supply
+separate Actuator, Trigger and Impact glow shells per wrist; each follows its
+own moving bone. The generated report records every attachment frame.
 
 PSK inputs are derived game assets and stay in ignored extract/ or existing
 build/ audit exports; outputs stay in ignored build/. Export settings match
@@ -43,7 +53,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from generate_floating_hands import FACE, HEADER, WEDGE, WEIGHT, Chunk, bone_data  # noqa: E402
 
-REPORT_SCHEMA = 'kf2vr/reload-props/5'
+REPORT_SCHEMA = 'kf2vr/reload-props/9'
 
 
 def sha256(path):
@@ -202,8 +212,8 @@ RING_OUTER, RING_INNER, RING_SEGMENTS = 1.0, 0.8, 48
 GLOW_ACTION_BONES = {
     'Wep_1stP_Crossbow_Rig': None,
     'Wep_1stP_HRG_Crossboom_Rig': None,
-    'WEP_1stP_RailGun_Rig': None,
-    'WEP_1stP_HRG_Incision': None,
+    'WEP_1stP_RailGun_Rig': 'RW_Bolt',
+    'WEP_1stP_HRG_Incision': 'RW_Bolt',
     'Wep_1stP_CompoundBow_Rig': None,
     'Wep_1stP_SawBlade_Rig': None,
     'Wep_1stP_9mm_Rig': 'RW_Bolt', 'Wep_1stP_M1911_Rig': 'RW_Bolt',
@@ -222,45 +232,45 @@ GLOW_ACTION_BONES = {
     'Wep_1stP_MKB42_Rig': 'RW_Bolt',
     'WEP_1stP_Famas_Rig': 'RW_Charging_Rod', 'WEP_1stP_FNFAL_Rig': 'RW_Charging_Handle',
     'Wep_1stP_M16_M203_Rig': 'RW_Charging_Handle', 'Wep_1stP_AF2001_Rig': 'RW_Bolt',
-    'Wep_1stP_Blunderbuss_Rig': None,
-    'Wep_1stP_Pulverizer_Rig_New': None,
-    'Wep_1stP_CryoGun_Rig': None,
-    'Wep_1stP_HRG_Healthrower_Rig': None,
+    'Wep_1stP_Blunderbuss_Rig': 'RW_Hammer',
+    'Wep_1stP_Pulverizer_Rig_New': 'RW_PumpActionHandle',
+    'Wep_1stP_CryoGun_Rig': 'RW_ActuatorHandle',
+    'Wep_1stP_HRG_Healthrower_Rig': 'RW_ActuatorHandle',
     'Wep_1stP_HRG_BallisticBouncer_Rig': None,
     'Wep_1stP_HMTech_Mine_Reconstructor_Rig': None,
-    'Wep_1stP_Nail_ShotGun_Rig': None,
-    'Wep_1stP_HRG_Nailgun_PDW_Rig': None,
+    'Wep_1stP_Nail_ShotGun_Rig': 'RW_Mag_Release',
+    'Wep_1stP_HRG_Nailgun_PDW_Rig': 'RW_Mag_Release',
     'Wep_1stP_HRG_IncendiaryRifle_Rig': 'RW_Charging_Handle',
     'Wep_1stP_HRG_Teslauncher_Rig': 'RW_Charging_Handle',
     'Wep_1stP_Medic_GrenadeLauncher_Rig': 'RW_Charging_Handle',
     'WEP_1stP_HRG_Boomy_Rig': 'RW_Charging_Handle',
     'Wep_1P_RiotShield_Rig': 'RW_Bolt',
     'Wep_1stP_Laser_Cutter_Rig': None,
-    'Wep_1stP_Microwave_Assault_Rig': None,
+    'Wep_1stP_Microwave_Assault_Rig': 'RW_Charger',
     'WEP_1stP_HVStormCannon_Rig': None,
     'Wep_1stP_HZ12_Rig': 'RW_Pump',
     'WEP_1stP_HRG_SonicGun_Rig': 'RW_ChargingHandle',
     'WEP_1stP_Seal_Squeal_Rig': 'RW_ChargingHandle',
-    'Wep_1stP_SeekerSix_Rig': None,
-    'Wep_1stP_HRG_Locust_Rig': None,
-    'WEP_1stP_Thermite_Rig': None,
+    'Wep_1stP_SeekerSix_Rig': 'RW_MagReleaseHandle1',
+    'Wep_1stP_HRG_Locust_Rig': 'RW_MagReleaseHandle1',
+    'WEP_1stP_Thermite_Rig': 'RW_Exhaust',
     'WEP_1stP_ShrinkRay_Gun_Rig': None,
     'Wep_1stP_Minigun_Rig': None,
-    'Wep_1stP_CaulkBurn_Rig': None,
-    'Wep_1stP_Flamethrower_Rig': None,
-    'Wep_1stP_Microwave_Gun_Rig': None,
-    'Wep_1stP_HRG_ArcGenerator_Rig': None,
+    'Wep_1stP_CaulkBurn_Rig': 'RW_Charging_Handle',
+    'Wep_1stP_Flamethrower_Rig': 'RW_GasTank_Release',
+    'Wep_1stP_Microwave_Gun_Rig': 'RW_Handle1',
+    'Wep_1stP_HRG_ArcGenerator_Rig': 'RW_Handle1',
     'Wep_1stP_Medic_Bat_Rig': None,
-    'Wep_1stP_Gravity_Imploder_Rig': None,
+    'Wep_1stP_Gravity_Imploder_Rig': 'RW_Lever',
     'WEP_1stP_BladedPistol_Rig': None,
     'Wep_1stP_RPG7_Rig': None,
     'Wep_1stP_HRG_MedicMissile_Rig': None,
-    'Wep_1stP_ParasiteImplanter_Rig': None,
+    'Wep_1stP_ParasiteImplanter_Rig': 'RW_Bolt',
 }
 # The S12 skins its receiver to RW_Body, a child of RW_Weapon.
 GLOW_FRAME_BONES = ('Root', 'RW_Weapon', 'RW_Body')
-# Rigs whose part seats into a turning chamber, not a fixed well (the Freeze
-# Thrower's and Healthrower's cartridge): no well shell; the part's own shows.
+# These receivers have their own moving-part cuts below. Their ammunition can
+# rest off the gun in the bind pose, so its box cannot locate the receiving part.
 NO_WELL_SHELL = ('Wep_1stP_CryoGun_Rig', 'Wep_1stP_HRG_Healthrower_Rig',
                  'Wep_1stP_Crossbow_Rig', 'Wep_1stP_HRG_Crossboom_Rig',
                  'WEP_1stP_RailGun_Rig', 'WEP_1stP_HRG_Incision',
@@ -299,6 +309,82 @@ GLOW_BONE_PARTS = {
     # The Doshinegun's wad drops into its container; its wad rests off the gun
     # outside a reload and leaves nothing to eject, so it has no magazine shell.
     'WEP_1stP_Doshinegun_Rig': {'Well': (('RW_Container', 'RW_Lid'), None)},
+    # Action handles follow their own bone, so the shell stays on the part
+    # while the physical reload/cycle moves it through its stock path.
+    'Wep_1stP_M4Shotgun_Rig': {'Slide': ('RW_Bolt', None)},
+    'Wep_1stP_M99_Rig': {'Slide': ('RW_Bolt', None)},
+    'WEP_1stP_Mosin_Rig': {'Slide': ('RW_Bolt_Lock', None)},
+    'Wep_1stP_Winchester_Rig': {'Slide': ('RW_Finger_Lever', None)},
+    'Wep_1stP_Centerfire_Rig': {'Slide': ('RW_Finger_Lever', None)},
+    # The open cylinder is the receiving surface for a speedloader or shell;
+    # its moving pivot and individual rounds do not belong to that shell.
+    'Wep_1stP_SW_500_Rig': {'Well': ('RW_Cylinder', None)},
+    'Wep_1stP_ChiappaRhino_Rig': {'Well': ('RW_Cylinder', None)},
+    'Wep_1stP_HRG_SW_500_Rig': {'Well': ('RW_Cylinder', None)},
+    'Wep_1stP_M32_MGL_Rig': {'Well': ('RW_Cylinder', None)},
+    # The 1858 replaces the cylinder after releasing its lever.
+    'Wep_1stP_Remington_1858_Rig': {'Mag': ('RW_Cylinder', None),
+                                  'Slide': ('RW_LoadingLever', None)},
+    # A belt reload starts and finishes at the hinged feed cover. Its own
+    # faces highlight that physical part without painting the whole receiver.
+    'Wep_1stP_Stoner63A_Rig': {'Slide': ('RW_ChamberCover', None)},
+    'WEP_1stP_HRG_BarrielRifle_Rig': {'Slide': ('RW_ChamberCover', None)},
+    'WEP_1stP_MG3_Rig': {'Slide': ('RW_ChamberCover', None)},
+    # The load surface is a real moving part, independent of the removable
+    # ammunition. Keep its attachment frame rather than baking its bind pose
+    # into RW_Weapon (the canister chamber rotates during insertion).
+    'Wep_1stP_CryoGun_Rig': {'Well': ('RW_FreezeChamber', None)},
+    'Wep_1stP_HRG_Healthrower_Rig': {'Well': ('RW_FreezeChamber', None)},
+    # Cocking is the stock RW_Pump handle: an amber shell on that part, as
+    # for a pump, rather than a ring floating at its contact.
+    'Wep_1stP_Crossbow_Rig': {'Well': ('RW_Arrow_Retention_Spring', None),
+                              'Slide': ('RW_Pump', None)},
+    'Wep_1stP_HRG_Crossboom_Rig': {'Well': ('RW_Arrow_Retention_Spring', None)},
+    'Wep_1stP_SawBlade_Rig': {'Well': ('RampPiston', None)},
+}
+# Receiver bands bounded by a real adjacent stock part. Select original frame
+# triangles beside that part, never a substitute primitive or a whole-gun tint.
+# (attachment frame, nearby part bones, outward margin in that part's frame).
+# Bow geometry is rooted in LW_Weapon; RW_Weapon is the detached arrow.
+GLOW_RECEIVER_PARTS = {
+    'Wep_1stP_MB500_Rig': ('RW_Weapon', ('RW_Bolt_Elevator',), 1.5),
+    'Wep_1stP_DragonsBreath_Rig': ('RW_Weapon', ('RW_Shell_Trap',), 1.5),
+    'Wep_1stP_M4Shotgun_Rig': ('RW_Weapon', ('RW_Shell1',), 3.0),
+    'Wep_1stP_M99_Rig': ('RW_Weapon', ('RW_Shell1',), 1.5),
+    'WEP_1stP_Mosin_Rig': ('RW_Weapon', ('RW_Bolt',), 1.5),
+    'Wep_1stP_Remington_1858_Rig': ('RW_Weapon', ('RW_Cylinder',), 1.5),
+    'WEP_1stP_RailGun_Rig': ('RW_Weapon', ('RW_Bullets1',), 2.0),
+    'WEP_1stP_HRG_Incision': ('RW_Weapon', ('RW_Bullets1',), 2.0),
+    'Wep_1stP_CompoundBow_Rig': ('LW_Weapon', ('RW_ArrowRest01', 'RW_ArrowRest02', 'RW_ArrowRest03'), 2.0),
+    # The belt guns' ammunition box seat, lit like every other magazine well
+    # while a box goes in (the feed cover keeps its own amber shell).
+    'Wep_1stP_Stoner63A_Rig': ('RW_Weapon', ('RW_Magazine1',), 1.5),
+    'WEP_1stP_HRG_BarrielRifle_Rig': ('RW_Weapon', ('RW_Magazine1',), 1.5),
+    'WEP_1stP_MG3_Rig': ('RW_Weapon', ('RW_Magazine',), 1.5),
+}
+# These gates are separate parts, each following its own live bone.
+GLOW_BONE_PARTS['Wep_1stP_Winchester_Rig']['Well'] = ('RW_Breech_Cover', None)
+GLOW_BONE_PARTS['Wep_1stP_Centerfire_Rig']['Well'] = ('RW_Breech_Cover', None)
+# Opening is an amber action on the assembly held by the authored wrist,
+# distinct from the cyan receiving surface once open. A small release button
+# alone would point away from the actual physical grab.
+for _rig in ('Wep_1stP_Double_Barrel', 'Wep_1stP_M79_Rig', 'Wep_1stP_HX25_Pistol_Rig',
+             'Wep_1stP_HRGScorcher_Pistol_Rig', 'Wep_1stP_HRG_MegaDragonsbreath_Rig',
+             'Wep_1stP_HRG_Kaboomstick_Rig', 'Wep_1stP_Quad_Barrel'):
+    GLOW_BONE_PARTS[_rig]['Slide'] = ('RW_Barrel', None)
+for _rig in ('Wep_1stP_SW_500_Rig', 'Wep_1stP_ChiappaRhino_Rig', 'Wep_1stP_HRG_SW_500_Rig'):
+    GLOW_BONE_PARTS[_rig]['Slide'] = ('RW_Cylinder', None)
+for _rig in ('Wep_1stP_FlareGun_Rig', 'Wep_1stP_HRG_Winterbite_Rig'):
+    GLOW_BONE_PARTS[_rig]['Slide'] = ('RW_Barrel', None)
+GLOW_BONE_PARTS['Wep_1stP_Bleeder_Rig']['Slide'] = ('RW_CylinderHousing', None)
+# The Head Hunter opens on its side charging handle (stock Reload_Half/Empty),
+# not the static cylinder housing the Hemogoblin rotates.
+GLOW_BONE_PARTS['WEP_1stP_HRG_CranialPopper_Rig']['Slide'] = ('RW_Charging_Handle', None)
+GLOW_BONE_PARTS['Wep_1stP_M32_MGL_Rig']['Slide'] = ('RW_ForeGrip', None)
+# The Piranha's front pivot is the hand-slapped latch. Its rear pivot moves on
+# powered timing and is not a second physical hand contact.
+GLOW_BONE_PARTS['WEP_1stP_BladedPistol_Rig'] = {
+    'Slide': ('RW_FrontPivot', None),
 }
 # Magwell region: the magazine's reference-pose box in the RW_Weapon bone frame
 # (X along the bore, Y across, Z up; the AR-15 rig alone is not axis-aligned in
@@ -306,6 +392,36 @@ GLOW_BONE_PARTS = {
 # short of its top where the frame meets the action.
 WELL_MARGIN_ACROSS, WELL_MARGIN_ALONG, WELL_MARGIN_BELOW, WELL_TOP_INSET = 1.0, 0.8, 0.8, 0.5
 SHELL_OFFSET = 0.05
+
+# Slot-1 ammunition is a different physical part from the primary magazine.
+# These cuts retain the stock UVs and sections in each part's own bone frame.
+# The Saiga's RW_Launcher is its removable secondary cartridge: its secondary
+# reload actually carries that part out and replaces it, despite its name.
+SECONDARY_PARTS = {
+    'Wep_1stP_M16_M203_Rig': ('RW_Shell1', 'RW_Pump', 'RW_ForeGrip'),
+    'Wep_1stP_HRG_IncendiaryRifle_Rig': ('RW_Shell1', 'RW_Pump', 'RW_ForeGrip'),
+    'Wep_1stP_HRG_Teslauncher_Rig': ('RW_Shell1', 'RW_Pump', 'RW_InnerSleeve'),
+    'Wep_1stP_Medic_GrenadeLauncher_Rig': ('RW_Shell1', 'RW_Pump', 'RW_InnerSleeve'),
+    'WEP_1stP_Famas_Rig': ('RW_Magazine2', 'RW_Charging_Handle', 'RW_Weapon'),
+    'Wep_1stP_Saiga12_Rig': ('RW_Launcher', None, 'RW_Body'),
+}
+HINT_ONLY_RIGS = (
+    'build/blastbrawlers-audit/export/WEP_1P_HRG_BlastBrawlers_MESH/SkeletalMesh3/WEP_1stP_HRG_Blast_Brawlers_Rig.psk',
+    'build/huskcannon-audit/export/WEP_1P_HuskCannon_MESH/SkeletalMesh3/Wep_1stP_HuskCannon_Rig.psk',
+    'build/vampire-audit/export/WEP_1P_HRG_Vampire_MESH/SkeletalMesh3/Wep_1stP_HRG_Vampire_Rig.psk',
+)
+BRAWLER_PARTS = {
+    'WEP_1stP_HRG_Blast_Brawlers_Rig': {
+        **{f'Actuator{side}': (prefix + 'ActuatorHandle',) for side, prefix in (('R', 'RW_'), ('L', 'LW_'))},
+        **{f'Trigger{side}': (prefix + 'TriggerPull', prefix + 'Trigger') for side, prefix in (('R', 'RW_'), ('L', 'LW_'))},
+        **{f'Impact{side}': (prefix + 'ImpactPiston02', prefix + 'ImpactAngle') for side, prefix in (('R', 'RW_'), ('L', 'LW_'))},
+    },
+}
+MECHANISM_PARTS = {
+    stem: {'Pipe1': ('RW_Barrel01',), 'Pipe2': ('RW_Barrel02',)}
+    for stem in ('Wep_1stP_HuskCannon_Rig', 'Wep_1stP_HRG_Vampire_Rig')
+}
+HINT_ONLY_PARTS = {**BRAWLER_PARTS, **MECHANISM_PARTS}
 
 
 def bind_frames(bones):
@@ -356,6 +472,64 @@ AMMO_OVERRIDES = {'WEP_1stP_Mosin_Rig': ('clip', 'RW_StripMag'),
                   'WEP_1stP_HRG_BarrielRifle_Rig': ('clip', 'RW_Magazine1'),
                   'WEP_1stP_MG3_Rig': ('clip', 'RW_Magazine'),
                   'Wep_1stP_Remington_1858_Rig': ('clip', 'RW_Cylinder')}
+
+# Belt boxes carry their belt, still: every belt round (RW_Bullets1..N) rides
+# the box at its stock Reload_Empty pose from the frame where the stock hand
+# takes the belt out of the box mouth (VRMG3BeltPath's StartTime: the MG3's
+# 5.0 s, frame 150 of 230 at 30 fps; the Stoner's and Bastion's 3.3 s, frame
+# 264 of 481 at 80 fps). The carried box shows that belt for its carrier and
+# for observers, and the seated box's belt bones start from the same pose
+# before the hand lays them along the stock path. VRAmmo_Belt_<rig> is the
+# leading round and link alone, in its own bone frame: the feed-tray ghost.
+BELT_RIGS = {
+    'WEP_1stP_MG3_Rig': ('build/shared-weapon-frames/held-export/WEP_1P_MG3_ANIM/AnimSet/Wep_1stP_MG3_Anim.psa', 150, 12),
+    'Wep_1stP_Stoner63A_Rig': ('build/stoner63a-audit/export/WEP_1P_Stoner63A_ANIM/AnimSet/Wep_1stP_Stoner63A_Anim.psa', 264, 14),
+    'WEP_1stP_HRG_BarrielRifle_Rig': ('build/bastion-audit/export/WEP_1P_HRG_BarrierRifle_ANIM/AnimSet/Wep_1stP_HRG_BarrierRifle_Anim.psa', 264, 14),
+}
+
+# Complete live cartridge geometry, audited separately from the magazine cut.
+# G18C has no geometry on its bullet bones; runtime uses the stock 9mm donor.
+LIVE_ROUND_BONES = dict.fromkeys((
+    'Wep_1stP_9mm_Rig', 'Wep_1stP_M1911_Rig', 'Wep_1stP_Deagle_Rig',
+    'Wep_1stP_Medic_Pistol_Rig', 'WEP_1P_HRG_93R_Pistol_Rig',
+    'Wep_1stP_AF2001_Rig', 'Wep_1P_RiotShield_Rig',
+    'Wep_1stP_ChiappaRhino_Rig',
+    # One complete original dart, separate from the seven-round speedloader.
+    'WEP_1stP_HRG_CranialPopper_Rig', 'Wep_1stP_Bleeder_Rig',
+    # Complete, isolated stock cartridges; partial magazine-top shells stay out.
+    'Wep_1stP_Medic_SMG_Rig', 'Wep_1stP_KRISS_Rig',
+    'Wep_1stP_HK_UMP_Rig', 'Wep_1stP_MP5RAS_Rig',
+), 'RW_Bullets1')
+# Single-cartridge cuts inspected from the actual stock PSKs.
+LIVE_ROUND_BONES.update(dict.fromkeys((
+    'Wep_1stP_AK12_Rig',
+    'Wep_1stP_AR15_9mm_Rig',
+    'Wep_1stP_SCAR_Rig',
+    'Wep_1stP_MP7_Rig',
+    'Wep_1stP_P90_Rig',
+    'Wep_1stP_Saiga12_Rig',
+    'Wep_1stP_Medic_Shotgun_Rig',
+    'Wep_1stP_Medic_Assault_Rig',
+    'WEP_1stP_FNFAL_Rig',
+    'Wep_1stP_M16_M203_Rig',
+    'Wep_1stP_HRG_IncendiaryRifle_Rig',
+), 'RW_Bullets1'))
+LIVE_ROUND_MATERIALS = {'Wep_1stP_Medic_Shotgun_Rig': 1}
+LIVE_ROUND_BONES['WEP_1stP_M14_EBR'] = 'RW_Bullet1'
+# The Mosin reload prop is the whole stripper clip; idle ejection needs one round.
+LIVE_ROUND_BONES['WEP_1stP_Mosin_Rig'] = 'RW_Shell1'
+# These bones carry several cartridges. Keep one whole connected cartridge,
+# including its separate case head, rather than cutting faces through a round.
+# Axes are cartridge centres in the bone's YZ plane; all three point along +X.
+# FAMAS Shell1 is a spent case; Shell2 carries two complete live cartridges.
+LIVE_ROUND_BONES.update({'Wep_1stP_L85A2_Rig': 'RW_Bullets1',
+                         'WEP_1stP_G36C_Rig': 'RW_Bullets2',
+                         'WEP_1stP_Famas_Rig': 'RW_Famas_Shell2'})
+LIVE_ROUND_ISOLATION = {
+    'Wep_1stP_L85A2_Rig': ((0.2990, 0.2005), 306),
+    'WEP_1stP_G36C_Rig': ((-0.0743, 0.9467), 144),
+    'WEP_1stP_Famas_Rig': ((-0.2219, -0.5648), 464),
+}
 
 
 # A speedloader carries its rounds: the stock reload clip moves the cylinder's
@@ -409,6 +583,9 @@ RIDING_ROUNDS = {
                     'RW_Bullets4': 13107, 'RW_Bullets5': 0},
     },
 }
+RIDING_ROUNDS.update({rig: {'psa': psa, 'clip': 'Reload_Empty', 'frame': frame, 'max_offset': 25.0,
+                            'bones': ['RW_Bullets%d' % k for k in range(1, rounds + 1)]}
+                      for rig, (psa, frame, rounds) in BELT_RIGS.items()})
 
 
 def riding_rounds(psk_path, chunks, bones, names, root, points, wedges, faces, slot):
@@ -514,6 +691,8 @@ def cut_ammo(psk_path, spent=False):
         if bones[i][3] in keep:
             keep.add(i)
     rounds = {i for i in keep if ROUND_BONE.match(names[i])}
+    # Named riding bones ride at their clip pose instead of their bind pose.
+    keep -= {names.index(b) for b in RIDING_ROUNDS.get(Path(psk_path).stem, {}).get('bones', ()) if b in names}
     points = [struct.unpack('<3f', row) for row in chunks['PNTS0000'].rows]
     wedges = [WEDGE.unpack(row) for row in chunks['VTXW0000'].rows]
     faces = [FACE.unpack(row) for row in chunks['FACE0000'].rows]
@@ -597,6 +776,78 @@ def subtree(bones, root):
     return keep
 
 
+def live_round_faces(stem, names, wedges, faces, owner):
+    """Parse one explicitly admitted round bone and its exact stock material."""
+    bone = names.index(LIVE_ROUND_BONES[stem])
+    kept, mixed = [], 0
+    for face in faces:
+        owned = sum(owner[wedges[w][0]] == bone for w in face[:3])
+        if owned == 3:
+            kept.append(face)
+        elif owned:
+            mixed += 1
+    slots = sorted({face[3] for face in kept})
+    expected_slot = LIVE_ROUND_MATERIALS.get(stem, 0)
+    if not kept or mixed or slots != [expected_slot]:
+        raise ValueError(f'{stem} live round is incomplete: '
+                         f'{len(kept)} faces, {mixed} crossing faces, sections {slots}')
+    return bone, kept, slots
+
+
+def isolate_live_cartridge(stem, points, wedges, faces, origin, rotation):
+    """Select entire stock shells at one audited cartridge axis, preserving UVs.
+
+    Position welding connects UV/normal seams for selection only. It does not
+    change exported vertices. Disconnected case heads share the selected axis
+    and stay with their case and projectile; neighbouring cartridges stay out.
+    """
+    from mathutils import Vector
+    axis, expected_faces = LIVE_ROUND_ISOLATION[stem]
+    inverse = rotation.conjugated()
+    local = {wedges[w][0]: inverse @ (Vector(points[wedges[w][0]]) - origin)
+             for face in faces for w in face[:3]}
+    keys = {p: tuple(round(c, 4) for c in v) for p, v in local.items()}
+    adjacent = {key: set() for key in keys.values()}
+    for face in faces:
+        corners = {keys[wedges[w][0]] for w in face[:3]}
+        for key in corners:
+            adjacent[key].update(corners)
+    remaining, selected = set(adjacent), set()
+    while remaining:
+        first = remaining.pop()
+        pending, component = [first], {first}
+        while pending:
+            linked = adjacent[pending.pop()] & remaining
+            remaining.difference_update(linked)
+            component.update(linked)
+            pending.extend(linked)
+        centre = [(min(v[a] for v in component) + max(v[a] for v in component)) * 0.5
+                  for a in (1, 2)]
+        if sum((a - b) ** 2 for a, b in zip(centre, axis)) < 0.015 ** 2:
+            selected.update(component)
+    kept = [face for face in faces if all(keys[wedges[w][0]] in selected for w in face[:3])]
+    if len(kept) != expected_faces:
+        raise ValueError(f'{stem} isolated cartridge has {len(kept)} faces; expected {expected_faces}')
+    used = {wedges[w][0] for face in kept for w in face[:3]}
+    centre = Vector([(min(local[p][a] for p in used) + max(local[p][a] for p in used)) * 0.5
+                     for a in range(3)])
+    return kept, origin + rotation @ centre
+
+
+def cut_live_round(psk_path):
+    """One whole stock cartridge; refuse crossing faces or unexpected sections."""
+    bones, names, points, wedges, faces, owner = rig_geometry(psk_path)
+    stem = Path(psk_path).stem
+    bone, kept, slots = live_round_faces(stem, names, wedges, faces, owner)
+    positions, rotations = bind_frames(bones)
+    origin = positions[bone]
+    if stem in LIVE_ROUND_ISOLATION:
+        kept, origin = isolate_live_cartridge(stem, points, wedges, kept, origin, rotations[bone])
+    return {'kind': 'live-round', 'bone': names[bone], 'bones': [names[bone]],
+            'points': points, 'wedges': wedges, 'faces': kept, 'mixed_faces': 0,
+            'material_indices': slots, 'origin': origin, 'rotation': rotations[bone]}
+
+
 def cut_glow_parts(psk_path):
     """The three hint shells of one magazine rig. Faces are whole: a face belongs
     to a part only when every corner is dominated by that part's bones."""
@@ -604,9 +855,12 @@ def cut_glow_parts(psk_path):
     bones, names, points, wedges, faces, owner = rig_geometry(psk_path)
     positions, rotations = bind_frames(bones)
     mag_bone = ammo_bone(names, stem)[1]
-    magazine = subtree(bones, mag_bone)
     # A gun with no visible action (the Disrupter) gets no slide shell.
     action = subtree(bones, names.index(GLOW_ACTION_BONES[stem])) if GLOW_ACTION_BONES[stem] else set()
+    # An action handle that rides the magazine (the Microwave Gun's and Arc
+    # Generator's pull handle, the Locust's and Seeker Six's release) belongs
+    # to the amber slide shell alone; two shells on one face fight.
+    magazine = subtree(bones, mag_bone) - action
     frame = {names.index(n) for n in GLOW_FRAME_BONES if n in names}
     weapon = names.index('RW_Weapon')
     to_weapon = rotations[weapon].conjugated()
@@ -672,6 +926,80 @@ def cut_bone_glow(psk_path):
     return parts
 
 
+def cut_named_part(psk_path, bone_names, descendants=False, complete=False):
+    """One stock part, with its real section mapping and bone-local origin."""
+    bones, names, points, wedges, faces, owner = rig_geometry(psk_path)
+    bone_names = (bone_names,) if isinstance(bone_names, str) else bone_names
+    root = names.index(bone_names[0])
+    keep = set().union(*(subtree(bones, names.index(n)) if descendants else {names.index(n)}
+                         for n in bone_names))
+    kept = [f for f in faces if all(owner[wedges[w][0]] in keep for w in f[:3])]
+    mixed = sum(any(owner[wedges[w][0]] in keep for w in f[:3]) for f in faces if f not in kept)
+    if not kept or (complete and mixed):
+        raise ValueError(f'{Path(psk_path).stem} incomplete {bone_names}: {len(kept)} faces, {mixed} crossings')
+    positions, rotations = bind_frames(bones)
+    slots = sorted({f[3] for f in kept})
+    chunks = read_psk(psk_path)
+    return {'kind': 'secondary-ammo' if complete else 'part', 'bone': names[root],
+            'bones': sorted(names[i] for i in keep), 'points': points, 'wedges': wedges,
+            'faces': kept, 'origin': positions[root], 'rotation': rotations[root],
+            'mixed_faces': mixed, 'material_indices': slots,
+            'material_names': [chunks['MATT0000'].rows[i][:64].split(b'\0')[0].decode('ascii') for i in slots]}
+
+
+def cut_receiver_glow(psk_path):
+    """Original receiving-frame faces alongside a named stock load surface."""
+    from mathutils import Vector
+    frame, near_bones, margin = GLOW_RECEIVER_PARTS[Path(psk_path).stem]
+    near = cut_named_part(psk_path, near_bones)
+    cut = cut_named_part(psk_path, frame)
+    inverse = near['rotation'].conjugated()
+    coords = [inverse @ (Vector(near['points'][near['wedges'][w][0]]) - near['origin'])
+              for face in near['faces'] for w in face[:3]]
+    lo = [min(p[i] for p in coords) - margin for i in range(3)]
+    hi = [max(p[i] for p in coords) + margin for i in range(3)]
+    def adjacent(face):
+        for w in face[:3]:
+            p = inverse @ (Vector(cut['points'][cut['wedges'][w][0]]) - near['origin'])
+            if not all(lo[i] <= p[i] <= hi[i] for i in range(3)):
+                return False
+        return True
+    cut['faces'] = [f for f in cut['faces'] if adjacent(f)]
+    if not cut['faces']:
+        raise ValueError(f'{Path(psk_path).stem} has no receiving frame beside {near_bones}')
+    cut['kind'] = 'Well'
+    return {'Well': cut}
+
+
+def cut_secondary_parts(psk_path):
+    """Separate ammunition, receiving surface and action for each secondary."""
+    ammo_bone_name, action, well = SECONDARY_PARTS[Path(psk_path).stem]
+    ammo = cut_named_part(psk_path, ammo_bone_name, descendants=True, complete=True)
+    parts = {'AltAmmo': ammo, 'AltWell': cut_named_part(psk_path, well)}
+    if action:
+        parts['AltAction'] = cut_named_part(psk_path, action)
+    # FAMAS and S12 skin the receiving surface into their main receiver. Keep
+    # the actual receiver triangles alongside the secondary part, without
+    # colouring the entire rifle. The cartridge's local bounding box selects
+    # a narrow surrounding band; whole triangles preserve the original skin.
+    if well in ('RW_Weapon', 'RW_Body'):
+        from mathutils import Vector
+        inverse = ammo['rotation'].conjugated()
+        coords = [inverse @ (Vector(ammo['points'][ammo['wedges'][w][0]]) - ammo['origin'])
+                  for face in ammo['faces'] for w in face[:3]]
+        lo = [min(p[i] for p in coords) - 1.5 for i in range(3)]
+        hi = [max(p[i] for p in coords) + 1.5 for i in range(3)]
+        cut = parts['AltWell']
+        def near(face):
+            center = sum((Vector(cut['points'][cut['wedges'][w][0]]) for w in face[:3]), Vector()) / 3
+            p = inverse @ (center - ammo['origin'])
+            return all(lo[i] <= p[i] <= hi[i] for i in range(3))
+        cut['faces'] = [f for f in cut['faces'] if near(f)]
+        if not cut['faces']:
+            raise ValueError(f'{Path(psk_path).stem} has no receiver faces beside its secondary ammunition')
+    return ammo, parts
+
+
 def build_ammo_object(name, cut, shell_offset=0.0):
     """Blender mesh in the bone frame. Like the PSK importer: reversed winding, V flipped.
     A shell offset makes a two-way shell: one copy pushed along the normals and
@@ -715,8 +1043,14 @@ def build_ammo_object(name, cut, shell_offset=0.0):
             # two): its other side gets its own copies of the same points.
             f = bm.faces.new([bm.verts.new(v.co) for v in corners])
         f.material_index = slots.index(face[3]) if len(slots) > 1 else 0
+        # Some rigs tile a mirrored part one texture over (the Caulk and
+        # Burn's left tube sits at U 1.25-1.9, the right at 0.25-0.9). The
+        # stock material wraps, but the hint glow does not, so it lit only
+        # one tube (#5). Shift each face back by whole tiles: the same texels.
+        du = math.floor(min(cut['wedges'][w][1] for w in order))
+        dv = math.floor(min(cut['wedges'][w][2] for w in order))
         for loop, w in zip(f.loops, order):
-            loop[uv].uv = (cut['wedges'][w][1], 1.0 - cut['wedges'][w][2])
+            loop[uv].uv = (cut['wedges'][w][1] - du, 1.0 - (cut['wedges'][w][2] - dv))
     for f in bm.faces:
         f.smooth = True
     for e in bm.edges:
@@ -808,14 +1142,27 @@ def report_is_current(root, out, rigs):
             return False
         if report.get('psk_reader_sha256') != sha256(root / 'tools/generate_floating_hands.py'):
             return False
-        expected = {'VRAmmo_' + rig.stem: rig for rig in rigs}
+        expected = {'VRAmmo_' + rig.stem: rig for rig in rigs if rig.stem not in HINT_ONLY_PARTS}
         for rig in rigs:
+            if rig.stem in SECONDARY_PARTS:
+                expected['VRAmmo_Alt_' + rig.stem] = rig
+                for kind in ('AltAmmo', 'AltWell', 'AltAction'):
+                    if kind != 'AltAction' or SECONDARY_PARTS[rig.stem][1]:
+                        expected['VRGlow' + kind + '_' + rig.stem] = rig
+            for kind in HINT_ONLY_PARTS.get(rig.stem, {}):
+                expected['VRGlow' + kind + '_' + rig.stem] = rig
+            if rig.stem in BELT_RIGS:
+                expected['VRAmmo_Belt_' + rig.stem] = rig
+            if rig.stem in LIVE_ROUND_BONES:
+                expected['VRAmmo_Live_' + rig.stem] = rig
             if rig.stem in GLOW_ACTION_BONES:
                 for kind in [k for k in (('Mag', 'Slide', 'Well') if GLOW_ACTION_BONES[rig.stem] else ('Mag', 'Well'))
                              if not (k == 'Well' and rig.stem in NO_WELL_SHELL)]:
                     expected['VRGlow' + kind + '_' + rig.stem] = rig
             for kind in GLOW_BONE_PARTS.get(rig.stem, {}):
                 expected['VRGlow' + kind + '_' + rig.stem] = rig
+            if rig.stem in GLOW_RECEIVER_PARTS:
+                expected['VRGlowWell_' + rig.stem] = rig
         props = report['props']
         # Spent magazines exist only for rigs whose magazine carries rounds;
         # deciding that needs the cut, so any requested rig's may be present.
@@ -849,7 +1196,7 @@ def main():
     args = parser.parse_args(argv)
     root = Path(__file__).resolve().parents[1]
     out = (root / args.out).resolve()
-    rigs = [(root / r).resolve() for r in (args.rigs or DEFAULT_RIGS)]
+    rigs = [(root / r).resolve() for r in (args.rigs or DEFAULT_RIGS + HINT_ONLY_RIGS)]
     if len({r.stem.casefold() for r in rigs}) != len(rigs):
         raise ValueError('Requested rigs have duplicate prop names')
     if args.check:
@@ -858,7 +1205,7 @@ def main():
         return 0 if current else 1
     # Validate every cut before writing any output. An unsupported new rig must
     # not leave a successful-looking partial set of fresh props.
-    cuts = [(rig, sha256(rig), cut_ammo(rig)) for rig in rigs]
+    cuts = [(rig, sha256(rig), cut_ammo(rig)) for rig in rigs if rig.stem not in HINT_ONLY_PARTS]
     spent = []
     for rig, source_hash, cut in cuts:
         # A speedloader that carries its rounds leaves the gun empty.
@@ -873,6 +1220,14 @@ def main():
         spent.append((rig, source_hash, empty, ('VRAmmoEmpty_' if section == 0 else 'VRAmmoEmpty1_') + rig.stem))
     glows = [(rig, sha256(rig), cut_glow_parts(rig)) for rig in rigs if rig.stem in GLOW_ACTION_BONES]
     glows += [(rig, sha256(rig), cut_bone_glow(rig)) for rig in rigs if rig.stem in GLOW_BONE_PARTS]
+    glows += [(rig, sha256(rig), cut_receiver_glow(rig)) for rig in rigs if rig.stem in GLOW_RECEIVER_PARTS]
+    live = [(rig, sha256(rig), cut_live_round(rig)) for rig in rigs if rig.stem in LIVE_ROUND_BONES]
+    belts = [(rig, sha256(rig), cut_named_part(rig, 'RW_Bullets1', complete=True))
+             for rig in rigs if rig.stem in BELT_RIGS]
+    secondary = [(rig, sha256(rig), cut_secondary_parts(rig)) for rig in rigs if rig.stem in SECONDARY_PARTS]
+    brawlers = [(rig, sha256(rig), {kind: cut_named_part(rig, bone_names)
+                                 for kind, bone_names in HINT_ONLY_PARTS[rig.stem].items()})
+                for rig in rigs if rig.stem in HINT_ONLY_PARTS]
     import bpy
     bpy.ops.wm.read_factory_settings(use_empty=True)
     report = {'schema': REPORT_SCHEMA, 'generator': 'tools/generate_reload_props.py', 'props': {},
@@ -908,6 +1263,46 @@ def main():
             print(f"{name}: {cut['bone']} {summary['triangles']} tris "
                   f"bounds {summary['bounds_min']}..{summary['bounds_max']}")
     report['props']['VRReloadRing'] = export_static(build_ring_object(), out / 'VRReloadRing.fbx')
+    # Append new objects after the original set so its Blender material names
+    # and FBX creation order remain unchanged.
+    for rig, source_hash, cut in belts:
+        name = 'VRAmmo_Belt_' + rig.stem
+        summary = export_static(build_ammo_object(name, cut), out / (name + '.fbx'))
+        summary.update({'source_psk': str(rig), 'source_psk_sha256': source_hash,
+                        'provenance': 'stock KF2 weapon rig; the leading belt round and link, in its own bone frame',
+                        'kind': 'belt-link', 'bone': cut['bone'], 'material_indices': cut['material_indices']})
+        report['props'][name] = summary
+        print(f"{name}: belt link {summary['triangles']} tris")
+    for rig, source_hash, cut in live:
+        name = 'VRAmmo_Live_' + rig.stem
+        summary = export_static(build_ammo_object(name, cut), out / (name + '.fbx'))
+        summary.update({'source_psk': str(rig), 'source_psk_sha256': source_hash,
+                        'provenance': 'stock KF2 weapon rig; complete live cartridge in its round bone frame',
+                        'kind': cut['kind'], 'bone': cut['bone'], 'material_indices': cut['material_indices']})
+        report['props'][name] = summary
+        print(f"{name}: live {cut['bone']} {summary['triangles']} tris")
+    # Append the secondary/gauntlet assets so original FBX creation/material
+    # order remains stable. They never reuse a primary magazine prop.
+    for rig, source_hash, (ammo, parts) in secondary:
+        name = 'VRAmmo_Alt_' + rig.stem
+        summary = export_static(build_ammo_object(name, ammo), out / (name + '.fbx'))
+        summary.update({'source_psk': str(rig), 'source_psk_sha256': source_hash,
+                        'provenance': 'stock KF2 slot-1 ammunition; complete part in its own bone reference frame',
+                        'kind': ammo['kind'], 'bone': ammo['bone'], 'bones': ammo['bones'],
+                        'mixed_faces_dropped': ammo['mixed_faces'],
+                        'material_indices': ammo['material_indices'], 'material_names': ammo['material_names']})
+        report['props'][name] = summary
+        print(f"{name}: {ammo['bone']} sections {ammo['material_indices']} {summary['triangles']} tris")
+    for rig, source_hash, parts in [(r, h, p) for r, h, (_, p) in secondary] + brawlers:
+        for kind, cut in parts.items():
+            name = 'VRGlow' + kind + '_' + rig.stem
+            summary = export_static(build_ammo_object(name, cut, SHELL_OFFSET), out / (name + '.fbx'))
+            summary.update({'source_psk': str(rig), 'source_psk_sha256': source_hash,
+                            'provenance': 'stock KF2 part; reload-hint shell in its own bone reference frame',
+                            'kind': 'glow-' + kind.lower(), 'bone': cut['bone'], 'bones': cut['bones'],
+                            'shell_offset': SHELL_OFFSET})
+            report['props'][name] = summary
+            print(f"{name}: {cut['bone']} {summary['triangles']} tris")
     # A report is the completeness receipt. Publish it only after all props and
     # the original ring have exported; a partial run cannot certify the set.
     report_path = out / 'VRReloadProps.json'

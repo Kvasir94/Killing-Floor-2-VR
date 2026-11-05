@@ -1,0 +1,144 @@
+--- a/tools/replay/run.py
++++ b/tools/replay/run.py
+@@ -57,7 +57,7 @@
+     """Stream only diagnostic changes; identical polling rows stay quiet."""
+     result = []
+     for line in text.splitlines():
+-        marker = re.search(r'(KF2VR_RELOAD_OBSERVER\b.*|KF2VR_INTERACTIVE_RELOAD\b.*|KF2VR_INPUT_REPLAY\b.*)', line)
++        marker = re.search(r'(KF2VR_RELOAD_OBSERVER\b.*|KF2VR_AMMO_(?:OBSERVER|SETUP|PAYLOAD)\b.*|KF2VR_INTERACTIVE_RELOAD\b.*|KF2VR_INPUT_REPLAY\b.*)', line)
+         if not marker:
+             continue
+         value = re.sub(r'\belapsed=[^\s]+\s*', '', marker[1])
+@@ -120,11 +120,15 @@
+     parser.add_argument('--source-root', type=Path, required=True)
+     parser.add_argument('--input', type=Path, required=True)
+     parser.add_argument('--timeout', type=int, default=180)
++    parser.add_argument('--startup-timeout', type=int,
++                        help='Bounded readiness deadline; reload default 240s, other tapes 120s; total timeout still applies')
+     parser.add_argument('--observer', action='store_true')
+     parser.add_argument('--reload-case', choices=('normal','dual'))
+     opts = parser.parse_args()
+     if not 30 <= opts.timeout <= 600:
+         raise RuntimeError('Timeout must be 30..600 seconds')
++    from ammo_timing import readiness_seen, startup_budget, startup_milestones, timeout_phase
++    startup_limit = startup_budget(opts.timeout, opts.startup_timeout, reload_case=bool(opts.reload_case))
+     record = json.loads(opts.record.read_text(encoding='utf-8-sig'))
+     run = opts.record.resolve().parent
+     if opts.reload_case and record.get('reload_case') != opts.reload_case:
+@@ -140,12 +144,19 @@
+             raise RuntimeError('Reload replay must use this checkout')
+         if digest(ROOT/'build/multiplayer/current-release.json') != record['selected_pointer_sha256']:
+             raise RuntimeError('Prepared selection pointer changed')
++    if record.get('candidate_root'):
++        if not opts.reload_case or opts.source_root.resolve() != ROOT.resolve():
++            raise RuntimeError('Explicit ammo candidate requires this checkout and a reload case')
++        from ammo_candidate import verify_candidate
++        release, manifest = verify_candidate(ROOT, record)
++    else:
++        release = opts.source_root/'build/multiplayer/releases'/selection['release']
++        manifest = json.loads((release/'release.json').read_text(encoding='utf-8-sig'))
+     if selection['release'] != record['selected_release']:
+         raise RuntimeError('Prepared selection changed')
+-    release = opts.source_root/'build/multiplayer/releases'/selection['release']
+-    if digest(release/'release.json') != selection['manifest_sha256'].upper():
++    expected_manifest = record.get('candidate_manifest_sha256', selection['manifest_sha256'])
++    if digest(release/'release.json') != expected_manifest.upper():
+         raise RuntimeError('Manifest hash mismatch')
+-    manifest = json.loads((release/'release.json').read_text(encoding='utf-8-sig'))
+     if opts.reload_case:
+         verify_workspace(ROOT, manifest)
+     for name, expected in manifest['files_sha256'].items():
+@@ -210,10 +221,20 @@
+     result = {'schema':'kf2vr/input-replay-run/1', 'input_sha256':digest(replay_copy),
+               'release':selection['release'], 'native_sha256':receipt['artifacts_sha256'],
+               'arguments':args, 'headset_accepted':False}
++    if record.get('candidate_root'):
++        result.update(release=release.name, player_selected_release=selection['release'],
++                      candidate=release.name, candidate_manifest_sha256=expected_manifest)
++    result.update(startup_timeout_seconds=startup_limit, total_timeout_seconds=opts.timeout)
++    if record.get('ammo_observer'):
++        result.update(weapon_family=record.get('weapon_family','9mm'),
++                      voice_disabled=bool(record.get('voice_disabled',False)))
+     owned = None
+     user = Path(record['user_config_root']) if opts.reload_case else None
+     if user and config_hashes(user) != record['user_config_before']:
+         raise RuntimeError('User config changed since preparation')
++    profile = Path(record['saved_profile_root']) if record.get('saved_profile_root') else None
++    if profile and config_hashes(profile) != record['saved_profile_before']:
++        raise RuntimeError('Saved launcher profile changed since preparation')
+     if opts.reload_case:
+         configs = Path(next(a.split('=',1)[1] for a in args if a.upper().startswith('-GAMEINI='))).parent
+         if config_hashes(configs) != record['prepared_config_sha256']:
+@@ -236,9 +257,14 @@
+         playable = False
+         offsets = {}
+         streamed = {}
++        if opts.reload_case:
++            from ammo_startup import StartupProgress, process_counters
++            startup_progress = StartupProgress(opts.reload_case)
++            last_startup_phase = None
++            last_startup_report = 0.0
+         while owned.poll() is None:
+             elapsed = time.monotonic()-started
+-            if not playable and log.exists():
++            if not playable and log.exists() and not opts.reload_case:
+                 playable = 'phase=playable' in log_text(log)
+             if opts.reload_case:
+                 for live in (log, Path(env['KF2VR_LOG_PATH'])):
+@@ -250,16 +276,28 @@
+                     for line in changed_log_lines(tail[:end], streamed):
+                         print(line, flush=True)
+                     offsets[str(live)] = offset + end
+-                playable = playable or 'KF2VR_RELOAD_OBSERVER phase=ready' in log_text(log)
+-            if elapsed >= opts.timeout or (not playable and elapsed >= min(120,opts.timeout)):
++                playable = playable or readiness_seen(log_text(log), opts.reload_case)
++                progress = startup_progress.observe(elapsed, log_text(log),
++                    log_text(Path(env['KF2VR_LOG_PATH'])), process_counters(owned._handle))
++                if not playable and (progress['phase'] != last_startup_phase
++                                     or elapsed - last_startup_report >= 30):
++                    print('KF2VR_STARTUP '+json.dumps(progress, sort_keys=True), flush=True)
++                    last_startup_phase = progress['phase']
++                    last_startup_report = elapsed
++            expired_phase = timeout_phase(elapsed, opts.timeout, startup_limit, playable)
++            if expired_phase:
+                 result['timeout'] = True
+-                result['timeout_phase'] = 'session' if playable else 'startup'
++                result['timeout_phase'] = expired_phase
+                 break
+             time.sleep(.25)
+         result['playable'] = playable
+         result['exit_code'] = owned.poll()
++        if opts.reload_case:
++            result['startup_diagnostics'] = startup_progress.observe(time.monotonic()-started,
++                log_text(log), log_text(Path(env['KF2VR_LOG_PATH'])), process_counters(owned._handle))
+         if use_observer:
+             observed = log_text(log)
++            result['startup_milestones_log_seconds'] = startup_milestones(observed)
+             if opts.reload_case:
+                 offset = offsets.get(str(log), 0)
+                 for line in changed_log_lines(observed[offset:], streamed):
+@@ -271,6 +309,13 @@
+                 from reload_analyze import analyze
+                 result['observations'] = analyze(observed+'\n'+log_text(Path(env['KF2VR_LOG_PATH'])), opts.reload_case)
+                 result['observer_complete'] = result['observations']['passed']
++                if record.get('ammo_observer'):
++                    from ammo_analyze import analyze as analyze_ammo
++                    result['ammo_observations'] = analyze_ammo(observed, opts.reload_case)
++                    result['observer_complete'] &= result['ammo_observations']['passed']
++                    from ammo_payload_analyze import audit as audit_payloads
++                    result['payload_observations'] = audit_payloads(observed, opts.reload_case)
++                    result['observer_complete'] &= result['payload_observations']['counts_consistent']
+             else:
+                 from analyze import analyze
+                 result['observations'] = analyze(observed)
+@@ -295,6 +340,10 @@
+                 result['selection_preserved'] = digest(ROOT/'build/multiplayer/current-release.json') == record['selected_pointer_sha256']
+                 if not result['user_config_preserved'] or not result['selection_preserved']:
+                     result['cleanup_errors'].append('User config or selected release changed during replay')
++            if profile:
++                result['saved_profile_preserved'] = config_hashes(profile) == record['saved_profile_before']
++                if not result['saved_profile_preserved']:
++                    result['cleanup_errors'].append('Saved launcher profile changed during replay')
+             (run/'input-replay-run.json').write_text(json.dumps(result,indent=2))
+     print(json.dumps(result,indent=2))
+     if result.get('timeout') or result.get('exit_code') != 0 or result['cleanup_errors'] or result.get('observer_complete') is False:

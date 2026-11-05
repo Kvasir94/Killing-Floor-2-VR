@@ -16,6 +16,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PlayableContractTests(unittest.TestCase):
+    def test_classic_defaults_enable_support_carry_and_leave_reload_gameplay_off(self):
+        text = vr_config.apply_preferences("")
+        bridge = "KF2VR.VRHandsBridge"
+        for section in (bridge, vr_config.ALIASES[bridge]):
+            prefs = vr_config.values(text, section)
+            self.assertEqual("0", prefs["ReloadPreset"])
+            self.assertEqual("True", prefs["bSupportHandCarry"])
+            self.assertEqual("True", prefs["bToggleGrip"])
+            self.assertEqual("False", prefs["bInteractiveReloads"])
+            self.assertEqual("False", prefs["bFreeWeaponCycling"])
+            self.assertEqual("True", prefs["bWorldWeaponDrops"])
+
     def test_teleport_reach_and_recharge_never_come_from_a_profile(self):
         # The 2026-09-26 playtest profile still carried the 650 UU sprint-parity
         # preset; exact-preset migration only knew the later 1350 one.
@@ -123,26 +135,12 @@ class PlayableContractTests(unittest.TestCase):
             for section in ("KF2VR.VRSessionUI", "KF2VRNetClient.KF2VRNetSessionUI"):
                 values = vr_config.values(text, section)
                 self.assertEqual("30", values["SnapTurnDegrees"])
-                self.assertEqual("0.5", values["SmoothTurnScale"])
+                self.assertEqual("1.00", values["SmoothTurnScale"])
             text = text.replace("EyeRenderPercent=100", "EyeRenderPercent=75")
             (config / "KFGame.ini").write_text(text, encoding="utf-16")
             vr_config.export_preferences(config, root / "profile")
             self.assertEqual(75, vr_config.import_preferences(config, root=root / "profile"))
             self.assertEqual(85, vr_config.import_preferences(config, root=root / "profile", eye_percent=85))
-
-    def test_grenade_pose_shared_section_survives_solo_and_network_profiles(self):
-        section = "KF2VR.VRFreeHandPose"
-        self.assertEqual("True", vr_config.values(vr_config.apply_preferences(""), section)["bAuthoredGrenadeGrip"])
-        for network in (False, True):
-            with self.subTest(network=network), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                config = root / "Config"
-                config.mkdir()
-                (config / "KFGame.ini").write_text(f"[{section}]\nbAuthoredGrenadeGrip=False\n", encoding="utf-16")
-                vr_config.export_preferences(config, root / "profile", network=network)
-                saved = read_ini(root / "profile/KFGame.ini")
-                self.assertEqual("False", vr_config.values(vr_config.apply_preferences("", saved), section)["bAuthoredGrenadeGrip"])
-                self.assertNotIn("KF2VRNetClient.VRFreeHandPose", saved)
 
     def test_profile_whitelist_does_not_import_diagnostics(self):
         saved = "[KF2VR.VRHandsBridge]\nbDualHandReplay=True\nChestGrenadeOffset=(X=12,Y=0,Z=0)\n"
@@ -227,6 +225,27 @@ class PlayableContractTests(unittest.TestCase):
             result = vr_config.merged(defaults, {**legacy, "bChestGrenadeCentered": mode})
             self.assertEqual("False", result["bChestGrenadeCentered"])
 
+    def test_saved_old_smooth_turn_default_moves_to_100_once(self):
+        defaults = vr_config.DEFAULTS["KF2VR.VRSessionUI"]
+        for saved in ("0.75", "0.750000"):
+            result = vr_config.merged(defaults, {"SmoothTurnScale": saved})
+            self.assertEqual(("1.00", "1"), (result["SmoothTurnScale"], result["SmoothTurnRevision"]))
+        # Chosen after the revision, or a different old value: kept.
+        result = vr_config.merged(defaults, {"SmoothTurnScale": "0.75", "SmoothTurnRevision": "1"})
+        self.assertEqual("0.75", result["SmoothTurnScale"])
+        result = vr_config.merged(defaults, {"SmoothTurnScale": "0.50"})
+        self.assertEqual("0.50", result["SmoothTurnScale"])
+
+    def test_withdrawn_chest_default_moves_to_the_current_one(self):
+        defaults = vr_config.DEFAULTS["KF2VR.VRHandsBridge"]
+        for offset in ("(X=10.5,Y=9.5,Z=13.5)", "(X=10.500000,Y=9.500000,Z=13.500000)"):
+            with self.subTest(offset=offset):
+                result = vr_config.merged(defaults, {"ChestGrenadeOffset": offset, "bChestGrenadeCentered": "True"})
+                self.assertEqual(defaults["ChestGrenadeOffset"], result["ChestGrenadeOffset"])
+        # A pivot-based (legacy) offset with the same numbers is the player's own.
+        result = vr_config.merged(defaults, {"ChestGrenadeOffset": "(X=10.5,Y=9.5,Z=13.5)"})
+        self.assertEqual("(X=10.5,Y=9.5,Z=13.5)", result["ChestGrenadeOffset"])
+
     def test_chest_offset_and_mode_round_trip_in_solo_and_network_profiles(self):
         from session import set_ini
         bridge = "KF2VR.VRHandsBridge"
@@ -284,29 +303,6 @@ class PlayableContractTests(unittest.TestCase):
             path.write_bytes(b"not a map" + bytes(2048))
             with self.assertRaises(RuntimeError):
                 validate_map(path)
-
-    def test_portal_gun_is_a_solo_only_option(self):
-        from contextlib import redirect_stderr
-        from io import StringIO
-        import workshop_loadout as loadout
-        self.assertIsNone(friends.parse_options(["--solo"]).portal_gun)
-        self.assertTrue(friends.parse_options(["--solo", "--portal-gun"]).portal_gun)
-        self.assertFalse(friends.parse_options(["--solo", "--no-portal-gun"]).portal_gun)
-        with redirect_stderr(StringIO()):
-            for args in (["--host", "--portal-gun"], ["--portal-gun"], ["--no-portal-gun"]):
-                with self.assertRaises(SystemExit):
-                    friends.parse_options(args)
-        args = friends.parse_options(["--solo", "--vr"])
-        with tempfile.TemporaryDirectory() as tmp:
-            args.profile_root = Path(tmp)
-            loadout.load_preferences(args)
-            self.assertFalse(args.portal_gun)
-            args.portal_gun = True
-            loadout.save_preferences(args)
-            again = friends.parse_options(["--solo", "--vr"])
-            again.profile_root = Path(tmp)
-            loadout.load_preferences(again)
-            self.assertTrue(again.portal_gun)
 
     def test_bad_test_map_modes_rejected_and_explicit_scale_validated(self):
         from contextlib import redirect_stderr

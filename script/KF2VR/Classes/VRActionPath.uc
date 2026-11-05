@@ -7,15 +7,19 @@ class VRActionPath extends Object;
 
 struct PathPose
 {
-    var vector P[3];
-    var quat Q[3];
+    var vector P[5];
+    var quat Q[5];
     var vector C;
 };
 var array<PathPose> Path;
 var array<float> PathS;
-var name Bones[3];
+var name Bones[5];
 var int BoneCount;
 var vector GripLocal, GrabOffset;
+// The grab rides the handle: the hand's offset from the contact in the first
+// bone's own frame, so a swinging lever or turning bolt handle carries it
+// round with the part instead of leaving it fixed in the gun's frame.
+var vector GrabLocal;
 var quat GripQ;
 var float GripTime;
 var float Amount, Length, OpenTime, StartTime;
@@ -71,19 +75,20 @@ function RefRelative(name Bone, out vector InRoot, out quat InRootQ)
 // Samples the action's opening in one of the gun's clips: from the last still
 // moment before the handle moves to the first moment it is fully open, with
 // the point where the stock hand holds the handle.
-function bool SampleClip(VRHandsBridge B, KFWeapon W, name Root, name Clip, name Hand)
+function bool SampleClip(VRHandsBridge B, KFWeapon W, name Root, name Clip, name Hand,
+    optional bool bWristContact)
 {
     local bool bOk;
     Path.Length = 0; PathS.Length = 0;
     if (BoneCount == 0 || !PrepareRef(B, W, Root)) return false;
     B.AttachComponent(Ref);
     RefSeq.SetAnim(Clip);
-    bOk = RefSeq.AnimSeq != None && RefSeq.AnimSeq.SequenceLength > 0 && Sample(Hand);
+    bOk = RefSeq.AnimSeq != None && RefSeq.AnimSeq.SequenceLength > 0 && Sample(Hand, bWristContact);
     B.DetachComponent(Ref);
     return bOk;
 }
 
-function bool Sample(name Hand)
+function bool Sample(name Hand, optional bool bWristContact)
 {
     local vector P0, P, HandP, Best;
     local quat Q0, Q, HandQ;
@@ -92,6 +97,12 @@ function bool Sample(name Hand)
     local PathPose Pose;
     if (Ref.MatchRefBone(Bones[0]) < 0 || Ref.MatchRefBone(Hand) < 0) return false;
     L = RefSeq.AnimSeq.SequenceLength;
+    // Opening precedes loading. A closing slap can overshoot the open angle
+    // (Stoner/Bastion), so it must not become the opening path's endpoint.
+    for (I = 0; I < RefSeq.AnimSeq.Notifies.Length; ++I)
+        if (KFAnimNotify_ReloadAmmo(RefSeq.AnimSeq.Notifies[I].Notify) != None
+            && RefSeq.AnimSeq.Notifies[I].Time > 0)
+            L = FMin(L, RefSeq.AnimSeq.Notifies[I].Time);
     PoseRef(0);
     RefRelative(Bones[0], P0, Q0);
     MaxD = 0;
@@ -142,6 +153,10 @@ function bool Sample(name Hand)
         PoseRef(StartTime + (OpenTime - StartTime) * float(I) / 16.0);
         for (J = 0; J < BoneCount; ++J) RefRelative(Bones[J], Pose.P[J], Pose.Q[J]);
         Pose.C = Pose.P[0] + QuatRotateVector(Pose.Q[0], GripLocal);
+        // A lever is held by curling fingers while the wrist pivots relative
+        // to it. Its actual stock wrist path avoids welding that wrist to the
+        // lever's long radius; the controlled bones keep their full throw.
+        if (bWristContact) RefRelative(Hand, Pose.C, HandQ);
         if (I > 0) Total += VSize(Pose.C - Path[I - 1].C);
         Path.AddItem(Pose);
         PathS.AddItem(Total);
@@ -186,6 +201,55 @@ function vector ContactLocal(float S)
     local float F;
     I = Segment(S, F);
     return Path[I - 1].C * (1 - F) + Path[I].C * F;
+}
+
+// Attach a root-local hand to the handle where the action stands now.
+function Grab(vector LocalHand, float S)
+{
+    local vector P;
+    local quat Q;
+    PoseAt(S, 0, P, Q);
+    GrabLocal = QuatRotateVector(QuatInvert(Q), LocalHand - ContactLocal(S));
+}
+
+// The action amount whose handle-carried grab point is nearest the hand: the
+// hand moves the part as if it held it, through the whole swing.
+function float ProjectGrab(vector LocalHand)
+{
+    local int I;
+    local vector A, B;
+    local float F, D, BestD, BestS;
+    BestD = 1000000; BestS = 0;
+    for (I = 1; I < Path.Length; ++I)
+    {
+        A = Path[I - 1].C + QuatRotateVector(Path[I - 1].Q[0], GrabLocal);
+        B = Path[I].C + QuatRotateVector(Path[I].Q[0], GrabLocal);
+        F = VSize(B - A) > 0.0001 ? FClamp(((LocalHand - A) dot (B - A)) / ((B - A) dot (B - A)), 0, 1) : 0.0;
+        D = VSize(LocalHand - (A + (B - A) * F));
+        if (D < BestD) { BestD = D; BestS = PathS[I - 1] + (PathS[I] - PathS[I - 1]) * F; }
+    }
+    return BestS;
+}
+
+// As Project, but only along the path within a fifth of its travel of From,
+// so a held part follows the hand continuously and can never jump to a far
+// stretch of its own path (a cover snapping shut, a folded linkage crossing).
+function float ProjectNearby(vector LocalHand, float From)
+{
+    local int I;
+    local vector A, V;
+    local float F, S, D, BestD, Best;
+    Best = From; BestD = 1000000;
+    for (I = 1; I < Path.Length; ++I)
+    {
+        if (PathS[I] < From - 0.20 || PathS[I-1] > From + 0.20) continue;
+        A = Path[I-1].C; V = Path[I].C - A;
+        F = (V dot V) > 0.000001 ? FClamp(((LocalHand-A) dot V) / (V dot V), 0, 1) : 0.0;
+        S = PathS[I-1] + (PathS[I]-PathS[I-1]) * F;
+        D = VSize(LocalHand-A-V*F);
+        if (D < BestD) { BestD = D; Best = S; }
+    }
+    return Best;
 }
 
 // The point of the contact path nearest a root-local hand position.

@@ -10,7 +10,7 @@ try { Assert-VRBenchmarkQuietSnapshot @{competing_processes=@(@{name='blender';p
     $rejected=$_.Exception.Message -match 'competing workload present: blender \(PID 42\)'
 }
 if (-not $rejected) { throw 'Contaminated capture did not fail closed.' }
-foreach ($name in @('test-portal.ps1','vr-benchmark-workload.ps1')) {
+foreach ($name in @('test-combined.ps1','vr-benchmark-workload.ps1')) {
     $tokens=$null;$errors=$null
     [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot ('../'+$name)),[ref]$tokens,[ref]$errors)
     if ($errors.Count) { throw ($errors | Out-String) }

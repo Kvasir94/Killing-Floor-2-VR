@@ -50,12 +50,10 @@ param(
     [switch]$BreakActionCapture,
     [switch]$MagazineReloadCapture,
     [switch]$ReloadHintCapture,
-    [switch]$PortalReplay,
     [switch]$PairedHandReplay,
     [switch]$MeleeReplay,
     [switch]$GrabReplay,
     [switch]$BashLegReplay,
-    [switch]$Portals,
     [string]$CombinedBuildRoot,
     [switch]$EngineerReplay,
     [string]$EngineerBuildRoot,
@@ -73,13 +71,6 @@ if ($MagazineReloadCapture -and $BreakActionCapture) {
 if ($MagazineReloadCapture) { $UsabilityCapture=$true }
 # Reload hints, MB500 shell, wrist grenade and alignment markers (VRReloadHintCapture).
 if ($ReloadHintCapture) {
-    $UsabilityCapture=$true
-    if (-not $PSBoundParameters.ContainsKey('KeepRunningSeconds')) { $KeepRunningSeconds=150 }
-}
-# Portal Gun diagnostic (branch portal-gun-proto): the selected release, its
-# KF2VRPortal art and the adapter's portal capture hooks (-kf2vr-portal).
-if ($PortalReplay) {
-    if ($MagazineReloadCapture -or $BreakActionCapture) { throw '-PortalReplay requires its own capture session.' }
     $UsabilityCapture=$true
     if (-not $PSBoundParameters.ContainsKey('KeepRunningSeconds')) { $KeepRunningSeconds=150 }
 }
@@ -124,7 +115,7 @@ if ($CombinedBuildRoot) {
         ($EngineerReplay -and ($HandReplay -or $DualHandReplay)) -or $EngineerBuildRoot) {
         throw '-CombinedBuildRoot requires a hand replay or Engineer replay, without -EngineerBuildRoot.'
     }
-    . (Join-Path $PSScriptRoot 'portal-combined.ps1')
+    . (Join-Path $PSScriptRoot 'combined-state.ps1')
 }
 if ($EngineerReplay) {
     . (Join-Path $PSScriptRoot 'engineer-replay.ps1')
@@ -1258,15 +1249,6 @@ try {
     if (-not $locked) { throw 'Another KF2-VR development fixture is active.' }
     if (Get-Process KFGame,KFEditor -ErrorAction SilentlyContinue) { throw 'KF2 or its editor is running; the fixture will not stop it.' }
     $sessionMap = 'KF-BurningParis'
-    $portalMapPath = $null
-    if ($PortalReplay) {
-        # Share the normal launcher's Workshop resolver, in a local immutable
-        # content cache. Preparation must never start a download.
-        $sessionMap = 'KF-Remilly_Test_Map'
-        $resolver = 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); from workshop_map import ensure_map; print(ensure_map(Path(sys.argv[2]), Path(sys.argv[3]), download=sys.argv[4]=="True"))'
-        $portalMapPath = & python -c $resolver (Join-Path $PSScriptRoot 'multiplayer') (Join-Path $projectRoot 'build/workshop-cache') (Join-Path $projectRoot 'build/multiplayer/steamcmd') (-not [bool]$PrepareOnly).ToString()
-        if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the Remilly portal test map.' }
-    }
     $manifest = Get-Content -LiteralPath (Join-Path $projectRoot 'docs/intake/install_manifest.json') -Raw | ConvertFrom-Json
     $game = Join-Path $GameRoot 'Binaries/Win64/KFGame.exe'
     $gameHash = (Get-FileHash -LiteralPath $game -Algorithm SHA256).Hash
@@ -1303,7 +1285,7 @@ try {
         if ($EngineerReplay) {
             $engineerState = Get-CombinedEngineerFixtureState $projectRoot $CombinedBuildRoot
             $combinedState = $engineerState
-        } else { $combinedState = Get-CombinedPortalState $projectRoot $CombinedBuildRoot }
+        } else { $combinedState = Get-CombinedBuildState $projectRoot $CombinedBuildRoot }
         $build = $combinedState.Build; $package = $combinedState.Package
         if ($build.sdk_sha256 -ne $manifest.binaries.editor.sha256) { throw 'Combined package uses a different SDK target.' }
         $sourceHashes = Get-PackageSourceHashes $combinedState.SourceRoot
@@ -1375,7 +1357,7 @@ try {
             root=$CombinedBuildRoot; receipt_sha256=$combinedReceiptHash
             receipt_copy=(Join-Path $runRoot 'combined-build.json')
             launcher_sha256=(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
-            gate_sha256=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'portal-combined.ps1') -Algorithm SHA256).Hash
+            gate_sha256=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'combined-state.ps1') -Algorithm SHA256).Hash
             artifacts=$build.artifacts; visual_limitations=$build.visual_limitations
             native_sha256=$combinedState.NativeHash; loader_sha256=$build.native_loader.sha256
             localization_sha256=$combinedState.LocalizationHash
@@ -1391,13 +1373,6 @@ try {
         Copy-Item -LiteralPath $handPackage -Destination (Join-Path $packageRoot 'KF2VRHands.upk')
         if ((Get-FileHash -LiteralPath (Join-Path $packageRoot 'KF2VRHands.upk')).Hash -ne $handAssets.package_sha256) {
             throw 'Fixture floating-hand package copy hash mismatch.'
-        }
-        if ($PortalReplay) {
-            $portalArt = Join-Path $captureRelease 'Packages/KF2VRPortal.upk'
-            Copy-Item -LiteralPath $portalArt -Destination (Join-Path $packageRoot 'KF2VRPortal.upk')
-            if ((Get-FileHash -LiteralPath (Join-Path $packageRoot 'KF2VRPortal.upk')).Hash -ne $releaseManifest.files_sha256.'Packages/KF2VRPortal.upk') {
-                throw 'Fixture Portal art copy hash mismatch.'
-            }
         }
     }
     if ($EngineerReplay) {
@@ -1443,7 +1418,6 @@ try {
         bGrabReplay=([bool]$GrabReplay).ToString()
         bBashLegReplay=([bool]$BashLegReplay).ToString()
         bReloadHintCapture=([bool]$ReloadHintCapture).ToString()
-        bPortalReplay=([bool]$PortalReplay).ToString()
     })
     if ($DualHandReplay) {
         $gameConfig = Set-IniValues $gameConfig 'KF2VR.VRHandsBridge' ([ordered]@{ bIndependentHands='True' })
@@ -1464,7 +1438,7 @@ try {
     $coreValues = [ordered]@{}
     foreach ($key in @('Paths','ScriptPaths','SeekFreePCPaths','BrewedPCPaths')) {
         $existing = @([regex]::Matches($coreMatch.Groups[1].Value, ('(?im)^' + $key + '=([^\r\n]*)')) | ForEach-Object { $_.Groups[1].Value })
-        $coreValues[$key] = @($packageRoot) + $(if ($portalMapPath) { @((Split-Path $portalMapPath -Parent)) } else { @() }) + $existing
+        $coreValues[$key] = @($packageRoot) + $existing
     }
     foreach ($key in @('CachePath','SavePath','ScreenShotPath')) {
         # Workshop packages are immutable downloaded content, not player state.
@@ -1523,7 +1497,6 @@ try {
     # belong only to the owned child; the local URL has no listen/server option.
     $launchEnvironment = [ordered]@{ SteamAppId='232090'; SteamGameId='232090' }
     if ($HandReplay) { $arguments += '-kf2vr-hand-replay', '-onethread' }
-    if ($PortalReplay -or $Portals) { $arguments += '-kf2vr-portal' }
     if ($HandReplay -and -not $Stereo) {
         $captureRoot = Join-Path $runRoot 'Eyes'
         New-Item -ItemType Directory -Path $captureRoot -Force | Out-Null
@@ -1734,11 +1707,6 @@ try {
                             (Read-SharedLog $adapterLog) -match 'HandCapture slot=1108 ok=[01]') {
                             $record['observation_end']='reload_hint_capture_complete'; break
                         }
-                    } elseif ($PortalReplay) {
-                        if ((Read-SharedLog $logPath) -match '\bKF2VR_PORTAL_REPLAY phase=complete\b' -and
-                            (Read-SharedLog $adapterLog) -match '\bHandCapture slot=895 ok=[01](?:\s|$)') {
-                            $record['observation_end']='portal_replay_complete'; break
-                        }
                     } elseif ($MagazineReloadCapture) {
                         $replayLog = Read-SharedLog $logPath
                         if ($replayLog -match '\bKF2VR_MAGAZINE_CAPTURE\b[^\r\n]*(?:phase=failed|complete=False)(?:\s|$)' -or
@@ -1788,12 +1756,7 @@ try {
             # Preserve the individual gameplay failures even when the final
             # native/capture gate also fails and throws before acceptance.
             if ($UsabilityCapture) {
-                if ($PortalReplay) {
-                    $replayLog = Read-SharedLog $logPath
-                    $record['portal_replay_steps'] = @([regex]::Matches($replayLog, '\bKF2VR_PORTAL(?:_REPLAY)?\b[^\r\n]*') | ForEach-Object { $_.Value })
-                    $record['portal_capture_log'] = @([regex]::Matches((Read-SharedLog $adapterLog), 'PortalCapture[^\r\n]*') | ForEach-Object { $_.Value })
-                    $record['capture_completed'] = $replayLog -match '\bKF2VR_PORTAL_REPLAY phase=complete passed=True\b'
-                } elseif ($MagazineReloadCapture) {
+                if ($MagazineReloadCapture) {
                     $replayLog = Read-SharedLog $logPath
                     $record['magazine_reload_capture'] = Get-MagazineReloadCaptureEvidence $replayLog (Read-SharedLog $adapterLog)
                     $record['magazine_reload_steps'] = @([regex]::Matches($replayLog, '\bKF2VR_MAGAZINE_CAPTURE\b[^\r\n]*') | ForEach-Object { $_.Value })
@@ -1806,7 +1769,6 @@ try {
             } elseif ($BashLegReplay) {
                 $record['bashleg_replay'] = Get-BashLegReplayEvidence (Read-SharedLog $logPath)
                 $record['bashleg_measurements'] = @([regex]::Matches((Read-SharedLog $logPath), 'KF2VR_BASHLEG_MEASURE[^\r\n]*') | ForEach-Object { $_.Value })
-                $record['portal_hooks'] = [bool]($PortalReplay -or $Portals)
             } elseif ($GrabReplay) {
                 $record['grab_replay'] = Get-GrabReplayEvidence (Read-SharedLog $logPath)
                 $record['grab_measurements'] = @([regex]::Matches((Read-SharedLog $logPath), 'KF2VR_GRAB_MEASURE[^\r\n]*') | ForEach-Object { $_.Value })
@@ -1827,9 +1789,7 @@ try {
         }
         if ($UsabilityCapture) {
             if (-not $record.capture_completed) { throw 'Usability capture sequence did not finish.' }
-            if ($PortalReplay) {
-                $record['verified_scope']='Standalone Portal Gun equip, placement, view, traversal and hitscan through the pair with synthetic poses and desktop captures; no headset feel or performance acceptance'
-            } elseif ($MagazineReloadCapture) {
+            if ($MagazineReloadCapture) {
                 if ($record.magazine_reload_capture.Values -contains $false) { throw "Physical 9mm reload evidence is incomplete. See $recordPath" }
                 foreach ($slot in 501..509) {
                     $frame = Join-Path $captureRoot ('hands-'+$slot+'.png')

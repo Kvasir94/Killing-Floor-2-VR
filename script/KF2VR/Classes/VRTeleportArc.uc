@@ -16,7 +16,7 @@ var StaticMeshComponent Marker;
 var MaterialInstanceConstant BeamMaterial, MarkerMaterial;
 var int Used;
 var bool bShown;
-var int LastState;
+var int LastState, ColourRevision;
 var vector MeshExtent;
 var float MarkerScale;
 
@@ -35,8 +35,9 @@ function Initialize(VRHandsBridge Owner)
     LastState = 1;
     BeamMaterial = new(Bridge) class'MaterialInstanceConstant';
     BeamMaterial.SetParent(Material'EngineDebugMaterials.LevelColorationUnlitMaterial');
-    Tint = MakeLinearColor(0.25, 0.8, 1.0, 1);
+    Tint = class'VRInteractionColours'.static.Linear(class'VRInteractionColours'.const.ROLE_TELEPORT);
     BeamMaterial.SetVectorParameterValue('Color', Tint);
+    ColourRevision = class'VRInteractionColours'.default.Revision;
     MarkerMaterial = new(Bridge) class'MaterialInstanceConstant';
     MarkerMaterial.SetParent(Material'WEP_AutoTurret_EMIT.Turret_Laser_Dot_SM_PM');
     MarkerMaterial.SetScalarParameterValue('0blue_1red', 0);
@@ -120,13 +121,15 @@ function Finish(int State, vector Floor, vector FloorNormal, float Radius, int F
     local rotator Facing;
     local float Angle;
     if (Bridge == None) return;
-    // The shared material instance is only rewritten on a change of state, not
-    // every frame, because every segment samples the same instance.
-    if (State != LastState)
+    // The shared material instance is only rewritten on a change of state or of
+    // the player's teleport colours, not every frame, because every segment
+    // samples the same instance. Refused stays a neutral grey.
+    if (State != LastState || ColourRevision != class'VRInteractionColours'.default.Revision)
     {
         LastState = State;
-        if (State == 1) Tint = MakeLinearColor(0.25, 0.8, 1.0, 1);
-        else if (State == 2) Tint = MakeLinearColor(1.0, 0.62, 0.15, 1);
+        ColourRevision = class'VRInteractionColours'.default.Revision;
+        if (State == 1) Tint = class'VRInteractionColours'.static.Linear(class'VRInteractionColours'.const.ROLE_TELEPORT);
+        else if (State == 2) Tint = class'VRInteractionColours'.static.Linear(class'VRInteractionColours'.const.ROLE_TELEPORT_WAIT);
         else Tint = MakeLinearColor(0.22, 0.22, 0.25, 1);
         BeamMaterial.SetVectorParameterValue('Color', Tint);
     }

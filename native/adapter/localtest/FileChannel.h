@@ -11,7 +11,8 @@ namespace kf2vr::localtest {
 class FileChannel {
 public:
     ~FileChannel() { Close(); }
-    FileChannel()=default;
+    using Clock=std::uint64_t (*)();
+    explicit FileChannel(Clock clock=[]() -> std::uint64_t { return GetTickCount64(); }) : clock_(clock) {}
     FileChannel(const FileChannel&)=delete;
     FileChannel& operator=(const FileChannel&)=delete;
     bool Start(const std::string& session, bool optIn, bool localAuthority) {
@@ -43,13 +44,31 @@ public:
         if (!HoldDirectory(root_)) return Fail();
         audit_=Open(root_/L"audit.tsv",GENERIC_WRITE,CREATE_NEW,FILE_SHARE_READ);
         if (audit_==INVALID_HANDLE_VALUE) return Fail();
-        startedMs_=GetTickCount64();
+        startedMs_=clock_();
         if (!Audit("session\t"+session+"\ttest_unranked\tcapacity_bypass_transient\tcheats_unchanged\n") ||
-            !Publish(L"ready.tsv",session+"\t"+std::to_string(GetCurrentProcessId())+"\ttest_unranked\n")) return Fail();
+            !Publish(L"ready.tsv",Readiness())) return Fail();
         return true;
     }
     bool Enabled() const { return policy_.Enabled(); }
     const std::string& Session() const { return policy_.Session(); }
+    // Travel removes readiness but retains IDs, rate state and the original
+    // session identity. A successor cannot restart a closed session.
+    bool Suspend() {
+        if (!policy_.Suspend()) return false;
+        if (!Audit("suspended\tworld_closed\n")) return Fail();
+        if (!DeleteFileW((root_/L"ready.tsv").c_str()) && GetLastError()!=ERROR_FILE_NOT_FOUND) return Fail();
+        return true;
+    }
+    bool Resume(const std::string& session,bool optIn,bool localAuthority) {
+        if (!policy_.Resume(session,optIn,localAuthority)) return false;
+        // Requests queued for the departed world must not affect a new pawn.
+        FILETIME resumed{}; GetSystemTimePreciseAsFileTime(&resumed);
+        ULARGE_INTEGER stamp{}; stamp.LowPart=resumed.dwLowDateTime; stamp.HighPart=resumed.dwHighDateTime;
+        minimumRequestTime_=stamp.QuadPart;
+        if (!Audit("resumed\tsame_launch_session\n") ||
+            !Publish(L"ready.tsv",Readiness())) return Fail();
+        return true;
+    }
     void FinishPending(const std::function<std::string(const std::string&)>& completion) {
         if (activeId_.empty()) return;
         const auto finished=completion(activeId_);
@@ -60,10 +79,9 @@ public:
         activeId_.clear();
     }
     void Poll(const Policy::Execute& execute,const std::function<std::string(const std::string&)>& completion) {
-        const auto now=GetTickCount64();
+        const auto now=clock_();
         if (!Enabled() || (polled_ && now-lastPoll_<500)) return;
         polled_=true; lastPoll_=now;
-        if (now-startedMs_>=30*60*1000) { Audit("closed\tlifetime_limit\n"); Close(); return; }
         if (!activeId_.empty()) {
             const auto finished=completion(activeId_);
             if (!finished.empty() && !finished.starts_with("pending\t")) {
@@ -89,12 +107,12 @@ public:
         HANDLE input=Open(root_/filename,GENERIC_READ,OPEN_EXISTING,0);
         if (input==INVALID_HANDLE_VALUE) return;
         LARGE_INTEGER size{}; std::array<char,513> bytes{}; DWORD read=0;
-        FILETIME modified{},utc{}; GetSystemTimeAsFileTime(&utc);
+        FILETIME modified{},utc{}; GetSystemTimePreciseAsFileTime(&utc);
         const bool timed=GetFileTime(input,nullptr,nullptr,&modified)!=0;
         ULARGE_INTEGER written{},current{};
         written.LowPart=modified.dwLowDateTime; written.HighPart=modified.dwHighDateTime;
         current.LowPart=utc.dwLowDateTime; current.HighPart=utc.dwHighDateTime;
-        const bool fresh=timed && written.QuadPart<=current.QuadPart && current.QuadPart-written.QuadPart<=60ULL*10000000;
+        const bool fresh=timed && FreshRequest(written.QuadPart,current.QuadPart,minimumRequestTime_);
         const bool valid=GetFileSizeEx(input,&size) && size.QuadPart>0 && size.QuadPart<=512 &&
             ReadFile(input,bytes.data(),static_cast<DWORD>(size.QuadPart),&read,nullptr) && read==size.QuadPart;
         CloseHandle(input);
@@ -127,7 +145,7 @@ public:
             Close(); return;
         }
         DeleteFileW((root_/filename).c_str());
-        if (!Enabled()) Close();
+        if (!Enabled() && !policy_.Suspended()) Close();
     }
     void Close() {
         policy_.Close();
@@ -139,6 +157,13 @@ public:
         root_.clear();
     }
 private:
+    std::string Readiness() const {
+        // Additive metadata only: the first three columns retain their wire
+        // meaning. Authority ends with this process or explicit disable.
+        return policy_.Session()+"\t"+std::to_string(GetCurrentProcessId())+"\ttest_unranked"
+            +"\tstart_tick_ms="+std::to_string(startedMs_)
+            +"\tduration=game_session\n";
+    }
     static std::string FilenameID(std::wstring_view name) {
         if (name.size()<32) return {};
         std::string id; id.reserve(32);
@@ -195,10 +220,12 @@ private:
         }
         return true;
     }
+    Clock clock_;
     Policy policy_;
     bool started_{},polled_{},ownsDirectory_{};
     std::string activeId_;
     std::uint64_t startedMs_{},lastPoll_{};
+    std::uint64_t minimumRequestTime_{};
     std::filesystem::path root_;
     HANDLE audit_=INVALID_HANDLE_VALUE;
     std::vector<HANDLE> directories_;

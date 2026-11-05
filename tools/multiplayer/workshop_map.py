@@ -24,6 +24,21 @@ def cached_solo_map(cache_root):
     return path
 
 
+def installed_map(cache_root, *steam_roots):
+    """Existing Remilly content read in place, for the VR menu's Solo match:
+    the launcher cache first, then each Steam or SteamCMD root's Workshop
+    download. Never downloads or copies; None when this PC has none."""
+    paths = [Path(cache_root) / ITEM_ID / "0/Unpublished/BrewedPC" / (MAP_NAME + ".kfm")]
+    paths += [Path(root) / "steamapps/workshop/content/232090" / ITEM_ID / "BrewedPC" / (MAP_NAME + ".kfm")
+              for root in steam_roots if root]
+    for path in paths:
+        try:
+            return validate_map(path)
+        except (OSError, RuntimeError):
+            continue
+    return None
+
+
 def validate_map(path):
     path = Path(path)
     if not path.is_file() or path.stat().st_size < 1024:
@@ -50,15 +65,9 @@ def ensure_map(cache_root, tools_root, *, download=True):
             archive = steam_root / "steamcmd.zip"
             from dependencies import extract_verified
             extract_verified("steamcmd.zip", archive, steam_root)
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = 0
-        log = steam_root / ("workshop-" + ITEM_ID + ".log")
-        with log.open("wb") as output:
-            result = subprocess.run([str(executable), "+login", "anonymous", "+workshop_download_item",
-                "232090", ITEM_ID, "validate", "+quit"], cwd=steam_root, startupinfo=startup,
-                stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, timeout=600)
-        if result.returncode or not source.exists():
+        from dependencies import workshop_download
+        downloaded, log = workshop_download(steam_root, ITEM_ID, source.exists)
+        if not downloaded:
             raise RuntimeError(f"SteamCMD did not download the test map; see {log}")
     validate_map(source)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -67,7 +76,7 @@ def ensure_map(cache_root, tools_root, *, download=True):
 
 
 def add_map_path(config_root, map_path):
-    from session import read_ini, set_ini
+    from launch_support import read_ini, set_ini
     path = Path(config_root) / "KFEngine.ini"
     text = read_ini(path)
     core = re.search(r"(?ims)^\[Core\.System\][^\n]*\n(.*?)(?=^\[|\Z)", text)

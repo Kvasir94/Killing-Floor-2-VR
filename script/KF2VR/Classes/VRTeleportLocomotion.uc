@@ -160,9 +160,7 @@ function float Now()
 
 function Pulse(int Hand, bool bAccepted)
 {
-    Bridge.NativeHapticMask = Bridge.NativeHapticMask | (1 << Hand);
-    Bridge.NativeHapticStrength = bAccepted ? 0.22 : 0.08;
-    Bridge.NativeHapticDuration = bAccepted ? 0.03 : 0.08;
+    Bridge.QueueHandHaptic(1 << Hand, bAccepted ? 0.22 : 0.08, bAccepted ? 0.03 : 0.08);
 }
 
 function Update(float RealDelta)
@@ -196,17 +194,24 @@ function Update(float RealDelta)
         || X != X || Y != Y || Abs(X) > 1 || Abs(Y) > 1)
     { ClearBuffer(); Cancel(); return; }
     Magnitude = Sqrt(X*X + Y*Y);
+    // Share locomotion's neutral-to-arm gate. A held stick returning after
+    // tracking loss, a menu or a wheel is not a fresh teleport gesture.
+    if (!Input.InputState[Hand].bAxisArmed)
+    { ClearBuffer(); Cancel(); return; }
 
     // Stick click puts the arc away. It has no sprint meaning in this mode, so
     // it is the one free control for cancelling without committing.
     if ((Bridge.NativeStickClickActiveMask & Bridge.NativeStickClickMask & (1 << Hand)) != 0)
     {
+        Input.InputState[Hand].bAxisArmed = false;
         ClearBuffer();
         if (bAiming) Cancel();
         return;
     }
 
-    if (bBuffered && FireBuffered()) { Cancel(); return; }
+    // A new deflection replaces the queued landing even on the frame its
+    // cooldown expires. Only a still-released stick may fire the buffer.
+    if (bBuffered && Magnitude <= 0.12 && FireBuffered()) { Cancel(); return; }
     bAllowed = class'VRTeleportLocomotion'.static.BodyReady(Bridge.Human);
     bReady = Now() >= ReadyTime;
     if (Magnitude > 0.12)
@@ -876,6 +881,21 @@ function TryArrivalSound()
 
 function Relocate()
 {
+    local string Reason;
+    // The fade separates aiming from movement. Recheck its destination and
+    // path against the current body/world, as authority does for online play.
+    // A closing door or lost floor must not spend a hop or rotate the player.
+    if (!class'VRTeleportLocomotion'.static.ValidateSpot(Bridge.Human, PendingDestination,
+        Bridge.TeleportRange, Bridge.TeleportAscentLimit, Bridge.TeleportDescentLimit,
+        Bridge.TeleportNavRadius, Reason))
+    {
+        ++Refusals;
+        bArrivalPending = false;
+        bPendingFacing = false;
+        BeginFadeIn();
+        return;
+    }
+    CommittedDistance = VSize(PendingDestination - Bridge.Human.Location);
     bArrivalPending = true;
     ReadyTime = Now() + FClamp(CommittedDistance / FMax(Bridge.TeleportSustainedSpeed, 1),
         Bridge.TeleportMinCooldown, Bridge.TeleportMaxCooldown);

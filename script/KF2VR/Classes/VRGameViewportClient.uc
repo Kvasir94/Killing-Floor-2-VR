@@ -19,6 +19,14 @@ event Tick(float DeltaTime)
     if (VRSession != None) VRSession.Update(DeltaTime);
 }
 
+// Console control of VR Training for scripted replays and testers:
+// start, skip, end, styleN (answer the style question), kill (drop the
+// training targets) or offer.
+exec function KF2VRTraining(string Command)
+{
+    if (VRSession != None) VRSession.TrainingCommand(Command);
+}
+
 event PostRender(Canvas C)
 {
     Super.PostRender(C);

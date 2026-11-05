@@ -9,7 +9,7 @@ import math
 from pathlib import Path
 import re
 
-from session import read_ini, set_ini
+from launch_support import read_ini, set_ini
 from vr_config import profile_root, section_body
 
 PROFILE_FILE = "vr-graphics.json"
@@ -66,11 +66,12 @@ SCRIPT = {
     "KFGame.KFGoreManager": {
         **scalar_rules("bool", "bAllowBloodSplatterDecals"),
         **scalar_rules("float", "GoreFXLifetimeMultiplier", 0, 16),
+        **scalar_rules("float", "BodyWoundDecalLifetime BloodSplatterLifetime BloodPoolLifetime GibletLifetime",0,3600),
         **scalar_rules("int", "MaxBloodEffects MaxGoreEffects MaxPersistentSplatsPerFrame "
-                       "MaxBodyWoundDecals MaxDeadBodies", 0, 4096),
+                       "MaxBodyWoundDecals MaxDeadBodies MaxBloodSplatterDecals MaxBloodPoolDecals", 0, 4096),
     },
 }
-FILES = {"KFSystemSettings.ini": {"SystemSettings": SYSTEM}, "KFGame.ini": SCRIPT}
+FILES = {"KFSystemSettings.ini": {"SystemSettings": SYSTEM}, "KFGame.ini": SCRIPT, "KFEngine.ini": {"Engine.Engine": scalar_rules("float", "DisplayGamma", .5, 3.5)}}
 PAIRS = re.compile(r"(?m)^[ \t]*([A-Za-z][A-Za-z0-9_]*)[ \t]*=([^\r\n]*)")
 
 
@@ -177,14 +178,21 @@ def write_record(path, record):
     temporary.replace(path)
 
 
-def apply(configs, root=None, *, reset=False):
+def apply(configs, root=None, *, reset=False, preset=None, migration=None):
     """Apply saved quality edits after defaults, then snapshot launch state.
 
     An explicit launcher preset discards old custom edits only after a real
     session exports; PrepareOnly never alters the player's saved profile.
     """
     configs = Path(configs)
-    saved = {} if reset else clean_values(read_record((root or profile_root()) / PROFILE_FILE).get("values"))
+    import settings_graphics
+    saved = clean_values(read_record((root or profile_root()) / PROFILE_FILE).get("values"))
+    if reset: saved = settings_graphics.independent_values(saved)
+    if migration:
+        combined=clean_values(migration)
+        for filename, sections in saved.items():
+            for section, entries in sections.items():settings_graphics.merge(combined,{(filename,section):entries})
+        saved=combined
     for filename, sections in saved.items():
         path = configs / filename
         text = read_ini(path) if path.exists() else ""
@@ -205,7 +213,9 @@ def apply(configs, root=None, *, reset=False):
             if edits:
                 text = set_ini(text, section, edits)
         path.write_text(text, encoding="utf-16")
-    write_record(configs / SNAPSHOT_FILE, {"schema": SCHEMA, "reset": bool(reset), "values": capture(configs)})
+    raw = __import__("vr_config").values(read_ini(configs / "KFSystemSettings.ini"), "SystemSettings") if (configs / "KFSystemSettings.ini").exists() else {}
+    effects = {"hbao": all(raw.get(k,"False").lower()=="true" for k in ("AmbientOcclusion","HBAO")), "reflections": raw.get("AllowScreenSpaceReflections","False").lower()=="true"}
+    write_record(configs / SNAPSHOT_FILE, {"schema": SCHEMA, "reset": bool(reset), "preset": preset, "effects":effects, "migration":clean_values(migration), "values": capture(configs)})
 
 
 def export(configs, root=None):
@@ -215,7 +225,15 @@ def export(configs, root=None):
     if not snapshot:
         return  # No launch snapshot: never mistake defaults for player edits.
     directory = root or profile_root()
-    saved = {} if snapshot.get("reset") else clean_values(read_record(directory / PROFILE_FILE).get("values"))
+    saved = clean_values(read_record(directory / PROFILE_FILE).get("values"))
+    if snapshot.get("reset"):
+        import settings_graphics
+        saved = settings_graphics.independent_values(saved)
+    import settings_graphics
+    migration=clean_values(snapshot.get("migration"))
+    for filename, sections in saved.items():
+        for section, entries in sections.items():settings_graphics.merge(migration,{(filename,section):entries})
+    saved=migration
     before, after = clean_values(snapshot.get("values")), capture(configs)
     for filename, sections in after.items():
         for section, selected in sections.items():
@@ -228,4 +246,17 @@ def export(configs, root=None):
                         saved.setdefault(filename, {}).setdefault(section, {}).setdefault(key, {}).update(changed)
                 elif value != previous.get(key):
                     saved.setdefault(filename, {}).setdefault(section, {})[key] = value
-    write_record(directory / PROFILE_FILE, {"schema": SCHEMA, "values": saved})
+    write_record(directory / PROFILE_FILE, {"schema": SCHEMA, "defaults_revision":1, "values": saved})
+    from workshop_loadout import update_preferences
+    launch = {}
+    if snapshot.get("reset") and snapshot.get("preset") in ("quality","balanced","performance"):
+        launch["vr_quality"] = snapshot["preset"]
+    # These effects are also launch arguments: export live changes to that same owner.
+    path = configs / "KFSystemSettings.ini"
+    raw = __import__("vr_config").values(read_ini(path), "SystemSettings") if path.exists() else {}
+    original_effects = snapshot.get("effects", {})
+    for key, names in (("hbao",("AmbientOcclusion","HBAO")),("reflections",("AllowScreenSpaceReflections",))):
+        if all(name in raw for name in names):
+            current = all(raw[name].lower()=="true" for name in names)
+            if key in original_effects and current != original_effects[key]: launch[key] = current
+    if launch: update_preferences(launch,directory)

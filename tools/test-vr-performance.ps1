@@ -43,7 +43,7 @@ if (-not $PrepareOnly) {
     }
     $runtimePaths=Get-Content (Join-Path $env:LOCALAPPDATA 'openvr/openvrpaths.vrpath') -Raw | ConvertFrom-Json
     $runtimeDll=Join-Path $runtimePaths.runtime[0] 'bin/win64/openvr_api.dll'
-    $monitorExe=Join-Path $workspace 'build/portal-native/native/tools/vrmonitor/Release/kf2vr_runtime_monitor.exe'
+    $monitorExe=Join-Path $workspace 'build/multiplayer/native/native/tools/vrmonitor/Release/kf2vr_runtime_monitor.exe'
     foreach ($dependency in @($runtimeDll,$monitorExe)) {
         if (-not (Test-Path -LiteralPath $dependency -PathType Leaf)) { throw "Missing collector dependency: $dependency" }
     }
@@ -63,18 +63,18 @@ function Stop-OwnedObserver {
 # native files installed, and every later trial then refuses to run. Wait for
 # that owned game to exit and restore exactly the recorded, hash-checked files.
 function Restore-AbandonedTrial([datetime]$Since) {
-    $run=Get-ChildItem (Join-Path $workspace 'build/portal-game-runs') -Directory |
+    $run=Get-ChildItem (Join-Path $workspace 'build/combined-game-runs') -Directory |
         Where-Object { $_.CreationTime -ge $Since.AddSeconds(-2) } | Sort-Object CreationTime | Select-Object -Last 1
     $recordPath=if ($run) { Join-Path $run.FullName 'run.json' }
     if (-not $recordPath -or -not (Test-Path -LiteralPath $recordPath)) { return }
-    . (Join-Path $PSScriptRoot 'portal-session.ps1')
-    $record=Read-PortalSessionRecord $recordPath
+    . (Join-Path $PSScriptRoot 'combined-session.ps1')
+    $record=Read-CombinedSessionRecord $recordPath
     if (-not @($record.native_files | Where-Object { $_.restore_pending }).Count) { return }
     if ($record.process_id) {
         $game=Get-Process -Id $record.process_id -ErrorAction SilentlyContinue
         if ($game -and $game.StartTime.ToUniversalTime().Ticks -eq $record.process_start_ticks) { [void]$game.WaitForExit(120000) }
     }
-    Restore-PortalNativeFiles $record $recordPath
+    Restore-CombinedNativeFiles $record $recordPath
     Write-Warning "Restored native files left by an abandoned trial: $recordPath"
 }
 function Save-Batch {
@@ -92,7 +92,7 @@ function Invoke-Trial($trial) {
             -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $trialRoot 'stdout.log') -RedirectStandardError (Join-Path $trialRoot 'stderr.log')
         [void]$script:observer.Handle
     }
-    $output=@(& (Join-Path $PSScriptRoot 'test-portal.ps1') -PortalBuildRoot $CombinedBuildRoot `
+    $output=@(& (Join-Path $PSScriptRoot 'test-combined.ps1') -CombinedBuildRoot $CombinedBuildRoot `
         -PerformanceBenchmark -EyeRenderPercent $trial.percent -RenderVariant $trial.variant `
         -MetadataCache:$trial.metadata_cache -FastVmIdentity:$FastVmIdentity -FrameDrilldown:$FrameDrilldown `
         -DepthPrepass $trial.depth_prepass -VrQuality $trial.quality -ExtraSystemSettings $(if ($trial.extra_settings) { $ExtraSystemSettings } else { '' }) `
@@ -100,7 +100,7 @@ function Invoke-Trial($trial) {
         -CheckedReads:$trial.checked_reads -PerEyePresentation:$trial.per_eye_presentation `
         -BenchmarkTimingsOff:(-not $trial.frame_timings) -BenchmarkWarmupSeconds $WarmupSeconds `
         -BenchmarkMeasureSeconds $MeasureSeconds -PrepareOnly:$PrepareOnly)
-    $line=@($output | Where-Object { $_ -is [string] -and $_ -match '^(Prepared Portal session|Gameplay replay passed): ' })
+    $line=@($output | Where-Object { $_ -is [string] -and $_ -match '^(Prepared session|Gameplay replay passed): ' })
     if ($line.Count -ne 1) { throw 'Fixture did not return one owned run receipt.' }
     $runRoot=Split-Path ($line[0] -replace '^[^:]+: ','') -Parent
     if ($PrepareOnly) { return $runRoot }

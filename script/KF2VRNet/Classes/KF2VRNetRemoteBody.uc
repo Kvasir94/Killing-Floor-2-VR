@@ -28,6 +28,10 @@ var float ThumbDegrees[3];    // thumb segments, toward the palm centre
 var float ThumbSwing;         // thumb root opposition across the palm
 var float TriggerFingerCurl;  // share of the curl the index keeps around a held weapon
 var float FingerBlendTime;    // seconds, finger curl smoothing
+// Melee item 15: hand pose values above GRAPPLE_POSE carry a grapple region;
+// per region the fingers (X), index (Y) and thumb (Z) closure.
+const GRAPPLE_POSE = 96;
+var vector GrappleCurl[4];
 // Residual stock upper-body clip weight: keeps the slot relevant (3P reload sounds).
 var float StockUpperWeight;
 
@@ -38,6 +42,8 @@ var private AnimTree BodyTree;
 // 0 head, 1-4 arms/wrists, 5-6 shoulders, 7-8 twist, 9-12 spine, 13+ fingers.
 var private SkelControlBase Controls[43];
 var private array<FingerSegment> Fingers;
+struct WeaponGrip { var class<KFWeapon> WeaponClass; var int SourceHand; var array<float> Bend; };
+var private WeaponGrip Grips[2];
 var private vector Curl[2];   // per hand: X fingers, Y index, Z thumb (0..1)
 var private byte HandPose[2];
 var private SkelControlLimb Arm[2];
@@ -55,7 +61,7 @@ var private bool bSavedPooling;
 var private vector WantedHand[2], ReachableHand[2];
 var private rotator WantedWrist[2];
 var private byte Tracking;
-var private float NextLog;
+var private float NextLog, NextHoldPrepare;
 // A teammate's charged fist, lit on its own hand bone.
 var private PointLightComponent FistGlow[2];
 var private PointLightComponent FistGlowTemplate;
@@ -98,6 +104,8 @@ simulated function bool UpdateLocalTracking(VRHandsBridge B)
     Frame.Sample.TrackingFlags = 7;
     Frame.Sample.HeadPosition = (B.HeadPosition - LocalPawn.Location) << Basis;
     Frame.Sample.HeadRotation = Normalize(B.NativeHeadRotation - Basis);
+    if (LocalPawn.BaseEyeHeight > 0 && LocalPawn.BaseEyeHeight <= 128)
+        Frame.Sample.EyeHeight = Clamp(Round(LocalPawn.BaseEyeHeight), 1, 128);
     Frame.Sample.LeftPosition = (B.LeftPosition - LocalPawn.Location) << Basis;
     Frame.Sample.LeftRotation = Normalize(B.LeftRotation - Basis);
     Frame.Sample.RightPosition = (B.RightPosition - LocalPawn.Location) << Basis;
@@ -112,6 +120,10 @@ simulated function bool UpdateLocalTracking(VRHandsBridge B)
         }
         LocalCurl = B.FreeHandPose != None ? Clamp(Round(B.FreeHandPose.Amount[I] * 15), 0, 15) : 0;
         Pose = R != None ? 79 : (LocalCurl <= 2 ? (48 | LocalCurl) : LocalCurl);
+        // Melee item 15: a hand holding a Zed part sends its grapple region
+        // (GRAPPLE_POSE + region) so other players see the wrap, not a fist.
+        if (R == None && B.FreeHandPose != None && B.FreeHandPose.GrappleRegion(I) != 0)
+            Pose = GRAPPLE_POSE + B.FreeHandPose.GrappleRegion(I);
         if (I == 0) Frame.Sample.LeftHandPose = Pose;
         else Frame.Sample.RightHandPose = Pose;
         if (R != None && R.Presenter != None && R.Presenter.Arms != None
@@ -605,7 +617,7 @@ simulated function UpdateSpine(NetPoseSnapshot Frame, float Delta, rotator World
     local vector X, Y, Z, Forward, Up, Wanted, Spine1, Spine2, Lever, Chain, Reach, Rest, Slide;
     local rotator Body;
     local quat Lower, Whole;
-    local float Strength, Yaw, Room;
+    local float Strength, Yaw, Room, EyeHeight;
     if (Pelvis == None) return;
     Body.Yaw = RigPawn.Rotation.Yaw;
     // Last frame's bones carry these controls; take them back out to recover
@@ -624,8 +636,12 @@ simulated function UpdateSpine(NetPoseSnapshot Frame, float Delta, rotator World
         // Body-relative: the replicated root lags the simulated pawn.
         // World: the sender's yaw the sample was taken against; Body stays
         // the rig's own facing for the chest turn.
+        // A crouch can arrive ahead of or behind the pawn's ordinary movement
+        // update. Its sampled head offset needs the eye reference from that
+        // same frame; using the live pawn height double-compresses the torso.
+        EyeHeight = Frame.Sample.EyeHeight > 0 ? float(Frame.Sample.EyeHeight) : RigPawn.BaseEyeHeight;
         Wanted = (Frame.Sample.HeadPosition - (HeadEyeOffset >> Frame.Sample.HeadRotation)
-            + HeadEyeOffset - vect(0,0,1) * RigPawn.BaseEyeHeight) >> World;
+            + HeadEyeOffset - vect(0,0,1) * EyeHeight) >> World;
         Yaw = ChestYaw;
         GetAxes(Normalize(World + Frame.Sample.HeadRotation), X, Y, Z);
         Forward = X; Forward.Z = 0;
@@ -683,7 +699,9 @@ simulated function UpdateSpine(NetPoseSnapshot Frame, float Delta, rotator World
 simulated function UpdateBody(NetPoseSnapshot Frame, bool bFresh)
 {
     local int I;
-    local vector Position, Shoulder, Direction, Pole, FollowTarget, Root, Fit;
+    local vector Position, Shoulder, Direction, Pole, FollowTarget, Root, Fit, Shared;
+    local vector Shoulders[2], Step[2];
+    local int Pass;
     local float Delta, Blend;
     local rotator Aim, Body;
     local bool bSolved;
@@ -719,6 +737,8 @@ simulated function UpdateBody(NetPoseSnapshot Frame, bool bFresh)
     HandCorrection += (Fit - HandCorrection) * Blend;
     for (I = 0; I < 2; ++I)
     {
+        HandPose[I] = I == 0 ? Frame.Sample.LeftHandPose : Frame.Sample.RightHandPose;
+        if ((Tracking & (2 << I)) == 0) HandPose[I] = 0;
         bSolved = (Frame.Sample.PresentationFlags & (4 << I)) != 0;
         Position = I == 0 ? Frame.Sample.LeftPosition : Frame.Sample.RightPosition;
         // Empty hands use the same uncalibrated controller aim frame as the
@@ -739,12 +759,34 @@ simulated function UpdateBody(NetPoseSnapshot Frame, bool bFresh)
         ShoulderOffset[I] += (FollowTarget - ShoulderOffset[I]) * Blend;
         ShoulderFollow[I].BoneTranslation = ShoulderOffset[I];
         ShoulderFollow[I].SetSkelControlStrength(1, 0);
-        Shoulder += ShoulderOffset[I];
-        Direction = WantedHand[I] - Shoulder;
-        ReachableHand[I] = WantedHand[I];
-        if (VSize(Direction) > ArmLength[I] * 0.98)
-            ReachableHand[I] = Shoulder + Normal(Direction) * ArmLength[I] * 0.98;
-        ReachShift[I] = (Tracking & (2 << I)) != 0 ? ReachableHand[I] - WantedHand[I] : vect(0,0,0);
+        Shoulders[I] = Shoulder + ShoulderOffset[I];
+        ReachShift[I] = (Tracking & (2 << I)) != 0 ? ReachLimit(I, Shoulders[I], WantedHand[I]) : vect(0,0,0);
+    }
+    // A support hand on the other hand's gun: the gun and both hands are one
+    // rigid group. Separate per-arm limits left the gun on the gun hand while
+    // the support arm stopped short of the grip, so a player who reaches
+    // farther than the model's arms showed a support hand floating in front
+    // of the gun. Pull the whole group back until both arms reach it.
+    if (IsSupportHold(Frame, 0) || IsSupportHold(Frame, 1))
+    {
+        Shared = vect(0,0,0);
+        for (Pass = 0; Pass < 4; ++Pass)
+        {
+            Step[0] = ReachLimit(0, Shoulders[0], WantedHand[0] + Shared);
+            Step[1] = ReachLimit(1, Shoulders[1], WantedHand[1] + Shared);
+            if (VSizeSq(Step[0]) < 0.01 && VSizeSq(Step[1]) < 0.01) break;
+            Shared += VSizeSq(Step[0]) > VSizeSq(Step[1]) ? Step[0] : Step[1];
+        }
+        ReachShift[0] = Shared;
+        ReachShift[1] = Shared;
+    }
+    for (I = 0; I < 2; ++I)
+    {
+        Shoulder = Shoulders[I];
+        // Each arm still clamps its own effector, so a residual the shared
+        // passes could not remove never stretches the limb.
+        ReachableHand[I] = WantedHand[I] + ReachShift[I];
+        ReachableHand[I] += ReachLimit(I, Shoulder, ReachableHand[I]);
         Pole = vect(-18,0,-28); Pole.Y = I == 0 ? -16 : 16;
         Arm[I].EffectorLocation = ReachableHand[I];
         Arm[I].JointTargetLocation = Shoulder + (Pole >> Body);
@@ -754,25 +796,72 @@ simulated function UpdateBody(NetPoseSnapshot Frame, bool bFresh)
         if (ForearmTwist[I] != None)
             ForearmTwist[I].SetSkelControlStrength((Tracking & (2 << I)) != 0 ? 1 : 0, 0.12);
         UpdateFistGlow(I, (Tracking & (2 << I)) != 0 && (Frame.Sample.PresentationFlags & (16 << I)) != 0);
-        HandPose[I] = I == 0 ? Frame.Sample.LeftHandPose : Frame.Sample.RightHandPose;
-        if ((Tracking & (2 << I)) == 0) HandPose[I] = 0;
+        UpdateGrip(Frame, I);
         UpdateFingers(I, Delta);
     }
+}
+
+// The shift that brings a hand target back inside the arm's reach.
+simulated function vector ReachLimit(int I, vector Shoulder, vector Target)
+{
+    local vector Direction;
+    Direction = Target - Shoulder;
+    if (VSize(Direction) <= ArmLength[I] * 0.98) return vect(0,0,0);
+    return Shoulder + Normal(Direction) * ArmLength[I] * 0.98 - Target;
+}
+
+// This hand holds the other hand's gun at its support grip (the grip pose
+// with no weapon of its own; UpdateGrip samples the same case).
+simulated function bool IsSupportHold(NetPoseSnapshot Frame, int I)
+{
+    if ((Tracking & 6) != 6 || (HandPose[I] & 64) == 0 || HandPose[I] > GRAPPLE_POSE) return false;
+    if (I == 0) return Frame.LeftWeapon.WeaponClass == None && Frame.RightWeapon.WeaponClass != None;
+    return Frame.RightWeapon.WeaponClass == None && Frame.LeftWeapon.WeaponClass != None;
 }
 
 // Curl 0-15 closes a natural fist from the rest pose; the index and thumb
 // bits hold those digits straight and a held weapon eases the trigger
 // finger. Pose 0 fades back to the stock fingers.
+simulated function UpdateGrip(NetPoseSnapshot Frame, int Hand)
+{
+    local class<KFWeapon> W;
+    local int SourceHand, P;
+    if ((HandPose[Hand] & 64) == 0 || HandPose[Hand] > GRAPPLE_POSE) return;
+    W = Hand == 0 ? Frame.LeftWeapon.WeaponClass : Frame.RightWeapon.WeaponClass;
+    SourceHand = 1;
+    if (W == None)
+    {
+        W = Hand == 0 ? Frame.RightWeapon.WeaponClass : Frame.LeftWeapon.WeaponClass;
+        SourceHand = 0;
+    }
+    P = class'VRSharedWeaponVisual'.static.Profile(W);
+    if (P >= 0 && class'VRHandsBridge'.default.WeaponProfiles[P].bLeftHandPrimary) SourceHand = 1 - SourceHand;
+    if (Grips[Hand].WeaponClass == W && Grips[Hand].SourceHand == SourceHand) return;
+    Grips[Hand].WeaponClass = W; Grips[Hand].SourceHand = SourceHand;
+    Grips[Hand].Bend.Length = 0;
+    if (P >= 0) class'VRSharedWeaponVisual'.static.SampleGrip(self, W, SourceHand, Grips[Hand].Bend);
+}
+
 simulated function UpdateFingers(int I, float Delta)
 {
     local int J;
     local vector Target;
-    local float Amount;
+    local float Amount, Degrees;
+    local bool bAuthored;
     local quat Bend;
-    if (HandPose[I] != 0)
+    bAuthored = (HandPose[I] & 64) != 0 && HandPose[I] <= GRAPPLE_POSE && Grips[I].Bend.Length == 15;
+    if (HandPose[I] > GRAPPLE_POSE && HandPose[I] <= GRAPPLE_POSE + 4)
+    {
+        // Grapple regions (VRGrapplePose): fingers, index and thumb closure
+        // matching the owner's authored wrap around a neck, skull, shoulder
+        // or limb on this character's own finger rig.
+        Target = GrappleCurl[HandPose[I] - GRAPPLE_POSE - 1];
+        Curl[I] += (Target - Curl[I]) * (1 - Exp(-Delta / FingerBlendTime));
+    }
+    else if (HandPose[I] != 0)
     {
         Target.X = float(HandPose[I] & 15) / 15;
-        Target.Y = (HandPose[I] & 16) != 0 ? 0.0 : Target.X * ((HandPose[I] & 64) != 0 ? TriggerFingerCurl : 1.0);
+        Target.Y = (HandPose[I] & 16) != 0 ? 0.0 : Target.X * ((HandPose[I] & 64) != 0 ? (bAuthored ? 1.0 : TriggerFingerCurl) : 1.0);
         Target.Z = (HandPose[I] & 32) != 0 ? 0.0 : Target.X;
         Curl[I] += (Target - Curl[I]) * (1 - Exp(-Delta / FingerBlendTime));
     }
@@ -780,8 +869,9 @@ simulated function UpdateFingers(int I, float Delta)
     {
         if (Fingers[J].Hand != I) continue;
         Amount = Fingers[J].Finger == 0 ? Curl[I].Z : (Fingers[J].Finger == 1 ? Curl[I].Y : Curl[I].X);
-        Bend = QuatFromAxisAndAngle(Fingers[J].Axis, Amount * DegToRad
-            * (Fingers[J].Finger == 0 ? ThumbDegrees[Fingers[J].Joint] : FingerDegrees[Fingers[J].Joint]));
+        Degrees = Fingers[J].Finger == 0 ? ThumbDegrees[Fingers[J].Joint] : FingerDegrees[Fingers[J].Joint];
+        if (bAuthored && Fingers[J].Finger > 0) Degrees = Grips[I].Bend[Fingers[J].Finger * 3 + Fingers[J].Joint];
+        Bend = QuatFromAxisAndAngle(Fingers[J].Axis, Amount * DegToRad * Degrees);
         if (Fingers[J].Finger == 0 && Fingers[J].Joint == 0)
             Bend = QuatProduct(QuatFromAxisAndAngle(Fingers[J].Swing, Amount * ThumbSwing * DegToRad), Bend);
         Fingers[J].Control.BoneRotation = QuatToRotator(QuatProduct(Fingers[J].Rest, Bend));
@@ -819,6 +909,13 @@ simulated event Tick(float DeltaTime)
         return;
     }
     if (PoseOwner == None || PoseOwner.bDeleteMe) { Destroy(); return; }
+    // Melee item 10: desktop clients run no VRZedGrab, so remote bodies
+    // prepare standing-hold visuals for this machine too.
+    if (WorldInfo.RealTimeSeconds >= NextHoldPrepare)
+    {
+        NextHoldPrepare = WorldInfo.RealTimeSeconds + 0.2;
+        class'VRSM_StandingHold'.static.PrepareViewer(WorldInfo);
+    }
     if (!PoseOwner.bDiagnosticVisuals || BodyTree == None || WorldInfo.RealTimeSeconds < NextLog) return;
     NextLog = WorldInfo.RealTimeSeconds + 1;
     for (I = 0; I < 2; ++I)
@@ -884,6 +981,10 @@ defaultproperties
     ThumbSwing=30
     TriggerFingerCurl=0.7
     FingerBlendTime=0.05
+    GrappleCurl(0)=(X=0.55,Y=0.45,Z=0.6)
+    GrappleCurl(1)=(X=0.4,Y=0.35,Z=0.5)
+    GrappleCurl(2)=(X=0.55,Y=0.45,Z=0.6)
+    GrappleCurl(3)=(X=0.75,Y=0.7,Z=0.8)
     StockUpperWeight=0.01
     RemoteRole=ROLE_None
     bCollideActors=false

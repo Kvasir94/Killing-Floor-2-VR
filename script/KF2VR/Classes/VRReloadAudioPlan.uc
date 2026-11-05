@@ -7,7 +7,7 @@ struct PlanEvent
 {
     var float Time;
     var byte Kind; // 0 marker/camera, 1 stock sound, 2 unlock, 3 bob, 4 shell eject,
-                   // 10 + cue, 20 shell eject / 21 particle deferred to the opening cue
+                   // 10 + cue, 20 shell eject / 21 opening particle / 29 seating particle
     var AkEvent Sound;
     var name Bone;
     var AnimNotify Notify;
@@ -60,6 +60,71 @@ static function bool SupportedClip(name Clip)
         || Clip == 'Reload_Half_Elite' || Clip == 'Reload_Empty_Elite';
 }
 
+// These stock effects describe the magazine leaving or seating, not a timed
+// receiver vent. Reuse the notify itself at the matching physical event.
+static function int MagazineEffectCue(AnimNotify_PlayParticleEffect Effect, AnimSequence Sequence)
+{
+    local int I;
+    local bool bEarlierInsert;
+    local AnimNotify_PlayParticleEffect Previous;
+    if (Effect == None || Effect.PSTemplate == None) return 0;
+    // These effects use the same template for disconnect and reconnect.
+    // Empty laser clips omit disconnect; Arc Generator always records both.
+    if (Sequence != None && (Effect.PSTemplate.Name == 'FX_Laser_Rifle_Reload_01'
+        || Effect.PSTemplate.Name == 'FX_HRG_ArcGenerator_MagazineSparks'))
+    {
+        if (Effect.PSTemplate.Name == 'FX_Laser_Rifle_Reload_01'
+            && (Sequence.SequenceName == 'Reload_Empty' || Sequence.SequenceName == 'Reload_Empty_Elite')) return 3;
+        for (I = 0; I < Sequence.Notifies.Length; ++I)
+        {
+            if (Sequence.Notifies[I].Notify == Effect) return bEarlierInsert ? 3 : 1;
+            Previous = AnimNotify_PlayParticleEffect(Sequence.Notifies[I].Notify);
+            if (Previous != None && Previous.PSTemplate == Effect.PSTemplate) bEarlierInsert = true;
+        }
+        return 0;
+    }
+    // The Microwave's tactical clips reuse effect names across different
+    // motions. In the regular clip Magazine1 is the incoming spare; its
+    // early Out effect belongs to fetching it, while Magazine2 leaves.
+    if (Sequence != None && Sequence.SequenceName == 'Reload_Half'
+        && Effect.PSTemplate.Name == 'FX_Microwave_Assault_Magazine_Out'
+        && Effect.BoneName == 'RW_Magazine1') return 0;
+    // Elite uses In twice on Magazine1: first while removing the old cell,
+    // then while seating its replacement. Follow authored notify order.
+    if (Sequence != None && Sequence.SequenceName == 'Reload_Half_Elite'
+        && Effect.PSTemplate.Name == 'FX_Microwave_Assault_Magazine_In')
+    {
+        for (I = 0; I < Sequence.Notifies.Length; ++I)
+        {
+            if (Sequence.Notifies[I].Notify == Effect) return bEarlierInsert ? 3 : 1;
+            Previous = AnimNotify_PlayParticleEffect(Sequence.Notifies[I].Notify);
+            if (Previous != None && Previous.PSTemplate == Effect.PSTemplate) bEarlierInsert = true;
+        }
+        return 0;
+    }
+    switch (Effect.PSTemplate.Name)
+    {
+        case 'FX_HRG_Teslauncher_Magazine_Out':
+        case 'FX_Medic_Bat_Reload_01':
+        case 'FX_HRG_BallisticBouncer_MineRec_Reload_01':
+        case 'FX_MineRec_Reload_01':
+        case 'FX_Microwave_Assault_Magazine_Out': return 1;
+        case 'FX_Energy_Reload':
+        case 'FX_Railgun_Reload_sparks':
+        case 'FX_HRG_Teslauncher_Magazine_In':
+        case 'FX_Microwave_Assault_Magazine_In': return 3;
+    }
+    return 0;
+}
+
+static function bool StockBeltCharge(AkEvent Sound)
+{
+    return Sound != None && (PathName(Sound) == "WW_WEP_Stoner.Play_WEP_Stoner_Reload_Charge_Back"
+        || PathName(Sound) == "WW_WEP_Stoner.Play_WEP_Stoner_Reload_Charge_FWD"
+        || PathName(Sound) == "WW_WEP_MG3.Play_WEP_MG3_Reload_Lever_Back"
+        || PathName(Sound) == "WW_WEP_MG3.Play_WEP_MG3_Reload_Lever_Fwd");
+}
+
 // 'a|b|c': one event's sounds in order, 0.12 s apart (a bolt's lift then pull).
 function AddSoundList(byte Cue, string List)
 {
@@ -85,9 +150,82 @@ function AddCue(byte Cue, AkEvent Sound, float Delay)
 function bool Build(class<KFWeapon> WeaponClass, AnimSequence Sequence, optional float StartTime=0)
 {
     Reset();
+    if (WeaponClass == class'KFWeap_GrenadeLauncher_M32' && Sequence != None
+        && M32HingeClip(Sequence.SequenceName)) return BuildM32Hinge(Sequence, StartTime);
     if (class'VRPumpCatalog'.static.FindClass(WeaponClass) >= 0) return BuildShell(WeaponClass, Sequence, StartTime);
     if (class'VRBreakCatalog'.static.FindClass(WeaponClass) >= 0) return BuildBreak(WeaponClass, Sequence, StartTime);
     return BuildMagazine(WeaponClass, Sequence, StartTime);
+}
+
+static function bool M32HingeClip(name Clip)
+{
+    return Clip == 'Reload_Empty_Open' || Clip == 'Reload_Half_Open'
+        || Clip == 'Reload_Empty_Close' || Clip == 'Reload_Half_Close';
+}
+
+// Only the M32 hinge latch sound changes clock. Its case particles, bullet
+// reset and cylinder index stay in the original ordered notify ledger.
+function bool BuildM32Hinge(AnimSequence Sequence, float StartTime)
+{
+    local int I, HingeSounds, Resets, Particles;
+    local bool bOpen;
+    local byte Cue;
+    local AnimNotify N;
+    local AnimNotify_AkEvent Audio;
+    local AnimNotify_Script Script;
+    local PlanEvent Entry;
+    if (Sequence == None || !M32HingeClip(Sequence.SequenceName)) return Reject("unsupported-clip");
+    if (!(Sequence.SequenceLength > 0 && Sequence.SequenceLength < 1000000)
+        || !(Sequence.RateScale > 0 && Sequence.RateScale < 1000000)
+        || !(StartTime >= 0 && StartTime <= Sequence.SequenceLength)) return Reject("invalid-time");
+    bOpen = Sequence.SequenceName == 'Reload_Empty_Open' || Sequence.SequenceName == 'Reload_Half_Open';
+    Cue = bOpen ? 4 : 5;
+    CueSounds.Length = 6; CueTaken.Length = 6;
+    for (I = 0; I < Sequence.Notifies.Length; ++I)
+    {
+        N = Sequence.Notifies[I].Notify;
+        if (N == None || !(Sequence.Notifies[I].Time >= 0 && Sequence.Notifies[I].Time <= Sequence.SequenceLength)
+            || !(Sequence.Notifies[I].Duration >= 0 && Sequence.Notifies[I].Duration <= 0)) return Reject("invalid-notify");
+        if (I > 0 && Sequence.Notifies[I].Time < Sequence.Notifies[I-1].Time) return Reject("unordered-notifies");
+        Entry.Time = Sequence.Notifies[I].Time;
+        Entry.Kind = 0; Entry.Sound = None; Entry.Bone = ''; Entry.Notify = None;
+        Entry.bConsumed = Entry.Time <= StartTime;
+        if (N.Class == class'AnimNotify_AkEvent')
+        {
+            Audio = AnimNotify_AkEvent(N);
+            if (Audio.AkEvent == None || !(Audio.PercentToPlay >= 1 && Audio.PercentToPlay <= 1))
+                return Reject("invalid-audio");
+            Entry.Sound = Audio.AkEvent; Entry.Bone = Audio.BoneName;
+            if ((bOpen && PathName(Audio.AkEvent) ~= "WW_WEP_M32.Play_M32_Canister_Open")
+                || (!bOpen && PathName(Audio.AkEvent) ~= "WW_WEP_M32.Play_M32_Canister_Close"))
+            {
+                Entry.Kind = byte(10 + Cue); ++HingeSounds;
+                AddCue(Cue, Audio.AkEvent, 0);
+                // A late takeover must not replay a sound stock already crossed.
+                if (Entry.bConsumed) CueTaken[Cue] = 1;
+            }
+            else Entry.Kind = 1;
+        }
+        else if (N.Class == class'AnimNotify_Script')
+        {
+            Script = AnimNotify_Script(N);
+            if (Script.NotifyTickName != '' || Script.NotifyEndName != '') return Reject("script-duration-callback");
+            if (Script.NotifyName == 'ANIMNOTIFY_ResetBulletMeshes') { Entry.Kind = 28; ++Resets; }
+            else if (Script.NotifyName == 'ANIMNOTIFY_RotateCylinder') Entry.Kind = 5;
+            else if (Script.NotifyName == 'ANIMNOTIFY_EnableAdditiveBob') Entry.Kind = 3;
+            else return Reject("unknown-script");
+        }
+        else if (AnimNotify_PlayParticleEffect(N) != None)
+        { Entry.Kind = 26; Entry.Notify = N; ++Particles; }
+        else if (N.Class != class'KFAnimNotify_CameraAnim' && N.Class != class'KFAnimNotify_Interrupt')
+            return Reject("unknown-notify");
+        Events.AddItem(Entry);
+    }
+    if (HingeSounds != 1 || Resets != (bOpen ? 1 : 0) || Particles != (bOpen ? 1 : 0))
+        return Reject("incomplete-clip");
+    LastTime = StartTime; SequenceLength = Sequence.SequenceLength; SourceSequence = Sequence;
+    bBuilt = true;
+    return true;
 }
 
 // A magazine gun's clip: every stock sound is moved to the physical event that
@@ -107,6 +245,7 @@ function bool BuildMagazine(class<KFWeapon> WeaponClass, AnimSequence Sequence, 
     local AkEvent Sound;
     local bool bTailRides;
 
+    WeaponClass = class'VRReloadCatalog'.static.ProfileClass(WeaponClass);
     if (!class'VRReloadSoundMap'.static.Covers(WeaponClass) || Sequence == None
         || !SupportedClip(Sequence.SequenceName)) return Reject("unsupported-clip");
     // Positive bounds also reject the SDK's unordered NaN payloads; its float
@@ -141,9 +280,15 @@ function bool BuildMagazine(class<KFWeapon> WeaponClass, AnimSequence Sequence, 
             if (Audio.AkEvent != None && !MapOwns(Map, Audio.AkEvent) && (bTailRides || MapStock(Map, Audio.AkEvent)))
             { Entry.Kind = 1; Entry.Sound = Audio.AkEvent; }
         }
-        // Stock effects on the parts (the Teslauncher's and Laser Cutter's
-        // battery arcs, the Microwave Gun's vents) run on the stock clock.
-        else if (AnimNotify_PlayParticleEffect(N) != None) { Entry.Kind = 26; Entry.Notify = N; }
+        // Magazine contact effects follow the hand; unrelated receiver vents
+        // and other stock part effects retain their original clock.
+        else if (AnimNotify_PlayParticleEffect(N) != None)
+        {
+            Entry.Kind = 26;
+            if (MagazineEffectCue(AnimNotify_PlayParticleEffect(N), Sequence) == 1) Entry.Kind = 21;
+            else if (MagazineEffectCue(AnimNotify_PlayParticleEffect(N), Sequence) == 3) Entry.Kind = 29;
+            Entry.Notify = N;
+        }
         else if (N.Class == class'AnimNotify_Script')
         {
             Script = AnimNotify_Script(N);
@@ -300,9 +445,40 @@ static function bool BreakClip(name Clip)
     return Left(string(Clip), 6) ~= "Reload";
 }
 
+// Shared by free-hand and hip reloads, including paired weapon subclasses.
+// Only actual selected-clip events may add an elite snap or hammer cock.
+static function bool CylinderVariantCues(class<KFWeapon> W, AnimSequence Sequence, byte Cue, out array<CueSound> Out)
+{
+    local int I;
+    local float FirstTime;
+    local AnimNotify_AkEvent Audio;
+    local CueSound Entry;
+    local name EventName;
+    Out.Length = 0;
+    W = class'VRBreakCatalog'.static.ProfileClass(W);
+    if ((W != class'KFWeap_Revolver_SW500' && W != class'KFWeap_HRG_Revolver_Buckshot')
+        || Sequence == None || Sequence.RateScale <= 0 || (Cue != 1 && Cue != 5)) return false;
+    FirstTime = -1;
+    for (I = 0; I < Sequence.Notifies.Length; ++I)
+    {
+        Audio = AnimNotify_AkEvent(Sequence.Notifies[I].Notify);
+        if (Audio == None || Audio.AkEvent == None) continue;
+        EventName = Audio.AkEvent.Name;
+        if (Cue == 1 && EventName != 'Play_WEP_SA_SW500_Tap' && EventName != 'Play_SW500_Empty') continue;
+        if (Cue == 5 && EventName != 'Play_WEP_SA_SW500_Cylinder_Close'
+            && EventName != 'Play_SW500_Cylinder_Snap' && EventName != 'Play_SW500_Hammer') continue;
+        if (FirstTime < 0) FirstTime = Sequence.Notifies[I].Time;
+        Entry.Cue = Cue; Entry.Sound = Audio.AkEvent;
+        Entry.Delay = (Sequence.Notifies[I].Time - FirstTime) / Sequence.RateScale;
+        Out.AddItem(Entry);
+    }
+    return Out.Length > 0;
+}
+
 function bool BuildBreak(class<KFWeapon> WeaponClass, AnimSequence Sequence, float StartTime)
 {
     local int I, P, AmmoMarkers, Ejects;
+    local array<CueSound> VariantCues;
     local AnimNotify N;
     local AnimNotify_AkEvent Audio;
     local AnimNotify_Script Script;
@@ -310,6 +486,7 @@ function bool BuildBreak(class<KFWeapon> WeaponClass, AnimSequence Sequence, flo
     local PlanEvent Entry;
     local AkEvent Latch, Open, Eject, InsertA, InsertB, Close;
 
+    WeaponClass = class'VRBreakCatalog'.static.ProfileClass(WeaponClass);
     P = class'VRBreakCatalog'.static.FindClass(WeaponClass);
     if (P < 0 || Sequence == None || !BreakClip(Sequence.SequenceName)) return Reject("unsupported-clip");
     if (!(Sequence.SequenceLength > 0 && Sequence.SequenceLength < 1000000)
@@ -345,9 +522,29 @@ function bool BuildBreak(class<KFWeapon> WeaponClass, AnimSequence Sequence, flo
             // Every sound belongs to a physical event (the gun's catalog row);
             // the clip's cloth layers go with the pouch grab.
             Audio = AnimNotify_AkEvent(N);
-            if (Audio.AkEvent == None) return Reject("invalid-audio");
+            // MG3 tactical clips contain inert AkEvent placeholders.
+            if (Audio.AkEvent == None) { Events.AddItem(Entry); continue; }
+            // Elite quad-barrel clips use their loading block's contact and
+            // lock recordings instead of the normal individual-shell sound.
+            if (PathName(Audio.AkEvent) == "WW_WEP_Quad_Shotgun.Play_Quad_Shotgun_QuickReload_In"
+                || PathName(Audio.AkEvent) ~= "ww_wep_hrg_megadragonbreath.Play_WEP_HRG_MegaDragonbreath_Mag_In")
+                InsertA = Audio.AkEvent;
+            else if (PathName(Audio.AkEvent) == "WW_WEP_Quad_Shotgun.Play_Quad_Shotgun_QuickReload_Lock"
+                || PathName(Audio.AkEvent) ~= "ww_wep_hrg_megadragonbreath.Play_WEP_HRG_MegaDragonbreath_Mag_Lock")
+                InsertB = Audio.AkEvent;
             if (Left(PathName(Audio.AkEvent), 16) ~= "WW_MVT_Footstep." && CueSounds[7] == None)
                 AddCue(7, Audio.AkEvent, 0);
+            // The belt/cover controls do not own this charging motion; its
+            // original animation still moves the handle before ammo payment.
+            else if (StockBeltCharge(Audio.AkEvent))
+            { Entry.Kind = 1; Entry.Sound = Audio.AkEvent; Entry.Bone = Audio.BoneName; }
+            // Removing a partly used box also frees its belt. These layers
+            // accompany the existing physical extraction, never stock time.
+            else if (PathName(Audio.AkEvent) == "WW_WEP_Stoner.Play_WEP_Stoner_Reload_Remove_Belt"
+                || PathName(Audio.AkEvent) == "WW_WEP_MG3.Play_WEP_MG3_Reload_Remove_Belt"
+                || ((WeaponClass == class'KFWeap_LMG_Stoner63A' || WeaponClass == class'KFWeap_HRG_BarrierRifle')
+                    && PathName(Audio.AkEvent) == "WW_WEP_SA_SawBlade.Play_WEP_SA_Sawblade_MagOn"))
+                AddCue(1, Audio.AkEvent, 0.25);
         }
         else if (N.Class == class'AnimNotify_Script')
         {
@@ -383,10 +580,20 @@ function bool BuildBreak(class<KFWeapon> WeaponClass, AnimSequence Sequence, flo
     // beat after the barrel drops (the M79's ShellEject).
     if (Latch != None) AddCue(6, Latch, 0);
     AddSoundList(1, class'VRBreakCatalog'.default.Profiles[P].Open);
-    if (Eject != None) AddCue(1, Eject, 0.25);
+    if (CylinderVariantCues(WeaponClass, Sequence, 1, VariantCues))
+    {
+        for (I = 0; I < VariantCues.Length; ++I)
+            AddCue(1, VariantCues[I].Sound, 0.25 + VariantCues[I].Delay);
+    }
+    else if (Eject != None) AddCue(1, Eject, 0.25);
     if (InsertA != None) AddCue(2, InsertA, 0);
     AddCue(3, InsertB, 0);
-    AddSoundList(5, class'VRBreakCatalog'.default.Profiles[P].Close);
+    if (CylinderVariantCues(WeaponClass, Sequence, 5, VariantCues))
+    {
+        for (I = 0; I < VariantCues.Length; ++I)
+            AddCue(5, VariantCues[I].Sound, VariantCues[I].Delay);
+    }
+    else AddSoundList(5, class'VRBreakCatalog'.default.Profiles[P].Close);
     LastTime = StartTime;
     SequenceLength = Sequence.SequenceLength;
     SourceSequence = Sequence;
@@ -402,7 +609,7 @@ function TakeSeatEffects(out array<int> Due)
     if (!bBuilt) return;
     for (I = 0; I < Events.Length; ++I)
     {
-        if (Events[I].bConsumed || (Events[I].Kind != 22 && Events[I].Kind != 23)) continue;
+        if (Events[I].bConsumed || (Events[I].Kind != 22 && Events[I].Kind != 23 && Events[I].Kind != 29)) continue;
         Events[I].bConsumed = true;
         Due.AddItem(I);
     }
@@ -449,7 +656,8 @@ function bool Advance(float Time, out array<int> Due)
         // (24) and part effects (26). Open and seat effects (20-23) are taken
         // at the physical moment instead.
         if (Events[I].bConsumed || Events[I].Time > Time
-            || !((Events[I].Kind >= 1 && Events[I].Kind <= 5) || Events[I].Kind == 24 || Events[I].Kind == 26 || Events[I].Kind == 27)) continue;
+            || !((Events[I].Kind >= 1 && Events[I].Kind <= 5) || Events[I].Kind == 24 || Events[I].Kind == 26
+                || Events[I].Kind == 27 || Events[I].Kind == 28)) continue;
         Events[I].bConsumed = true;
         Due.AddItem(I);
     }

@@ -30,7 +30,7 @@ foreach ($experiment in @('CodeAB','Attribution','TimingOverhead','MetadataQuick
     try { Get-VRBenchmarkPlan $experiment @(100,75) | Out-Null } catch { $rejected=$true }
     if (-not $rejected) { throw 'Confounded scale/code comparison was accepted.' }
 }
-foreach ($script in @('test-portal.ps1','test-vr-performance.ps1','vr-benchmark-plan.ps1')) {
+foreach ($script in @('test-combined.ps1','test-vr-performance.ps1','vr-benchmark-plan.ps1')) {
     $tokens=$null;$errors=$null
     [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot ('../'+$script)),[ref]$tokens,[ref]$errors)
     if ($errors.Count) { throw ($errors | Out-String) }

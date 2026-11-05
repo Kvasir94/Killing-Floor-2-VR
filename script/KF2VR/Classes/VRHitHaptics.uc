@@ -43,6 +43,7 @@ var float ZedTimeStrength, ZedTimeDuration;
 // Last round: the item each hand held last update and its loaded rounds.
 var KFWeapon LastItem[2];
 var int LastLoaded[2];
+var int LastFlashCount[2];
 var float LastRoundStrength, LastRoundDuration;
 
 function Update(VRHandsBridge Bridge)
@@ -115,14 +116,10 @@ function Update(VRHandsBridge Bridge)
     Emit(Bridge, Mask, Strength, Duration);
 }
 
-// The native channel carries one strength and duration per frame; the
-// strongest request of the frame wins.
+// Merge feedback independently for each requested hand.
 function Emit(VRHandsBridge Bridge, int Mask, float Strength, float Duration)
 {
-    if (Bridge.NativeHapticMask == 0) { Bridge.NativeHapticStrength = 0; Bridge.NativeHapticDuration = 0; }
-    Bridge.NativeHapticMask = Bridge.NativeHapticMask | (Mask & 3);
-    Bridge.NativeHapticStrength = FMax(Bridge.NativeHapticStrength, Strength);
-    Bridge.NativeHapticDuration = FMax(Bridge.NativeHapticDuration, Duration);
+    Bridge.QueueHandHaptic(Mask & 3, Strength, Duration);
 }
 
 // Real time throughout: Zed Time dilates the game clock, and a heartbeat that
@@ -192,22 +189,32 @@ function UpdatePlayer(VRHandsBridge Bridge)
 // endless magazine never reports empty.
 function UpdateLastRound(VRHandsBridge Bridge)
 {
-    local int H, Profile, Loaded;
+    local int H, Profile, Loaded, FlashCount;
     local KFWeapon W;
+    local VRWeaponRuntime R;
     for (H = 0; H < 2; ++H)
     {
         W = Bridge.Hands[H].Item;
         Loaded = -1;
+        FlashCount = -1;
+        R = None;
         if (W != None && W.MagazineCapacity[0] > 0)
         {
             Profile = Bridge.FindWeaponProfile(W);
             if (Profile >= 0 && Profile < Bridge.WeaponProfiles.Length && Bridge.WeaponProfiles[Profile].bFirearm)
                 Loaded = W.AmmoCount[0];
+            if (Bridge.HeldInventory != None) R = Bridge.HeldInventory.FindItem(W);
+            if (R != None) FlashCount = int(R.NativeFlashCount);
+            else if (W == Bridge.Human.Weapon) FlashCount = int(Bridge.Human.FlashCount);
         }
-        if (W == LastItem[H] && LastLoaded[H] > 0 && Loaded == 0)
+        // Ejecting or discarding a loaded magazine also reaches zero. Only
+        // a new shot on this exact item earns the final-round impulse.
+        if (W == LastItem[H] && LastLoaded[H] > 0 && Loaded == 0
+            && LastFlashCount[H] >= 0 && FlashCount > 0 && FlashCount != LastFlashCount[H])
             Emit(Bridge, 1 << H, LastRoundStrength, LastRoundDuration);
         LastItem[H] = W;
         LastLoaded[H] = Loaded;
+        LastFlashCount[H] = FlashCount;
     }
 }
 

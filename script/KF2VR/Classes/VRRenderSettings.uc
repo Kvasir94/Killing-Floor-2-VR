@@ -46,13 +46,20 @@ static function bool MatchesScreenEffectPolicy(
         && Settings.FilmGrain.FilmGrainScale ~= MIN_FILM_GRAIN_SCALE;
 }
 
-static function bool MatchesPolicy(KFGFxOptionsMenu_Graphics.GFXSettings Settings,
-    bool bPostProcessAA, bool bScreenEffects)
+// Flag 32: DLSS is running. KF2's velocity pass (MotionBlur on, quality 2 for
+// per-object velocity) feeds DLSS real motion for hands, guns and Zeds; the
+// adapter skips the blur itself, so no motion blur is ever drawn for it.
+static function bool MotionVectors(int CinematicFlags)
 {
-    return !Settings.MotionBlur.MotionBlur
-        && Settings.MotionBlur.MotionBlurQuality == 0
-        && !Settings.DepthOfField.DepthOfField
-        && Settings.DepthOfField.DepthOfFieldQuality == 0
+    return (CinematicFlags & 32) != 0;
+}
+
+static function bool MatchesPolicy(KFGFxOptionsMenu_Graphics.GFXSettings Settings,
+    bool bPostProcessAA, bool bScreenEffects, optional int CinematicFlags=0)
+{
+    return (((CinematicFlags & 1) != 0) || (Settings.MotionBlur.MotionBlur == MotionVectors(CinematicFlags)
+            && Settings.MotionBlur.MotionBlurQuality == (MotionVectors(CinematicFlags) ? 2 : 0)))
+        && (((CinematicFlags & 2) != 0) || (!Settings.DepthOfField.DepthOfField && Settings.DepthOfField.DepthOfFieldQuality == 0))
         && Settings.AntiAliasing.PostProcessAA == bPostProcessAA
         && !Settings.VSync.VSync
         && Settings.VariableFPS.VariableFrameRate
@@ -77,7 +84,7 @@ static function bool UnrelatedSettingsPreserved(
     return After == Before;
 }
 
-function Update(PlayerController PC, bool bPostProcessAA, bool bScreenEffects)
+function Update(PlayerController PC, bool bPostProcessAA, bool bScreenEffects, optional int CinematicFlags=0)
 {
     local Engine GameEngine;
     local KFGFxOptionsMenu_Graphics.GFXSettings Before, After;
@@ -112,7 +119,7 @@ function Update(PlayerController PC, bool bPostProcessAA, bool bScreenEffects)
     //     already-damaged settings become the new baseline and a later pass
     //     report verified without ever having preserved the originals.
     if (!bPreservationFailure
-        && !MatchesPolicy(Before, bPostProcessAA, bScreenEffects)
+        && !MatchesPolicy(Before, bPostProcessAA, bScreenEffects, CinematicFlags)
         && Now >= NextApplyTime)
     {
         // One attempt per second bounds failed-command retries. Steady state
@@ -125,13 +132,13 @@ function Update(PlayerController PC, bool bPostProcessAA, bool bScreenEffects)
         // group LODs into menu presets. SCALE SET changes only its named field,
         // preserves the full FSystemSettings, and only resizes for display edits.
         // It flushes render work: never call this from viewport Draw/Canvas.
-        if (Before.MotionBlur.MotionBlur)
-            PC.ConsoleCommand("scale set MotionBlur False", false);
-        if (Before.MotionBlur.MotionBlurQuality != 0)
-            PC.ConsoleCommand("scale set MotionBlurQuality 0", false);
-        if (Before.DepthOfField.DepthOfField)
+        if ((CinematicFlags & 1) == 0 && Before.MotionBlur.MotionBlur != MotionVectors(CinematicFlags))
+            PC.ConsoleCommand("scale set MotionBlur " $ string(MotionVectors(CinematicFlags)), false);
+        if ((CinematicFlags & 1) == 0 && Before.MotionBlur.MotionBlurQuality != (MotionVectors(CinematicFlags) ? 2 : 0))
+            PC.ConsoleCommand("scale set MotionBlurQuality " $ (MotionVectors(CinematicFlags) ? 2 : 0), false);
+        if ((CinematicFlags & 2) == 0 && Before.DepthOfField.DepthOfField)
             PC.ConsoleCommand("scale set DepthOfField False", false);
-        if (Before.DepthOfField.DepthOfFieldQuality != 0)
+        if ((CinematicFlags & 2) == 0 && Before.DepthOfField.DepthOfFieldQuality != 0)
             PC.ConsoleCommand("scale set DepthOfFieldQuality 0", false);
         if (Before.AntiAliasing.PostProcessAA != bPostProcessAA)
             PC.ConsoleCommand("scale set PostProcessAA " $ string(bPostProcessAA), false);
@@ -172,7 +179,7 @@ function Update(PlayerController PC, bool bPostProcessAA, bool bScreenEffects)
     // stays unverified rather than measuring against the damaged state.
     bPreservationFailure = bPreservationFailure
         || !bResolutionPreserved || !bUnrelatedPreserved;
-    bVerified = MatchesPolicy(After, bPostProcessAA, bScreenEffects)
+    bVerified = MatchesPolicy(After, bPostProcessAA, bScreenEffects, CinematicFlags)
         && !bPreservationFailure;
     EvidenceFlags = int(bPostProcessAA) | (int(bScreenEffects) << 1)
         | (int(bVerified) << 2) | (int(bResolutionPreserved) << 3)

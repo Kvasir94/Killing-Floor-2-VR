@@ -8,19 +8,21 @@
 namespace kf2vr::adapter {
 // Canvas text deliberately writes RGB only for the stock screen HUD. A world
 // panel also needs glyph coverage in alpha. Register the exact render-target
-// copy resolved from an owned HUD/hand-selector Canvas on the render thread.
+// copy resolved from an owned HUD/hand-selector/damage Canvas on the render thread.
 class HudTextAlpha {
 public:
-    static constexpr unsigned PanelCount=12,SelectorCount=2;
+    static constexpr unsigned PanelCount=14,SelectorCount=2,PopupCount=24;
     // Status, left/right weapon readout, session module, alert banner, the
-    // ammo pouch counter and six teammate tags.
-    static constexpr unsigned PanelWidth[PanelCount]{1024,800,800,1024,1024,800,512,512,512,512,512,512};
-    static constexpr unsigned PanelHeight[PanelCount]{512,320,320,512,256,320,256,256,256,256,256,256};
+    // first ammo pouch counter, six teammate tags, second pouch counter, and
+    // the full-text priority/boss introduction panel.
+    static constexpr unsigned PanelWidth[PanelCount]{1024,800,800,1024,1024,800,512,512,512,512,512,512,800,1024};
+    static constexpr unsigned PanelHeight[PanelCount]{512,320,320,512,256,320,256,256,256,256,256,256,320,512};
 private:
     template<class T> using Ptr=Microsoft::WRL::ComPtr<T>;
-    std::array<Ptr<ID3D11Resource>,PanelCount+SelectorCount> targets_;
+    std::array<Ptr<ID3D11Resource>,PanelCount+SelectorCount+PopupCount> targets_;
     const void* panelOwner_=nullptr;
     const void* selectorOwner_=nullptr;
+    const void* popupOwner_=nullptr;
     Ptr<ID3D11Resource> bound_;
     ID3D11DeviceContext* boundContext_=nullptr;
     ID3D11DeviceContext* context_=nullptr;
@@ -66,6 +68,13 @@ public:
         if(!expectedOwner || owner!=expectedOwner || hand<0 || hand>=static_cast<int>(SelectorCount)
             || width!=768 || height!=768) return false;
         return RegisterTarget(PanelCount+static_cast<unsigned>(hand),768,768,context,resource);
+    }
+    bool RegisterPopup(int index,const void* owner,const void* expectedOwner,float width,float height,
+        ID3D11DeviceContext* context,ID3D11Resource* resource) {
+        UpdateOwner(expectedOwner,popupOwner_,PanelCount+SelectorCount,PopupCount);
+        if(!expectedOwner || owner!=expectedOwner || index<0 || index>=static_cast<int>(PopupCount)
+            || width!=256 || height!=64) return false;
+        return RegisterTarget(PanelCount+SelectorCount+static_cast<unsigned>(index),256,64,context,resource);
     }
     void Targets(ID3D11DeviceContext* context,UINT count,ID3D11RenderTargetView* const* targets) {
         bound_.Reset();boundContext_=nullptr;

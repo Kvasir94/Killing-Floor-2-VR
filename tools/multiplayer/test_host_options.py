@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import friends
 import game_install
@@ -15,12 +15,72 @@ from vr_config import apply_preferences, values
 
 
 class HostOptionsTests(unittest.TestCase):
-    def test_grab_zone_preference_defaults_and_saved_choices_survive_merge(self):
+    def test_host_requires_both_progression_hooks_on_ready_record(self):
+        self.assertTrue(friends.server_adapter_ready(
+            'server_adapter ready=1 ranked=1 content_xp=1 sha256=pinned\n'))
+        for text in ('', 'server_adapter hash_refused\n', 'server_adapter ready=1\n',
+                     'server_adapter ready=1 ranked=1 content_xp=0\n',
+                     'server_adapter ready=0 ranked=1 content_xp=1\n',
+                     'server_adapter ready=1\nserver_adapter ranked=1 content_xp=1\n',
+                     'server_adapter ready=1 ranked=10 content_xp=1\n'):
+            with self.subTest(text=text):
+                self.assertFalse(friends.server_adapter_ready(text))
+
+    def test_installer_errors_keep_disk_space_guidance(self):
+        for message in (
+            'Not enough free disk space to install the KF2 dedicated server: it needs about 35 GB '
+            'on D:\\ and only 4 GB is free. Free up space on D:\\ and try again.',
+            'The disk ran out of space while installing the KF2 dedicated server (D:\\). Free up space and try again.',
+        ):
+            output = 'PowerShell: ' + message.replace(' ', '\r\n', 1) + '\nAt script:31'
+            self.assertEqual(friends.server_install_failure(output, 1), message)
+        self.assertEqual(friends.server_install_failure('Unknown failure', 7),
+                         'The dedicated server could not be installed (exit 7); see the details below.')
+
+    def test_installer_streams_progress_and_raises_actionable_failures(self):
+        for code in (0, 1):
+            lines = 'Installing dedicated server: fixture\nDownload log: fixture.log\n'
+            reason = 'The disk ran out of space while installing the KF2 dedicated server (D:\\). Free up space and try again.'
+            if code:
+                lines += reason + '\n'
+            process = MagicMock()
+            process.__enter__.return_value = process
+            process.stdout = io.StringIO(lines)
+            output = io.StringIO()
+
+            def wait():
+                self.assertEqual(output.getvalue(), lines)
+                return code
+
+            process.wait.side_effect = wait
+            with patch.object(friends.subprocess, 'Popen', return_value=process) as launch, contextlib.redirect_stdout(output):
+                if code:
+                    with self.assertRaisesRegex(RuntimeError, 'The disk ran out of space'):
+                        friends.install_server(Path('fixture-server'), {'fixture': 'environment'})
+                else:
+                    friends.install_server(Path('fixture-server'), {'fixture': 'environment'})
+            self.assertEqual(launch.call_args.kwargs['env'], {'fixture': 'environment'})
+            self.assertEqual(launch.call_args.kwargs['creationflags'], friends.subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(launch.call_args.args[0][-2:], ['-ServerRoot', 'fixture-server'])
+
+    def test_retired_preferences_are_unseeded_and_legacy_profiles_stay_compatible(self):
         section = 'KF2VR.VRHandsBridge'
-        for saved, expected in (('', 'False'), ('True', 'True'), ('False', 'False'), ('invalid', 'False')):
-            profile = '[KF2VR.Profile]\nRevision=2\n['+section+']\nbWideGrabZones='+saved+'\n' if saved else ''
-            text = apply_preferences('['+section+']\nbWideGrabZones=True\n' if saved else '', profile)
-            self.assertEqual(values(text, section)['bWideGrabZones'], expected)
+        alias = 'KF2VRNetClient.KF2VRNetHandsBridge'
+        for target in (section, alias):
+            fresh = values(apply_preferences('', ''), target)
+            self.assertNotIn('bWideGrabZones', fresh)
+            self.assertNotIn('bAutoSprint', fresh)
+        # Unknown legacy values remain inert baggage; importing them must still
+        # restore actual controls and preserve unrelated preferences.
+        profile = ('[KF2VR.Profile]\nRevision=2\n['+section+']\n'
+                   'bWideGrabZones=True\nbAutoSprint=True\nbControllerRelativeMovement=True\n')
+        text = apply_preferences('['+section+']\nbToggleGrip=True\n', profile)
+        for target in (section, alias):
+            restored = values(text, target)
+            self.assertEqual(restored['bWideGrabZones'], 'True')
+            self.assertEqual(restored['bAutoSprint'], 'True')
+            self.assertEqual(restored['bControllerRelativeMovement'], 'True')
+            self.assertEqual(restored['bToggleGrip'], 'True')
 
     def test_steam_main_checks_effective_saved_dlss_before_preflight(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -145,9 +205,6 @@ class HostOptionsTests(unittest.TestCase):
                 self.assertFalse(args.workshop_desktop_verified)
                 with self.assertRaisesRegex(RuntimeError, 'not been verified'):
                     loadout.configure_content(configs, args, server=True)
-                args.breacher = True
-                with self.assertRaisesRegex(RuntimeError, 'Breacher'):
-                    loadout.verify_desktop_workshop(args, root/'game', root/'steam', package.parent)
 
     def test_saved_dlss_is_checked_after_resolution(self):
         with tempfile.TemporaryDirectory() as temporary:

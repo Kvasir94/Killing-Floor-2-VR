@@ -23,6 +23,14 @@ var array<int> HiddenBoneIndices;
 var KFWeapon Captured;
 var bool bReloading, bPopActive;
 var float ReloadStartTime;
+// A loaded launcher round or crossbow bolt can be parked off-camera by a fire
+// or reload clip. This lease is separate from spare/reload visibility and
+// changes one bone.
+var SkeletalMeshComponent ParkedRoundMesh;
+var SkeletalMesh ParkedRoundAsset;
+var int ParkedRoundIndex;
+var name ParkedRoundBone;
+var bool bParkedRoundHidden;
 
 // Hiding a bone writes the component's own per-instance bone arrays, which
 // stay empty until the component has been attached AND ticked once. A weapon
@@ -91,7 +99,7 @@ simulated function Capture(KFWeapon W)
     Captured = W;
     for (I = 0; I < LoadedBoneNames.Length; ++I)
         if (W.MySkelMesh.MatchRefBone(LoadedBoneNames[I]) >= 0)
-            W.MySkelMesh.UnHideBoneByName(LoadedBoneNames[I]);
+            class'VRBoneVisibility'.static.SetVisible(W.MySkelMesh, LoadedBoneNames[I], true);
     for (I = 0; I < SpareBoneNames.Length; ++I)
     {
         Index = W.MySkelMesh.MatchRefBone(SpareBoneNames[I]);
@@ -104,37 +112,77 @@ simulated function Capture(KFWeapon W)
         // the M32's second grenade. Casings and hand-held rounds always hide.
         Parent = W.MySkelMesh.GetParentBone(SpareBoneNames[I]);
         if (I < PoppedSpareCount && Parent != 'RW_Weapon' && SpareBoneNames.Find(Parent) < 0) continue;
-        W.MySkelMesh.HideBoneByName(SpareBoneNames[I], PBO_None);
+        class'VRBoneVisibility'.static.SetVisible(W.MySkelMesh, SpareBoneNames[I], false);
         HiddenBones.AddItem(SpareBoneNames[I]);
         // Only the spare load pops in about its magazine origin; loose casings
         // and hand-held rounds (from PoppedSpareCount on) simply reappear.
         if (I < PoppedSpareCount && HiddenBoneIndices.Length < 8) HiddenBoneIndices.AddItem(Index);
     }
+    // SG500/Trench normal hand-insert shells are parked outside the receiver
+    // in Idle/Shoot; elite reloads add a third hand-held shell. Neither
+    // belongs to the chamber, despite Shell1's generic loaded-bone name.
+    // Keep these rigs' two missing props under the same stock/physical
+    // reload visibility lease as Shell2. Separate VR ammo props are untouched.
+    if (W.Class == class'KFWeap_Shotgun_MB500' || W.Class == class'KFWeap_Shotgun_DragonsBreath')
+    {
+        if (W.MySkelMesh.MatchRefBone('RW_Shell1') >= 0)
+        {
+            class'VRBoneVisibility'.static.SetVisible(W.MySkelMesh, 'RW_Shell1', false);
+            HiddenBones.AddItem('RW_Shell1');
+        }
+        if (W.MySkelMesh.MatchRefBone('RW_Shell3') >= 0)
+        {
+            class'VRBoneVisibility'.static.SetVisible(W.MySkelMesh, 'RW_Shell3', false);
+            HiddenBones.AddItem('RW_Shell3');
+        }
+    }
     // The healer's spare refill canister is RW_Mag, with its liquid level
     // beneath it. The cooked Idle parks it (-27.77,20.29,-22.32) from
     // RW_Weapon, so it floats beside the tracked syringe. Keep the actual
     // syringe body/trigger/bolt/liquid visible; Suspend restores the spare.
+    // Lever rifles carry their insertion round on RW_Bullet1, outside the
+    // generic spare list. Physical preflight requires this concealment lease.
+    if (class'VRPumpCatalog'.static.IsLever(W))
+    {
+        I = class'VRPumpCatalog'.static.FindClass(W.Class);
+        Spare = class'VRPumpCatalog'.default.Profiles[I].InsertTrack;
+        if (Spare != '' && W.MySkelMesh.MatchRefBone(Spare) >= 0 && HiddenBones.Find(Spare) < 0)
+        {
+            class'VRBoneVisibility'.static.SetVisible(W.MySkelMesh, Spare, false);
+            HiddenBones.AddItem(Spare);
+        }
+    }
+    // Both lever rifles have a second receiver-parented animation round as
+    // well as their insertion round and Bullet3. It must share the spare
+    // visibility lease from first draw, rather than waiting for Shoot to hide
+    // it; the Winchester's otherwise flew out of an empty gun on A.
+    if ((W.Class == class'KFWeap_Rifle_CenterfireMB464' || W.Class == class'KFWeap_Rifle_Winchester1894')
+        && W.MySkelMesh.MatchRefBone('RW_Bullet2') >= 0)
+    {
+        class'VRBoneVisibility'.static.SetVisible(W.MySkelMesh, 'RW_Bullet2', false);
+        HiddenBones.AddItem('RW_Bullet2');
+    }
     if (W.IsA('KFWeap_Healer_Syringe') && W.MySkelMesh.MatchRefBone('RW_Mag') >= 0)
     {
-        W.MySkelMesh.HideBoneByName('RW_Mag', PBO_None);
+        class'VRBoneVisibility'.static.SetVisible(W.MySkelMesh, 'RW_Mag', false);
         HiddenBones.AddItem('RW_Mag');
     }
     // Thompson's separate animation round is receiver-parented, so hiding
     // either drum cannot conceal it. Keep it with the stock reload props;
     // physical reloads conceal these, stock reloads reveal them, Suspend restores.
-    if (W.Class == class'KFWeap_AssaultRifle_Thompson'
+    if ((W.Class == class'KFWeap_AssaultRifle_Thompson' || W.Class == class'KFWeap_HRG_Boomy')
         && W.MySkelMesh.MatchRefBone('RW_Bullet') >= 0)
     {
-        W.MySkelMesh.HideBoneByName('RW_Bullet', PBO_None);
+        class'VRBoneVisibility'.static.SetVisible(W.MySkelMesh, 'RW_Bullet', false);
         HiddenBones.AddItem('RW_Bullet');
     }
     // These launchers keep a separate spent shell on the barrel. It is an
     // animation prop, not the chamber's live round; outside a stock reload
     // it otherwise floats beside the gun or looks like an automatic load.
-    if ((W.Class == class'KFWeap_GrenadeLauncher_M79' || W.Class == class'KFWeap_GrenadeLauncher_HX25')
+    if ((W.Class == class'KFWeap_GrenadeLauncher_M79' || class'VRBreakAction'.static.TwistBreech(W.Class))
         && W.MySkelMesh.MatchRefBone('RW_Empty_Shell') >= 0)
     {
-        W.MySkelMesh.HideBoneByName('RW_Empty_Shell', PBO_None);
+        class'VRBoneVisibility'.static.SetVisible(W.MySkelMesh, 'RW_Empty_Shell', false);
         HiddenBones.AddItem('RW_Empty_Shell');
     }
     // A catalog gun's own spare magazine bone (the Blunderbuss's RW_Cylinder2).
@@ -146,7 +194,7 @@ simulated function Capture(KFWeapon W)
         && (Spare != class'VRReloadCatalog'.static.MagazineBone(I, false)
             || class'VRReloadCatalog'.default.Profiles[I].bParkedLoaded))
     {
-        W.MySkelMesh.HideBoneByName(Spare, PBO_None);
+        class'VRBoneVisibility'.static.SetVisible(W.MySkelMesh, Spare, false);
         HiddenBones.AddItem(Spare);
         if (HiddenBoneIndices.Length < 8) HiddenBoneIndices.AddItem(Index);
     }
@@ -157,7 +205,7 @@ simulated function Reveal()
     local int I;
     if (Captured == None || Captured.MySkelMesh == None) return;
     for (I = 0; I < HiddenBones.Length; ++I)
-        Captured.MySkelMesh.UnHideBoneByName(HiddenBones[I]);
+        class'VRBoneVisibility'.static.SetVisible(Captured.MySkelMesh, HiddenBones[I], true);
 }
 
 simulated function Conceal()
@@ -165,7 +213,7 @@ simulated function Conceal()
     local int I;
     if (Captured == None || Captured.MySkelMesh == None) return;
     for (I = 0; I < HiddenBones.Length; ++I)
-        Captured.MySkelMesh.HideBoneByName(HiddenBones[I], PBO_None);
+        class'VRBoneVisibility'.static.SetVisible(Captured.MySkelMesh, HiddenBones[I], false);
 }
 
 // Cubic ease-out burst, sine rebound, linear settle.
@@ -199,25 +247,137 @@ simulated function Publish(VRHandsBridge B, float Scale)
     B.NativeReloadMagBoneCount = Min(HiddenBoneIndices.Length, 8);
 }
 
+simulated function ReleaseParkedRound(optional bool bHandedOff)
+{
+    // A secondary session sets this bone's own visibility at Bind and on
+    // every late placement. Hand it over without undoing that owner's hide.
+    if (bParkedRoundHidden && !bHandedOff && ParkedRoundMesh != None
+        && ParkedRoundMesh.SkeletalMesh == ParkedRoundAsset
+        && ParkedRoundIndex >= 0 && ParkedRoundIndex < ParkedRoundMesh.BoneVisibilityStates.Length)
+        class'VRBoneVisibility'.static.SetVisible(ParkedRoundMesh, ParkedRoundBone, true);
+    ParkedRoundMesh = None;
+    ParkedRoundAsset = None;
+    ParkedRoundBone = '';
+    bParkedRoundHidden = false;
+}
+
+// The catalog's loaded bone stands farther than 30 UU from its rest on the gun:
+// a stock clip has parked it with the hidden arm. The crossbows' bolt sits 50-80
+// UU under the gun after a shot and through the start of the empty reload; it
+// slides home inside this distance, so the stock reload's placement still shows.
+simulated function bool LoadedBoneParked(KFWeapon W, int Profile, name Bone)
+{
+    local name Parent;
+    local float Scale;
+    local vector InParent;
+    Parent = W.MySkelMesh.GetParentBone(Bone);
+    if (Parent == '') return false;
+    Scale = W.MySkelMesh.Scale * W.MySkelMesh.Scale3D.X * W.DrawScale * W.DrawScale3D.X;
+    if (!(Scale > 0.01 && Scale < 100)) Scale = 1;
+    InParent = QuatRotateVector(QuatInvert(W.MySkelMesh.GetBoneQuaternion(Parent)),
+        W.MySkelMesh.GetBoneLocation(Bone) - W.MySkelMesh.GetBoneLocation(Parent)) / Scale;
+    return VSize(InParent - class'VRReloadCatalog'.default.Profiles[Profile].ParkedRest) > 30;
+}
+
+simulated function UpdateParkedRound(VRHandsBridge B, KFWeapon W)
+{
+    local VRHandsBridge Root;
+    local VRSecondaryReload Secondary;
+    local int Index, Profile;
+    local name Clip, Rig, Bone;
+    if (W == None || W != Captured || W.bDeleteMe || W.MySkelMesh == None
+        || W.MySkelMesh.SkeletalMesh == None)
+    { ReleaseParkedRound(); return; }
+    Rig = W.MySkelMesh.SkeletalMesh.Name;
+    Profile = class'VRReloadCatalog'.static.FindClass(W.Class);
+    if (Profile >= 0 && VSize(class'VRReloadCatalog'.default.Profiles[Profile].ParkedRest) > 0)
+    {
+        Bone = class'VRReloadCatalog'.default.Profiles[Profile].LoadedBone;
+        Index = W.MySkelMesh.MatchRefBone(Bone);
+        if (!W.MySkelMesh.bAttached || Index < 0 || Index >= W.MySkelMesh.BoneVisibilityStates.Length
+            || !LoadedBoneParked(W, Profile, Bone))
+        { ReleaseParkedRound(); return; }
+        HideParkedRound(W, Bone, Index);
+        return;
+    }
+    // These exact stock rigs park the live round at (0,0,-15) in the two
+    // hip-fire clips. Their start/iron clips and Teslauncher do not do so.
+    if (!((W.Class == class'KFWeap_AssaultRifle_M16M203' && Rig == 'Wep_1stP_M16_M203_Rig')
+        || (W.Class == class'KFWeap_AssaultRifle_HRGIncendiaryRifle' && Rig == 'Wep_1stP_HRG_IncendiaryRifle_Rig')))
+    { ReleaseParkedRound(); return; }
+    Root = B.RootBridge != None ? B.RootBridge : B;
+    if (Root.HandInventory != None && Root.HandInventory.Input != None
+        && Root.HandInventory.Input.Reloads != None)
+        Secondary = Root.HandInventory.Input.Reloads.Secondary;
+    if (Secondary != None && Secondary.bActive && Secondary.Gun == W)
+    {
+        ReleaseParkedRound(ParkedRoundMesh != None && Secondary.HeldMesh == ParkedRoundMesh
+            && ParkedRoundMesh.SkeletalMesh == ParkedRoundAsset);
+        return;
+    }
+    if (W.WeaponAnimSeqNode != None && W.WeaponAnimSeqNode.AnimSeq != None
+        && !B.HasStaleWeaponAnimNode(W)) Clip = W.WeaponAnimSeqNode.AnimSeqName;
+    if ((Clip != 'ShootLoop' && Clip != 'ShootLoop_End') || W.IsInState('Reloading')
+        || W.IsInState('FiringSecondaryState'))
+    { ReleaseParkedRound(); return; }
+    Index = W.MySkelMesh.MatchRefBone('RW_Shell1');
+    // Capture already waits for attachment and a later frame. Still check
+    // the evaluated array before native visibility calls after a mesh change.
+    if (!W.MySkelMesh.bAttached || Index < 0 || Index >= W.MySkelMesh.BoneVisibilityStates.Length)
+    { ReleaseParkedRound(); return; }
+    HideParkedRound(W, 'RW_Shell1', Index);
+}
+
+simulated function HideParkedRound(KFWeapon W, name Bone, int Index)
+{
+    if (ParkedRoundMesh != W.MySkelMesh || ParkedRoundAsset != W.MySkelMesh.SkeletalMesh
+        || ParkedRoundBone != Bone) ReleaseParkedRound();
+    if (!bParkedRoundHidden)
+    {
+        // An existing hide belongs to another owner; never restore it.
+        if (class'VRBoneVisibility'.static.IsHiddenIndex(W.MySkelMesh, Index)) return;
+        ParkedRoundMesh = W.MySkelMesh; ParkedRoundIndex = Index;
+        ParkedRoundAsset = W.MySkelMesh.SkeletalMesh;
+        ParkedRoundBone = Bone;
+        bParkedRoundHidden = true;
+    }
+    class'VRBoneVisibility'.static.SetVisible(ParkedRoundMesh, Bone, false);
+}
+
 simulated function Update(VRHandsBridge B, KFWeapon W)
 {
     local bool bNowReloading;
     local float Elapsed;
+    local VRHandsBridge Root;
     if (B == None) return;
+    Root = B.RootBridge != None ? B.RootBridge : B;
     // Ahead of the guards below: they bail while Captured is still None.
     TryCapture();
+    UpdateParkedRound(B, W);
     if (W == None || W != Captured || W.bDeleteMe || W.MySkelMesh == None || HiddenBones.Length == 0)
     {
         Publish(B, 0);
         return;
     }
+    // Underbarrel reloads inherit Reloading, but keep their stock props and
+    // motion. Reveal explicitly even if a primary reload concealed them on
+    // the preceding frame; bReloading alone cannot distinguish that handoff.
+    if (W.IsInState('AltReloading'))
+    {
+        Reveal();
+        bReloading = true;
+        bPopActive = false;
+        Publish(B, 1.0);
+        return;
+    }
     // Physical reloads draw separate carried props. Never reveal stock
     // spares for one frame before the reload owner conceals them again.
-    if (B.bInteractiveReloads && B.HandInventory != None
-        && B.HandInventory.Input != None && B.HandInventory.Input.Reloads != None
-        && B.HandInventory.Input.Reloads.RejectedGun != W
-        && (class'VRReloadCatalog'.static.FindClass(W.Class) >= 0
-            || class'VRPumpCatalog'.static.Covers(W) || class'VRBreakAction'.static.Supported(W)))
+    if (Root.bInteractiveReloads && Root.HandInventory != None
+        && Root.HandInventory.Input != None && Root.HandInventory.Input.Reloads != None
+        && (Root.HandInventory.Input.Reloads.DualCylinderOwns(W)
+            || (Root.HandInventory.Input.Reloads.RejectedGun != W
+                && (class'VRReloadCatalog'.static.FindClass(W.Class) >= 0
+                    || class'VRPumpCatalog'.static.Covers(W) || class'VRBreakAction'.static.Supported(W)))))
     {
         Conceal();
         bReloading = W.IsInState('Reloading');
@@ -240,7 +400,9 @@ simulated function Update(VRHandsBridge B, KFWeapon W)
         bPopActive = false;
     }
     bReloading = bNowReloading;
-    if (!bReloading) { Publish(B, 0); return; }
+    // Stock animation/equip can restore visibility without a state change.
+    // Reassert the captured spare lease during idle/firing as well.
+    if (!bReloading) { Conceal(); Publish(B, 0); return; }
     if (!bPopActive) { Publish(B, 1.0); return; }
     Elapsed = W.WorldInfo.TimeSeconds - ReloadStartTime;
     if (Elapsed >= POP_SETTLE) { bPopActive = false; Publish(B, 1.0); return; }
@@ -249,6 +411,7 @@ simulated function Update(VRHandsBridge B, KFWeapon W)
 
 simulated function Suspend()
 {
+    ReleaseParkedRound();
     Reveal();
     HiddenBones.Length = 0;
     HiddenBoneIndices.Length = 0;
@@ -283,6 +446,11 @@ defaultproperties
     SpareBoneNames(12)=RW_Left_Magazine1
     SpareBoneNames(13)=RW_Right_Magazine1
     SpareBoneNames(14)=RW_Empty_Shell2
+    // Doomstick has four independent spent cases and a separate ejection
+    // prop. They follow the same stock-reload lease as its first two cases.
+    SpareBoneNames(15)=RW_Empty_Shell3
+    SpareBoneNames(16)=RW_Empty_Shell4
+    SpareBoneNames(17)=RW_SpeedloaderEject
     LoadedBoneNames(0)=RW_Magazine1
     LoadedBoneNames(1)=RW_Shell1
     LoadedBoneNames(2)=RW_Bullets1

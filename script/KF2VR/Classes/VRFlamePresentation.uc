@@ -110,12 +110,57 @@ static simulated function bool CancelAction(KFWeapon W)
     return !W.IsInState('SprayingFire');
 }
 
+// Stock TurnOnPilot attaches both pooled spray actors to MySkelMesh. When
+// that runs while the VR presenter has the mesh detached (a trader purchase
+// or a draw while stowed), SetBase fails and the sprays are left unbased at
+// their spawn point: no visible stream and off-aim spray until some later
+// re-equip. Rebase such orphans on their weapon, on the owned 1P socket when
+// the mesh is attached to it, otherwise on the weapon actor (a dedicated
+// server has no 1P mesh). Returns how many sprays now ride W.
+static simulated function int BindSprays(KFWeapon W)
+{
+    local KFSprayActor Spray;
+    local Object Archetype;
+    local int Count;
+    if (W == None || W.bDeleteMe || !W.IsA('KFWeap_FlameBase') || W.Instigator == None) return 0;
+    foreach W.BasedActors(class'KFSprayActor', Spray)
+    {
+        if (Spray.bDeleteMe) continue;
+        // A spray rebased on the bare weapon while its mesh was detached moves
+        // onto the muzzle socket once the mesh is back, or it stays off-aim.
+        if (W.MySkelMesh != None && W.MySkelMesh.Owner == W && Spray.BaseSkelComponent != W.MySkelMesh)
+        {
+            Spray.AttachToMesh(W, W.MySkelMesh, Spray.SpraySocketName);
+            if (Spray.BaseSkelComponent == W.MySkelMesh)
+                `log("KF2VR_FLAME phase=spray-socketed weapon=" $ W.Class @ "spray=" $ Spray.Name);
+        }
+        ++Count;
+    }
+    if (Count > 0) return Count;
+    // Each flame weapon spawns exactly two sprays from one archetype, owned
+    // by its pawn. Only orphans are adopted; based sprays belong elsewhere.
+    foreach W.Instigator.ChildActors(class'KFSprayActor', Spray)
+    {
+        if (Spray.bDeleteMe || Spray.Base != None) continue;
+        if (Archetype == None) Archetype = Spray.ObjectArchetype;
+        else if (Spray.ObjectArchetype != Archetype) continue;
+        if (W.MySkelMesh != None && W.MySkelMesh.Owner == W) Spray.AttachToMesh(W, W.MySkelMesh, Spray.SpraySocketName);
+        else Spray.SetBase(W);
+        if (Spray.Base == W && ++Count == 2) break;
+    }
+    // Says once per repair that orphaned sprays were rebased (#3).
+    if (Count > 0) `log("KF2VR_FLAME phase=sprays-rebound weapon=" $ W.Class @ "count=" $ Count
+        @ "on_mesh=" $ (W.MySkelMesh != None && W.MySkelMesh.Owner == W));
+    return Count;
+}
+
 static simulated function Update(VRHandsBridge B, KFWeapon W)
 {
     local KFSprayActor Spray;
     local PrimitiveComponent Component;
     local int I;
     if (W == None || !W.IsA('KFWeap_FlameBase')) return;
+    BindSprays(W);
     if (B.FlameRendering != None) B.FlameRendering.bWorldApplied = true;
     foreach W.BasedActors(class'KFSprayActor', Spray)
     {

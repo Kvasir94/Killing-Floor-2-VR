@@ -2,7 +2,6 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$GameRoot,
-    [Parameter(Mandatory=$true)][string]$Portal2Root,
     [Parameter(Mandatory=$true)][string]$Blender,
     [string]$Python = 'python',
     [string]$CMake = 'C:\Program Files\CMake\bin\cmake.exe'
@@ -36,7 +35,6 @@ try {
         $actual = (Get-FileHash (Join-Path $GameRoot ('Binaries/Win64/' + $binary[1])) -Algorithm SHA256).Hash
         if ($actual -ne $pin.binaries.($binary[0]).sha256) { throw "Unsupported game/SDK executable: $($binary[1])" }
     }
-    if (-not (Test-Path (Join-Path $Portal2Root 'portal2'))) { throw 'Portal2Root must name your installed Portal 2 directory.' }
     if (-not (Test-Path -LiteralPath $Blender -PathType Leaf)) { throw 'Blender executable is missing.' }
     if (-not (Test-Path -LiteralPath $CMake -PathType Leaf)) { throw 'CMake executable is missing.' }
     New-Item -ItemType Directory -Path 'build/source-build' -Force | Out-Null
@@ -64,16 +62,12 @@ try {
             Invoke-Generator 'tools/deadbolt/export_deadbolt.py'
         }
         if (-not (Test-Path 'build/hand-meshes/VRRipcord.json')) { Invoke-Generator 'tools/ripcord/export_ripcord.py' }
-        Invoke-Checked $Python @('tools/extract_portal_assets.py', $Portal2Root, 'extract/portal')
-        if (-not (Test-Path 'build/portal/meshes.json')) { Invoke-Generator 'tools/build_portal_meshes.py' }
-        Invoke-Checked $Python @('tools/prepare_portal_asset_config.py')
     } finally {
         if ($locked) { $assetLease.ReleaseMutex() }; $assetLease.Dispose()
     }
     # Each SDK/native builder obtains the shared lease itself; do not retain it
     # across child processes, which would deadlock against this parent.
     Invoke-Checked 'powershell.exe' @('-NoProfile','-ExecutionPolicy','Bypass','-File','tools/build-hand-assets.ps1','-GameRoot',$GameRoot,'-TimeoutSeconds','600')
-    Invoke-Checked 'powershell.exe' @('-NoProfile','-ExecutionPolicy','Bypass','-File','tools/build-portal-assets.ps1','-GameRoot',$GameRoot,'-TimeoutSeconds','600')
     Invoke-Checked 'powershell.exe' @('-NoProfile','-ExecutionPolicy','Bypass','-File','tools/build-multiplayer-native.ps1','-CMake',$CMake)
     Invoke-Checked 'powershell.exe' @('-NoProfile','-ExecutionPolicy','Bypass','-File','tools/build-multiplayer-scripts.ps1','-GameRoot',$GameRoot,'-IncludeVRClient')
     Invoke-Checked $Python @('-m','unittest','discover','-s','tools/multiplayer','-p','test_*.py','-q')

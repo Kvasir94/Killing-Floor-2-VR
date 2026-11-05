@@ -41,14 +41,14 @@ float4 PS():SV_TARGET { return float4(1,0,0,0.5); }
     ComPtr<ID3D11BlendState> stock;HR(device->CreateBlendState(&bd,&stock));
     const FLOAT factors[]{.2f,.3f,.4f,.5f};context->OMSetBlendState(stock.Get(),factors,0xffffffff);
     kf2vr::adapter::HudTextAlpha alpha;
-    const FLOAT backing[]{0,0,0,70.f/255};
-    const auto draw=[&](const Target& target) {
+    const auto draw=[&](const Target& target,float clearAlpha=70.f/255) {
         D3D11_TEXTURE2D_DESC d{};target.texture->GetDesc(&d);
         D3D11_VIEWPORT viewport{0,0,static_cast<float>(d.Width),static_cast<float>(d.Height),0,1};
         context->RSSetViewports(1,&viewport);
         auto* view=target.view.Get();
         context->OMSetRenderTargets(1,&view,nullptr);alpha.Targets(context.Get(),1,&view);
-        context->ClearRenderTargetView(view,backing);
+        const FLOAT clear[]{0,0,0,clearAlpha};
+        context->ClearRenderTargetView(view,clear);
         kf2vr::adapter::HudTextAlpha::DrawScope scope;alpha.BeforeDraw(context.Get(),scope);context->Draw(3,0);
     };
     const auto pixel=[&](const Target& source,unsigned expectedAlpha) {
@@ -106,7 +106,14 @@ float4 PS():SV_TARGET { return float4(1,0,0,0.5); }
     checkDraw(foreign,70,"foreign owner's texture is not modified");
     Test(!alpha.RegisterSelector(-1,&inputOwner,&inputOwner,768,768,context.Get(),foreign.texture.Get()),"negative hand is rejected");
     Test(!alpha.RegisterSelector(2,&inputOwner,&inputOwner,768,768,context.Get(),foreign.texture.Get()),"out-of-range hand is rejected");
-    Test(!alpha.RegisterPanel(12,&panelOwner,&panelOwner,768,768,context.Get(),foreign.texture.Get()),"HUD indices cannot access selector slots");
+    Test(!alpha.RegisterPanel(kf2vr::adapter::HudTextAlpha::PanelCount,&panelOwner,&panelOwner,768,768,context.Get(),foreign.texture.Get()),"HUD indices cannot access selector slots");
+    auto pouchLeft=makeTarget(800,320),pouchRight=makeTarget(800,320);
+    Test(alpha.RegisterPanel(5,&panelOwner,&panelOwner,800,320,context.Get(),pouchLeft.texture.Get()),"first pouch registers its exact target");
+    Test(alpha.RegisterPanel(12,&panelOwner,&panelOwner,800,320,context.Get(),pouchRight.texture.Get()),"second pouch registers independently of selector slots");
+    checkDraw(pouchLeft,163,"first pouch receives alpha correction");
+    checkDraw(pouchRight,163,"second pouch receives alpha correction");
+    checkDraw(left,163,"pouch registration preserves left selector");
+    checkDraw(right,163,"pouch registration preserves right selector");
     Test(!alpha.RegisterSelector(0,&inputOwner,&inputOwner,640,383,context.Get(),foreign.texture.Get()),"selector Canvas dimensions must match exactly");
     checkDraw(foreign,70,"invalid slot and Canvas registrations leave unrelated textures alone");
     Test(!alpha.RegisterSelector(0,&inputOwner,&inputOwner,768,768,context.Get(),other.texture.Get()),"selector cannot register a differently sized resource");
@@ -128,6 +135,8 @@ float4 PS():SV_TARGET { return float4(1,0,0,0.5); }
     checkDraw(newRight,70,"input-owner change releases the old right selector");
     checkDraw(newLeft,163,"new owner's selector receives alpha correction");
     checkDraw(panel,163,"input-owner change leaves HUD targets registered");
+    checkDraw(pouchLeft,163,"input-owner change preserves first pouch target");
+    checkDraw(pouchRight,163,"input-owner change preserves second pouch target");
     Test(!alpha.RegisterSelector(0,&newInputOwner,nullptr,768,768,context.Get(),foreign.texture.Get()),"missing current input owner rejects stale callbacks");
     checkDraw(newLeft,70,"loss of input ownership removes the previous selector correction");
     {
@@ -150,5 +159,32 @@ float4 PS():SV_TARGET { return float4(1,0,0,0.5); }
             Test(scope.context==nullptr,"multiple colour targets remain unchanged");
         }
     }
+    int popupOwner=0,newPopupOwner=0;
+    auto popup=makeTarget(256,64),secondPopup=makeTarget(256,64),foreignPopup=makeTarget(256,64);
+    Test(!alpha.RegisterPopup(0,nullptr,nullptr,256,64,context.Get(),popup.texture.Get()),"missing popup pool cannot own a texture");
+    checkDraw(popup,70,"unregistered damage texture retains stock alpha");
+    Test(alpha.RegisterPopup(0,&popupOwner,&popupOwner,256,64,context.Get(),popup.texture.Get()),"owned damage popup registers its exact target");
+    checkDraw(popup,163,"damage glyphs gain coverage alpha with unchanged colour");
+    draw(popup,0);Test(pixel(popup,128),"damage glyph alpha is visible over a fully transparent popup target");
+    Test(alpha.RegisterPopup(23,&popupOwner,&popupOwner,256,64,context.Get(),secondPopup.texture.Get()),"last damage slot registers independently");
+    checkDraw(secondPopup,163,"last damage slot receives alpha correction");
+    checkDraw(panel,163,"damage registration preserves the status HUD");
+    checkDraw(pouchRight,163,"damage registration preserves pouch text");
+    checkDraw(foreignPopup,70,"same-size foreign damage texture is untouched");
+    Test(!alpha.RegisterPopup(1,&foreignOwner,&popupOwner,256,64,context.Get(),foreignPopup.texture.Get()),"foreign pool cannot claim a popup");
+    Test(!alpha.RegisterPopup(-1,&popupOwner,&popupOwner,256,64,context.Get(),foreignPopup.texture.Get()),"negative damage slot is rejected");
+    Test(!alpha.RegisterPopup(24,&popupOwner,&popupOwner,256,64,context.Get(),foreignPopup.texture.Get()),"damage indices stay inside their pool");
+    Test(!alpha.RegisterPopup(1,&popupOwner,&popupOwner,1024,512,context.Get(),panel.texture.Get()),"damage Canvas dimensions must match");
+    Test(!alpha.RegisterPopup(0,&popupOwner,&popupOwner,256,64,context.Get(),other.texture.Get()),"resource dimension mismatch rejects damage target");
+    checkDraw(popup,70,"failed damage capture releases the old target");
+    Test(alpha.RegisterPopup(0,&popupOwner,&popupOwner,256,64,context.Get(),popup.texture.Get()),"next popup draw recovers after failed capture");
+    checkDraw(popup,163,"recovered popup has visible glyph alpha");
+    Test(alpha.RegisterPopup(0,&newPopupOwner,&newPopupOwner,256,64,context.Get(),foreignPopup.texture.Get()),"replacement popup pool can register");
+    checkDraw(popup,70,"pool replacement removes old first-slot ownership");
+    checkDraw(secondPopup,70,"pool replacement removes all old popup ownership");
+    checkDraw(foreignPopup,163,"new pool's damage glyphs receive alpha");
+    checkDraw(panel,163,"popup pool replacement preserves unrelated HUD alpha");
+    Test(!alpha.RegisterPopup(0,&newPopupOwner,nullptr,256,64,context.Get(),foreignPopup.texture.Get()),"loss of popup pool rejects stale callbacks");
+    checkDraw(foreignPopup,70,"lost pool cannot retain glyph correction");
     context->ClearState();std::printf("HUD alpha checks=%d failures=%d\n",checks,failures);return failures?1:0;
 }

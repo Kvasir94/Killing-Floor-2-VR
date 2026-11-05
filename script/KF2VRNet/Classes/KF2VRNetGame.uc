@@ -9,16 +9,20 @@ var bool bAllowSyntheticPoses;
 var bool bAllowMotionReplay;
 var bool bDiagnosticAutoReady;
 var bool bDiagnostic9mm;
+var bool bDiagnostic9mmReload;
 var int DiagnosticExpectedClients;
 var bool bDiagnosticRecovery;
 // Ambient zeds are the one part of a survival map an unattended fixture cannot
 // negotiate with. A measurement fixture that is not measuring combat asks for
 // this and stops competing with the wave.
 var bool bDiagnosticQuietZeds;
+var bool bDiagnosticSharingReplay;
 var config bool bServerAdapter;
 var config bool bIndependentWeapons;
 var config bool bInventoryFocusEnabled;
 var config bool bMultiplayerZedGrabAllowed;
+// Host permission for the gravity pull: on unless the URL says VRGravityPull=0.
+var bool bGravityPullAllowed;
 var config float InventoryFocusScale;
 var private KF2VRNetFocusState InventoryFocusState;
 // Teammate fist bumps and high fives; network sessions only, never solo.
@@ -26,6 +30,8 @@ var private KF2VRNetHandContact HandContact;
 var private bool bInventoryFocusApplied;
 var private float AppliedInventoryFocusScale;
 var int DiagnosticLifecycle;
+var float NextGravityPullCheck;
+var KF2VRNetWeaponBlockAuthority WeaponBlocks;
 
 struct WeaponDamageAudit
 {
@@ -35,6 +41,44 @@ struct WeaponDamageAudit
     var float NextLog;
 };
 var private array<WeaponDamageAudit> WeaponDamageAudits;
+
+// Called only by the pinned native stock attack/damage ingress. No network RPC
+// accepts a claimed contact or cancellation from a client.
+function NativeWeaponBlockAttack(KFPawn_Monster Zed)
+{
+    local KF2VRNetPlayerController PC;
+    if(!class'VRExperimentalPolicy'.static.InteractionsEnabled() || Role!=ROLE_Authority || Zed==None) return;
+    if(WeaponBlocks==None)
+    {
+        foreach WorldInfo.AllControllers(class'KF2VRNetPlayerController',PC)
+            if(PC.NetChannel!=None && PC.NetChannel.ExperimentalInteractionsAllowed()
+                && PC.NetChannel.bHandshakeAccepted && PC.NetChannel.bVRTrackingEnabled
+                && !PC.NetChannel.bSyntheticEnabled)
+            { WeaponBlocks=Spawn(class'KF2VRNetWeaponBlockAuthority'); break; }
+    }
+    if(WeaponBlocks!=None) WeaponBlocks.BeginAttack(Zed);
+}
+
+function int NativeWeaponBlockDamage(KFPawn_Monster Zed,KFMeleeHelperAI Helper,out int PendingBefore,int DirectDamage)
+{
+    PendingBefore=-1;
+    return WeaponBlocks!=None ? WeaponBlocks.BeforeDamage(Zed,Helper,PendingBefore,DirectDamage==1) : 0;
+}
+
+function NativeWeaponBlockQueued(KFPawn_Monster Zed,KFMeleeHelperAI Helper,int Serial,int FirstPending)
+{
+    if(WeaponBlocks!=None) WeaponBlocks.TagQueued(Zed,Helper,Serial,FirstPending);
+}
+
+function int NativeWeaponBlockDelayed(KFMeleeHelperAI Helper,int Index)
+{
+    return WeaponBlocks!=None ? WeaponBlocks.SuppressDelayed(Helper,Index) : 0;
+}
+
+function NativeWeaponBlockDelayedComplete(KFMeleeHelperAI Helper,int Index)
+{
+    if(WeaponBlocks!=None) WeaponBlocks.CompleteDelayed(Helper,Index);
+}
 
 // Observe the stock scoring callback after normal damage handling. DamageType
 // identifies delayed projectiles correctly even after the shooter changes guns.
@@ -54,8 +98,8 @@ function ScoreDamage(int DamageAmount, int HealthBeforeDamage, Controller Instig
     if (Victim != None && Shooter.Pawn != None && Shooter.NetChannel != None
         && Victim.GetTeamNum() != Shooter.Pawn.GetTeamNum() && HealthBeforeDamage > 0)
         Shooter.NetChannel.NotifyDamagePopup(Min(DamageAmount, HealthBeforeDamage),
-            Victim.Location + vect(0,0,1) * Victim.GetCollisionHeight() * 1.15 * Victim.CurrentBodyScale,
-            class<KFDamageType>(DamageType), Victim.LastHeadShotReceivedTime == WorldInfo.TimeSeconds);
+            class'VRDamagePopups'.static.DamageLocation(Victim),
+            class<KFDamageType>(DamageType), Victim.HitFxInfo.HitBoneIndex == 0);
     for (I=0; I<WeaponDamageAudits.Length; ++I)
         if (WeaponDamageAudits[I].Shooter == InstigatedBy && WeaponDamageAudits[I].Kind == DamageType) break;
     if (I == WeaponDamageAudits.Length)
@@ -88,15 +132,24 @@ function string GetFullGameModePath()
 
 event InitGame(string Options, out string ErrorMessage)
 {
+    local KF2VRNetSonicBlasts SonicBlasts;
     Super.InitGame(Options, ErrorMessage);
+    class'VRHUDSafeWrapper'.static.ConfigureGame(self);
+    SonicBlasts = new(self) class'KF2VRNetSonicBlasts';
+    SonicBlasts.Apply();
     BreacherPackage = ParseOption(Options, "BreacherPackage");
     BreacherProtocol = ParseOption(Options, "BreacherProtocol");
+    if (!class'VRExperimentalPolicy'.static.OptionalContentEnabled()
+        && (BreacherPackage != "" || InStr(Caps(Options), "KF2BREACHER.") >= 0))
+        ErrorMessage = "Optional experimental content is parked in this stable candidate.";
     if (BreacherPackage != "" && (Len(BreacherPackage) != 64 || BreacherProtocol != "1"))
         ErrorMessage = "Breacher requires matching experimental protocol/content.";
     if (BreacherPackage == "" && BreacherProtocol != "")
         ErrorMessage = "Breacher package contract is missing.";
-    if (HasOption(Options, "VRMultiplayerGrabs"))
-        bMultiplayerZedGrabAllowed = ParseOption(Options, "VRMultiplayerGrabs") == "1";
+    // Ordinary Zed grabs are independent of parked experimental interactions.
+    bMultiplayerZedGrabAllowed = class'VRExperimentalPolicy'.static.ZedGrabbingEnabled()
+        && (!HasOption(Options, "VRMultiplayerGrabs") || ParseOption(Options, "VRMultiplayerGrabs") == "1");
+    bGravityPullAllowed = !HasOption(Options, "VRGravityPull") || ParseOption(Options, "VRGravityPull") != "0";
     if (HasOption(Options, "VRInventoryFocus"))
         bInventoryFocusEnabled = ParseOption(Options, "VRInventoryFocus") == "1";
     // Config properties are not imported from defaultproperties by the SDK.
@@ -111,8 +164,10 @@ event InitGame(string Options, out string ErrorMessage)
     bDiagnosticAutoReady = bAllowSyntheticPoses
         && ParseOption(Options, "VRNetAutoReady") == "1";
     bDiagnostic9mm = bAllowSyntheticPoses && ParseOption(Options, "VRNet9mm") == "1";
+    bDiagnostic9mmReload = bAllowSyntheticPoses && ParseOption(Options, "VRNet9mmReload") == "1";
     bDiagnosticRecovery = bAllowSyntheticPoses && ParseOption(Options, "VRNetRecovery") == "1";
     bDiagnosticQuietZeds = bAllowSyntheticPoses && ParseOption(Options, "VRNetQuietZeds") == "1";
+    bDiagnosticSharingReplay = bAllowSyntheticPoses && ParseOption(Options, "VRNetSharingReplay") == "1";
     if (ParseOption(Options, "VRNetServerAdapter") != "")
         bServerAdapter = ParseOption(Options, "VRNetServerAdapter") == "1";
     if (ParseOption(Options, "VRNetDualWeapons") != "")
@@ -165,7 +220,13 @@ function bool DiagnosticClientsReady()
 
 event PostBeginPlay()
 {
+    local KF2VRNetSharingReplay SharingReplay;
     Super.PostBeginPlay();
+    if (bDiagnosticSharingReplay && WorldInfo.NetMode == NM_DedicatedServer)
+    {
+        SharingReplay=Spawn(class'KF2VRNetSharingReplay',self);
+        if (SharingReplay!=None) { SharingReplay.bCoordinator=true; SharingReplay.RemoteRole=ROLE_None; }
+    }
     // Clients append the same entries (KF2VRNetPlayerController).
     class'VRTraderCatalog'.static.Register(KFGameReplicationInfo(GameReplicationInfo));
     if (Role == ROLE_Authority && WorldInfo.NetMode != NM_Standalone)
@@ -195,7 +256,34 @@ function Tick(float DeltaTime)
 {
     Super.Tick(DeltaTime);
     if (Role == ROLE_Authority)
+    {
         UpdateInventoryFocus();
+        UpdateGravityPullChannels();
+    }
+}
+
+// One controller-owned gravity-pull channel per player, carrying the host
+// permission. Checked about once a second; travel and late joins are covered.
+function UpdateGravityPullChannels()
+{
+    local PlayerController PC;
+    local VRGravityPullChannel C;
+    local bool bHas;
+    if (WorldInfo.TimeSeconds < NextGravityPullCheck) return;
+    NextGravityPullCheck = WorldInfo.TimeSeconds + 1.0;
+    foreach WorldInfo.AllControllers(class'PlayerController', PC)
+    {
+        bHas = false;
+        foreach DynamicActors(class'VRGravityPullChannel', C)
+            if (C.Owner == PC)
+            {
+                bHas = true;
+                if (C.bHostAllowed != bGravityPullAllowed) { C.bHostAllowed = bGravityPullAllowed; C.bForceNetUpdate = true; }
+            }
+        if (bHas) continue;
+        C = Spawn(class'VRGravityPullChannel', PC);
+        if (C != None) C.bHostAllowed = bGravityPullAllowed;
+    }
 }
 
 function UpdateInventoryFocus()
@@ -234,6 +322,8 @@ function UpdateInventoryFocus()
 
 event Destroyed()
 {
+    if(WeaponBlocks!=None) WeaponBlocks.Destroy();
+    WeaponBlocks=None;
     if (Role == ROLE_Authority)
     {
         if (bInventoryFocusApplied

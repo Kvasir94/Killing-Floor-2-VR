@@ -28,8 +28,24 @@ var private float PreviewStrength, PreviousPreviewTick;
 var bool bIndependentWeapons;
 var bool bDiagnosticVisuals;
 var NetWeaponVisual LeftWeapon, RightWeapon;
+var int ShieldHandToken;
+var int ShieldSkinId;
+var private KF2VRNetRemoteShield RemoteShield;
 var private KF2VRNetRemoteWeapon RemoteWeapons[2];
 var private KF2VRNetRemoteBody RemoteBody;
+var private KF2VRNetRemoteLight RemoteLight;
+var private NetPoseSnapshot FlashlightFrame;
+var private bool bHaveFlashlightFrame;
+var private ParticleSystemComponent HeldGrenade;
+var private KF2VRNetReloadProps ReloadProps;
+var private class<KFProj_Grenade> HeldGrenadeClass;
+var private KF2VRNetWorldPresentation WorldPresentation;
+var repnotify NetWorldJournal WorldActions;
+var private array<NetWorldTransition> WorldJournal;
+var private array<float> WorldJournalTimes;
+var private int WorldTransitionSerial;
+var private NetPoseSnapshot LastPresentedFrame;
+var private bool bHavePresentedFrame;
 var private KFWeaponAttachment HiddenStockAttachment;
 var private bool bStockWasHidden;
 var bool bPresentationReady;
@@ -44,33 +60,77 @@ replication
 {
     if (Role == ROLE_Authority)
         TargetPawn, WorldEpoch, ConnectionEpoch, PawnEpoch, CalibrationEpoch, Snapshot,
-        bIndependentWeapons, LeftWeapon, RightWeapon;
+        bIndependentWeapons, WorldActions;
 }
 
-function NetWeaponVisual SampleWeapon(KFWeapon W, int Id, NetWeaponVisual Previous)
+function NetWeaponVisual SampleWeapon(KFWeapon W, int Id, KF2VRNetItemRuntime Runtime)
 {
     local NetWeaponVisual Result;
     if (W == None || W.bDeleteMe) return Result;
     Result.WeaponClass = W.Class;
     Result.ItemId = Id;
+    Result.SkinId = class'VRWeaponPair'.static.VisibleSkin(W);
     Result.Ammo = W.AmmoCount[0];
-    if (Previous.ItemId == Id)
-    {
-        Result.ShotSequence = Previous.ShotSequence;
-        if (Result.Ammo < Previous.Ammo) Result.ShotSequence = (Result.ShotSequence + 1) & 65535;
-    }
+    if (Runtime != None) Result.ShotSequence = Runtime.ShotSequence;
     Result.WeaponState = W.GetWeaponStateId();
     Result.ReloadStage = W.ReloadStatus;
     Result.AnimRate = W.GetThirdPersonAnimRate();
-    Result.FireMode = W.CurrentFireMode;
+    Result.FireMode = Runtime != None ? Runtime.LastShotFireMode : W.CurrentFireMode;
     return Result;
 }
 
-function PublishWeapons(bool bEnabled, KFWeapon Left, int LeftId, KFWeapon Right, int RightId)
+function PublishWeapons(bool bEnabled, KFWeapon Left, int LeftId, KFWeapon Right, int RightId,
+    KF2VRNetHeldInventory Inventory)
 {
     bIndependentWeapons = bEnabled;
-    LeftWeapon = SampleWeapon(bEnabled ? Left : None, LeftId, LeftWeapon);
-    RightWeapon = SampleWeapon(bEnabled ? Right : None, RightId, RightWeapon);
+    LeftWeapon = SampleWeapon(bEnabled ? Left : None, LeftId, Inventory.RuntimeFor(Left));
+    RightWeapon = SampleWeapon(bEnabled ? Right : None, RightId, Inventory.RuntimeFor(Right));
+    ShieldHandToken=bEnabled ? Inventory.Snapshot.ShieldHandToken : 0;
+    ShieldSkinId=ShieldHandToken>0 ? class'VRWeaponPair'.static.VisibleSkin(Inventory.HeldShield()) : 0;
+    if (KFWeap_SMG_G18(Left)!=None && (Inventory.Snapshot.CarryMask & 1)!=0) LeftWeapon=SampleWeapon(None,0,None);
+    if (KFWeap_SMG_G18(Right)!=None && (Inventory.Snapshot.CarryMask & 2)!=0) RightWeapon=SampleWeapon(None,0,None);
+}
+
+function NetWorldTransition MakeWorldTransition(int Hand, int Generation, int Action,
+    int Request, int ItemId, VRWorldDropGun Prop, optional int ContactRequest)
+{
+    local NetWorldTransition T;
+    local vector X, Y, Z;
+    local StaticMeshComponent M;
+    if (Prop == None || Prop.MyMeshComp == None) return T;
+    M = StaticMeshComponent(Prop.MyMeshComp);
+    if (M == None || M.StaticMesh == None) return T;
+    T.Hand = Hand; T.Generation = Generation; T.Action = Action;
+    T.Request = Request; T.ItemId = ItemId; T.ContactRequest = ContactRequest;
+    T.ReleaseOwner = Prop.DropOwner; T.Prop = Prop;
+    T.ReleaseRequestId = Prop.ReleaseRequestId; T.ReleasedItemId = Prop.ReleasedItemId;
+    T.WeaponClass = class<KFWeapon>(Prop.InventoryClass); T.SkinId = Prop.SkinItemId;
+    T.PickupMesh = M.StaticMesh;
+    T.Position = TransformVector(M.LocalToWorld, vect(0,0,0));
+    X = TransformNormal(M.LocalToWorld, vect(1,0,0));
+    Y = TransformNormal(M.LocalToWorld, vect(0,1,0));
+    Z = TransformNormal(M.LocalToWorld, vect(0,0,1));
+    T.Scale3D.X = VSize(X); T.Scale3D.Y = VSize(Y); T.Scale3D.Z = VSize(Z);
+    T.Rotation = OrthoRotation(Normal(X), Normal(Y), Normal(Z));
+    T.Linear = Prop.Velocity;
+    if (M.BodyInstance != None)
+    {
+        T.Linear = M.BodyInstance.Velocity;
+        T.Angular = M.BodyInstance.GetUnrealWorldAngularVelocity();
+    }
+    return T;
+}
+
+function PublishWorldTransition(NetWorldTransition T)
+{
+    if (Role != ROLE_Authority || (T.Action != 2 && (T.Hand < 0 || T.Hand > 1)) || T.WeaponClass == None
+        || T.ReleaseOwner == None || T.ReleaseRequestId <= 0) return;
+    WorldTransitionSerial = (WorldTransitionSerial + 1) & 65535;
+    T.Serial = WorldTransitionSerial;
+    WorldJournal.AddItem(T); WorldJournalTimes.AddItem(WorldInfo.RealTimeSeconds);
+    if (WorldJournal.Length > 8) { WorldJournal.Remove(0, 1); WorldJournalTimes.Remove(0, 1); }
+    WorldActions.Serial = WorldTransitionSerial; WorldActions.Entries = WorldJournal;
+    bForceNetUpdate = true;
 }
 
 // Presentation anchor for the sampled offsets: the simulated pawn's collision
@@ -105,14 +165,84 @@ simulated function RestoreStockAttachment()
     HiddenStockAttachment = None;
 }
 
+simulated function ReleaseHeldGrenade()
+{
+    if (HeldGrenade != None)
+    {
+        HeldGrenade.DeactivateSystem();
+        DetachComponent(HeldGrenade);
+    }
+    HeldGrenade = None;
+    HeldGrenadeClass = None;
+}
+
+// Visual only: the actual projectile exists only after the reliable release.
+// Use the owner's authored transform plus the same rig corrections as guns.
+simulated function UpdateHeldGrenade(NetPoseSnapshot Frame, bool bFresh, vector Root, rotator Basis)
+{
+    local class<KFProj_Grenade> GrenadeClass;
+    local int Hand;
+    local bool bNew;
+    Hand = int(Frame.Sample.GrenadeHand) - 1;
+    GrenadeClass = Frame.Sample.GrenadeClass;
+    if (!bFresh || Frame.Motion.bEnabled || Hand < 0 || Hand > 1
+        || GrenadeClass == None || GrenadeClass.default.ProjFlightTemplate == None
+        // Clear immediately on the latest release/tracking loss, even if a
+        // weapon journal boundary temporarily holds an older display frame.
+        || DisplaySnapshot.Sample.GrenadeHand != Frame.Sample.GrenadeHand
+        || DisplaySnapshot.Sample.GrenadeClass != GrenadeClass
+        || (DisplaySnapshot.Sample.TrackingFlags & (1 | (2 << Hand))) != (1 | (2 << Hand))
+        || (Frame.Sample.TrackingFlags & (1 | (2 << Hand))) != (1 | (2 << Hand))
+        || RemoteBody == None || !RemoteBody.IsReady()
+        || (Hand == 0 ? Frame.LeftWeapon.WeaponClass : Frame.RightWeapon.WeaponClass) != None)
+    { ReleaseHeldGrenade(); return; }
+    if (HeldGrenadeClass != GrenadeClass) ReleaseHeldGrenade();
+    if (HeldGrenade == None)
+    {
+        HeldGrenade = new(self) class'ParticleSystemComponent';
+        HeldGrenade.bAutoActivate = false;
+        HeldGrenade.SetTemplate(GrenadeClass.default.ProjFlightTemplate);
+        HeldGrenade.SetAbsolute(true, true, true);
+        HeldGrenade.SetScale(class'VRChestGrenade'.static.GrenadeDisplayScale(GrenadeClass));
+        HeldGrenade.SetOnlyOwnerSee(false);
+        HeldGrenade.SetOwnerNoSee(false);
+        // The replicated pose actor itself is hidden; this prop is visible.
+        HeldGrenade.SetIgnoreOwnerHidden(true);
+        HeldGrenade.SetHidden(false);
+        HeldGrenade.SetActorCollision(false, false);
+        HeldGrenade.SetTraceBlocking(false, false);
+        HeldGrenade.bUpdateComponentInTick = true;
+        AttachComponent(HeldGrenade);
+        HeldGrenadeClass = GrenadeClass;
+        bNew = true;
+    }
+    HeldGrenade.SetTranslation(Root + (Frame.Sample.GrenadePosition >> Basis)
+        + RemoteBody.HandCorrection + RemoteBody.ReachShift[Hand]);
+    HeldGrenade.SetRotation(Normalize(Basis + Frame.Sample.GrenadeRotation));
+    HeldGrenade.ForceUpdate(true);
+    if (bNew) HeldGrenade.ActivateSystem();
+}
+
+simulated function SkeletalMeshComponent ReleasedWeaponMesh(int ItemId)
+{
+    local int I;
+    for (I = 0; I < 2; ++I)
+        if (RemoteWeapons[I] != None && RemoteWeapons[I].Previous.ItemId == ItemId
+            && RemoteWeapons[I].bFirstPersonMesh && RemoteWeapons[I].Attachment != None)
+            return RemoteWeapons[I].Attachment.WeapMesh;
+    return None;
+}
+
 simulated function UpdateRemoteWeapons(bool bFresh)
 {
     local KF2VRNetPlayerController PC;
-    local bool bWanted, bAnyVisualRequested, bAllVisualsReady, bVisualReady, bSelf;
+    local bool bWanted, bAnyVisualRequested, bAllVisualsReady, bVisualReady, bSelf, bUseWeaponRoot;
     local int I;
     local NetPoseSnapshot Frame;
     local NetWeaponVisual Visual;
-    local vector Muzzle, Root;
+    local int PumpCode;
+    local array<NetMechanismPart> Mechanisms;
+    local vector Muzzle, Root, CatchHandCorrection;
     local rotator Aim, Basis;
     bWanted = bIndependentWeapons && TargetPawn != None && !TargetPawn.bDeleteMe && TargetPawn.Health > 0;
     bPresentationReady = false;
@@ -128,6 +258,13 @@ simulated function UpdateRemoteWeapons(bool bFresh)
     }
     if (!bWanted)
     {
+        if (RemoteShield!=None) RemoteShield.Destroy();
+        RemoteShield=None;
+        ReleaseHeldGrenade();
+        if (ReloadProps != None) ReloadProps.Shutdown(self);
+        ReloadProps = None;
+        if (WorldPresentation != None) WorldPresentation.Destroy();
+        WorldPresentation = None;
         if (RemoteBody != None) RemoteBody.Destroy();
         RemoteBody = None;
         for (I = 0; I < 2; ++I)
@@ -139,6 +276,28 @@ simulated function UpdateRemoteWeapons(bool bFresh)
         return;
     }
     Frame = SamplePreview();
+    if (!bSelf && !Frame.Motion.bEnabled && WorldPresentation == None)
+    {
+        WorldPresentation = Spawn(class'KF2VRNetWorldPresentation', self);
+        if (WorldPresentation != None) WorldPresentation.PoseOwner = self;
+    }
+    // Journal and snapshots are properties of one actor but may span network
+    // bunches. Hold the last complete presentation until its event boundary
+    // is available; never consume the new held identity ahead of its release.
+    if (!Frame.Motion.bEnabled
+        && (class'KF2VRNetTypes'.static.IsNewerSequence(Frame.WorldTransitionSerial, WorldActions.Serial)
+            || (WorldPresentation != None && !WorldPresentation.CanPresentFrame(Frame, WorldActions.Entries))))
+    {
+        if (!bHavePresentedFrame) { RestoreStockAttachment(); return; }
+        Frame = LastPresentedFrame;
+    }
+    else { LastPresentedFrame = Frame; bHavePresentedFrame = true; }
+    FlashlightFrame = Frame;
+    bHaveFlashlightFrame = true;
+    if (!bSelf && !Frame.Motion.bEnabled)
+    {
+        if (WorldPresentation != None) WorldPresentation.UpdateFrame(Frame, bFresh, WorldActions.Entries);
+    }
     if (Frame.Motion.bEnabled && Frame.Motion.ReplayId != PreviousMotionReplayId)
     {
         for (I = 0; I < 2; ++I) { if (RemoteWeapons[I] != None) RemoteWeapons[I].Destroy(); RemoteWeapons[I] = None; }
@@ -151,11 +310,29 @@ simulated function UpdateRemoteWeapons(bool bFresh)
         if (RemoteBody != None) RemoteBody.PoseOwner = self;
     }
     if (RemoteBody != None) RemoteBody.UpdateBody(Frame, bFresh);
+    if (Frame.ShieldHandToken>0 && RemoteShield==None) RemoteShield=Spawn(class'KF2VRNetRemoteShield',self);
+    if (RemoteShield!=None)
+    {
+        bAnyVisualRequested=bAnyVisualRequested || Frame.ShieldHandToken>0;
+        I=Frame.ShieldHandToken-1;
+        Muzzle=I==0 ? Frame.Sample.LeftMuzzlePosition : Frame.Sample.MuzzlePosition;
+        Aim=I==0 ? Frame.Sample.LeftMuzzleRotation : Frame.Sample.MuzzleRotation;
+        Muzzle=Muzzle >> Basis;
+        if (RemoteBody!=None && I>=0 && I<2) Muzzle+=RemoteBody.HandCorrection+RemoteBody.ReachShift[I];
+        RemoteShield.UpdateShield(Root+Muzzle,Normalize(Basis+Aim),bFresh && I>=0 && I<2
+            && (Frame.Sample.TrackingFlags & (2<<I))!=0 && (Frame.Sample.PresentationFlags & (I==0 ? 2 : 1))!=0,Frame.ShieldSkinId);
+    }
+    UpdateHeldGrenade(Frame, bFresh, Root, Basis);
+    Mechanisms = CurrentMechanisms(Frame);
+    if (ReloadProps == None && Frame.Sample.ReloadProps.Length > 0)
+        ReloadProps = new(self) class'KF2VRNetReloadProps';
+    if (ReloadProps != None) ReloadProps.Update(self, Frame, DisplaySnapshot, bFresh, Root, Basis, RemoteBody);
     bAllVisualsReady = true;
+    if (Frame.ShieldHandToken>0) bAllVisualsReady=RemoteShield!=None && RemoteShield.Shield!=None;
     for (I = 0; I < 2; ++I)
     {
         Visual = Frame.Motion.bEnabled ? (I == 0 ? Frame.Motion.LeftWeapon : Frame.Motion.RightWeapon)
-            : (I == 0 ? LeftWeapon : RightWeapon);
+            : (I == 0 ? Frame.LeftWeapon : Frame.RightWeapon);
         if (Visual.WeaponClass != None) bAnyVisualRequested = true;
         if (RemoteWeapons[I] == None && Visual.WeaponClass != None)
         {
@@ -173,16 +350,32 @@ simulated function UpdateRemoteWeapons(bool bFresh)
         }
         Muzzle = I == 0 ? Frame.Sample.LeftMuzzlePosition : Frame.Sample.MuzzlePosition;
         Aim = I == 0 ? Frame.Sample.LeftMuzzleRotation : Frame.Sample.MuzzleRotation;
+        bUseWeaponRoot = RemoteWeapons[I].bFirstPersonMesh && !Frame.Motion.bEnabled
+            && (Frame.Sample.WeaponRootFlags & (I == 0 ? 2 : 1)) != 0
+            && !class'VRWeaponBlockShapes'.static.PublishesRoot(class'VRWeaponBlockShapes'.static.ProfileClass(Visual.WeaponClass));
+        if (bUseWeaponRoot)
+        {
+            Muzzle = I == 0 ? Frame.Sample.LeftWeaponRootPosition : Frame.Sample.RightWeaponRootPosition;
+            Aim = I == 0 ? Frame.Sample.LeftWeaponRootRotation : Frame.Sample.RightWeaponRootRotation;
+        }
         // The body's head-fit shift and the arm's reach limit (a player who
         // reaches farther than the model's arms), so the gun stays in the
         // drawn hand instead of floating ahead of it.
         if (RemoteBody != None) Muzzle = (Muzzle >> Basis) + RemoteBody.HandCorrection + RemoteBody.ReachShift[I];
         else Muzzle = Muzzle >> Basis;
+        PumpCode = I == 0 ? (Frame.Sample.LeftPumpLo | (Frame.Sample.LeftPumpHi << 8))
+            : (Frame.Sample.RightPumpLo | (Frame.Sample.RightPumpHi << 8));
         bVisualReady = RemoteWeapons[I].UpdateVisual(Visual, Root + Muzzle,
             Normalize(Basis + Aim), bFresh
                 && (!Frame.Motion.bEnabled || (RemoteBody != None && RemoteBody.IsTrackedPoseReady()))
                 && (Frame.Sample.TrackingFlags & (2 << I)) != 0
-                && (Frame.Sample.PresentationFlags & (I == 0 ? 2 : 1)) != 0);
+                && (Frame.Sample.PresentationFlags & (I == 0 ? 2 : 1)) != 0, PumpCode, Mechanisms, bUseWeaponRoot);
+        if (WorldPresentation != None)
+        {
+            CatchHandCorrection = vect(0,0,0);
+            if (RemoteBody != None) CatchHandCorrection = RemoteBody.HandCorrection + RemoteBody.ReachShift[I];
+            WorldPresentation.BlendCaughtWeapon(RemoteWeapons[I], Visual, Frame, Root, Basis, CatchHandCorrection);
+        }
         if (Visual.WeaponClass != None && !bVisualReady) bAllVisualsReady = false;
     }
     bPresentationReady = bFresh && RemoteBody != None && RemoteBody.IsReady() && bAllVisualsReady;
@@ -191,10 +384,14 @@ simulated function UpdateRemoteWeapons(bool bFresh)
     if (bSelf)
         foreach WorldInfo.LocalPlayerControllers(class'KF2VRNetPlayerController', PC)
             if (PC.Pawn == TargetPawn && PC.NativeSelfViewActive == 0)
+            {
+                if (RemoteShield!=None && RemoteShield.Shield!=None) RemoteShield.Shield.SetHidden(true);
+                if (ReloadProps != None) ReloadProps.Hide();
                 for (I = 0; I < 2; ++I)
                     if (RemoteWeapons[I] != None && RemoteWeapons[I].Attachment != None)
                         RemoteWeapons[I].Attachment.WeapMesh.SetHidden(true);
-    if (!bAnyVisualRequested || (!bAllVisualsReady && !Frame.Motion.bEnabled))
+            }
+    if ((!bAnyVisualRequested && WorldPresentation == None) || (!bAllVisualsReady && !Frame.Motion.bEnabled))
     {
         RestoreStockAttachment();
         return;
@@ -236,6 +433,13 @@ function PublishPose(NetPoseSample Sample, KFPawn_Human SourcePawn, bool bIsSynt
     Snapshot.RootRotation.Yaw = SourcePawn.Rotation.Yaw;
     Snapshot.bSynthetic = bIsSynthetic;
     Snapshot.Motion = Motion;
+    Snapshot.LeftWeapon = LeftWeapon; Snapshot.RightWeapon = RightWeapon;
+    Snapshot.ShieldHandToken=ShieldHandToken;
+    Snapshot.ShieldSkinId=ShieldSkinId;
+    while (WorldJournalTimes.Length > 0 && WorldInfo.RealTimeSeconds - WorldJournalTimes[0] > 1.0)
+    { WorldJournalTimes.Remove(0, 1); WorldJournal.Remove(0, 1); }
+    WorldActions.Entries = WorldJournal;
+    Snapshot.WorldTransitionSerial = WorldTransitionSerial;
     if (Motion.bEnabled)
     {
         bIndependentWeapons = true;
@@ -348,10 +552,31 @@ simulated function ConsumeSnapshot()
 // samples at 120 Hz, so ordinary jitter does not run the buffer dry), bounded
 // to 32 snapshots. Never extrapolate tracking or expose this buffered state to
 // input/damage code.
+simulated function array<NetMechanismPart> CurrentMechanisms(NetPoseSnapshot Frame)
+{
+    local array<NetMechanismPart> Result;
+    local NetMechanismPart Part;
+    local int I, J;
+    if (Frame.Motion.bEnabled) return Result;
+    for (I = 0; I < Frame.Sample.Mechanisms.Length; ++I)
+    {
+        Part = Frame.Sample.Mechanisms[I];
+        for (J = 0; J < DisplaySnapshot.Sample.Mechanisms.Length; ++J)
+            if (class'KF2VRNetTypes'.static.SameMechanism(Part, DisplaySnapshot.Sample.Mechanisms[J])) break;
+        if (J >= DisplaySnapshot.Sample.Mechanisms.Length) continue;
+        // Hidden ammo and released controls retire at the latest accepted
+        // sample, even while the avatar interpolates older hand transforms.
+        Part.Flags = (Part.Flags & DisplaySnapshot.Sample.Mechanisms[J].Flags & 1)
+            | (DisplaySnapshot.Sample.Mechanisms[J].Flags & 6);
+        Result.AddItem(Part);
+    }
+    return Result;
+}
+
 simulated function NetPoseSnapshot SamplePreview()
 {
     local NetPoseSnapshot A, B, Result;
-    local int I;
+    local int I, J, K, PumpA, PumpB, Pump;
     local float At, Blend, Span;
     if (PreviewHistory.Length == 0) return DisplaySnapshot;
     At = WorldInfo.RealTimeSeconds - 0.10;
@@ -364,6 +589,71 @@ simulated function NetPoseSnapshot SamplePreview()
         Span = PreviewHistory[I].ReceivedAt - PreviewHistory[I-1].ReceivedAt;
         Blend = FClamp((At - PreviewHistory[I-1].ReceivedAt) / FMax(Span, 0.001), 0, 1);
         Result = B;
+        Result.Sample.Mechanisms = A.Sample.Mechanisms;
+        for (J = 0; J < Result.Sample.Mechanisms.Length; ++J)
+            for (K = 0; K < B.Sample.Mechanisms.Length; ++K)
+                if (class'KF2VRNetTypes'.static.SameMechanism(A.Sample.Mechanisms[J], B.Sample.Mechanisms[K]))
+                {
+                    if ((A.Sample.Mechanisms[J].Flags & B.Sample.Mechanisms[K].Flags & 1) != 0)
+                    {
+                        Result.Sample.Mechanisms[J].Translation = VLerp(A.Sample.Mechanisms[J].Translation, B.Sample.Mechanisms[K].Translation, Blend);
+                        Result.Sample.Mechanisms[J].Rotation = RLerp(A.Sample.Mechanisms[J].Rotation, B.Sample.Mechanisms[K].Rotation, Blend, true);
+                    }
+                    break;
+                }
+        Result.Sample.ReloadProps = A.Sample.ReloadProps;
+        for (J = 0; J < Result.Sample.ReloadProps.Length; ++J)
+            for (K = 0; K < B.Sample.ReloadProps.Length; ++K)
+                if (class'KF2VRNetTypes'.static.SameReloadProp(A.Sample.ReloadProps[J], B.Sample.ReloadProps[K]))
+                {
+                    Result.Sample.ReloadProps[J].Position = VLerp(A.Sample.ReloadProps[J].Position, B.Sample.ReloadProps[K].Position, Blend);
+                    Result.Sample.ReloadProps[J].Rotation = RLerp(A.Sample.ReloadProps[J].Rotation, B.Sample.ReloadProps[K].Rotation, Blend, true);
+                    Result.Sample.ReloadProps[J].Scale = VLerp(A.Sample.ReloadProps[J].Scale, B.Sample.ReloadProps[K].Scale, Blend);
+                    break;
+                }
+        // Discrete identity changes take effect at their sampled boundary,
+        // never early while the hands still interpolate from the old item.
+        Result.LeftWeapon = A.LeftWeapon; Result.RightWeapon = A.RightWeapon;
+        Result.ShieldHandToken = A.ShieldHandToken;
+        Result.ShieldSkinId = A.ShieldSkinId;
+        Result.WorldTransitionSerial = A.WorldTransitionSerial;
+        Result.Sample.PresentationFlags = A.Sample.PresentationFlags;
+        Result.Sample.TrackingFlags = A.Sample.TrackingFlags;
+        Result.Sample.EyeHeight = A.Sample.EyeHeight;
+        if (A.Sample.EyeHeight > 0 && B.Sample.EyeHeight > 0)
+            Result.Sample.EyeHeight = Clamp(Round(Lerp(float(A.Sample.EyeHeight), float(B.Sample.EyeHeight), Blend)), 1, 128);
+        Result.Sample.GrenadeHand = A.Sample.GrenadeHand;
+        Result.Sample.GrenadeClass = A.Sample.GrenadeClass;
+        Result.Sample.GrenadePosition = A.Sample.GrenadePosition;
+        Result.Sample.GrenadeRotation = A.Sample.GrenadeRotation;
+        if (A.Sample.GrenadeHand == B.Sample.GrenadeHand && A.Sample.GrenadeClass == B.Sample.GrenadeClass)
+        {
+            Result.Sample.GrenadePosition += (B.Sample.GrenadePosition - A.Sample.GrenadePosition) * Blend;
+            Result.Sample.GrenadeRotation = RLerp(A.Sample.GrenadeRotation, B.Sample.GrenadeRotation, Blend, true);
+        }
+        Result.Sample.WeaponRootFlags = A.Sample.WeaponRootFlags & B.Sample.WeaponRootFlags;
+        Result.Sample.LeftWeaponRootPosition = A.Sample.LeftWeaponRootPosition
+            + (B.Sample.LeftWeaponRootPosition - A.Sample.LeftWeaponRootPosition) * Blend;
+        Result.Sample.RightWeaponRootPosition = A.Sample.RightWeaponRootPosition
+            + (B.Sample.RightWeaponRootPosition - A.Sample.RightWeaponRootPosition) * Blend;
+        Result.Sample.LeftWeaponRootRotation = RLerp(A.Sample.LeftWeaponRootRotation, B.Sample.LeftWeaponRootRotation, Blend, true);
+        Result.Sample.RightWeaponRootRotation = RLerp(A.Sample.RightWeaponRootRotation, B.Sample.RightWeaponRootRotation, Blend, true);
+        // A root belongs to one exact acknowledged hand generation. Never
+        // interpolate a new incarnation through the previous weapon's frame.
+        Result.Sample.LeftWeaponRootGeneration = A.Sample.LeftWeaponRootGeneration;
+        Result.Sample.RightWeaponRootGeneration = A.Sample.RightWeaponRootGeneration;
+        if (A.Sample.LeftWeaponRootGeneration != B.Sample.LeftWeaponRootGeneration)
+        {
+            Result.Sample.LeftWeaponRootPosition = A.Sample.LeftWeaponRootPosition;
+            Result.Sample.LeftWeaponRootRotation = A.Sample.LeftWeaponRootRotation;
+            Result.Sample.WeaponRootFlags = Result.Sample.WeaponRootFlags & 1;
+        }
+        if (A.Sample.RightWeaponRootGeneration != B.Sample.RightWeaponRootGeneration)
+        {
+            Result.Sample.RightWeaponRootPosition = A.Sample.RightWeaponRootPosition;
+            Result.Sample.RightWeaponRootRotation = A.Sample.RightWeaponRootRotation;
+            Result.Sample.WeaponRootFlags = Result.Sample.WeaponRootFlags & 2;
+        }
         Result.RootPosition = A.RootPosition + (B.RootPosition - A.RootPosition) * Blend;
         Result.RootRotation = RLerp(A.RootRotation, B.RootRotation, Blend, true);
         Result.Sample.RootYaw = A.Sample.RootYaw + NormalizeRotAxis(B.Sample.RootYaw - A.Sample.RootYaw) * Blend;
@@ -381,8 +671,43 @@ simulated function NetPoseSnapshot SamplePreview()
         Result.Sample.LeftRotation = RLerp(A.Sample.LeftRotation, B.Sample.LeftRotation, Blend, true);
         Result.Sample.MuzzleRotation = RLerp(A.Sample.MuzzleRotation, B.Sample.MuzzleRotation, Blend, true);
         Result.Sample.LeftMuzzleRotation = RLerp(A.Sample.LeftMuzzleRotation, B.Sample.LeftMuzzleRotation, Blend, true);
+        if (A.LeftWeapon.ItemId != B.LeftWeapon.ItemId || A.LeftWeapon.WeaponClass != B.LeftWeapon.WeaponClass)
+        {
+            Result.Sample.LeftMuzzlePosition = A.Sample.LeftMuzzlePosition;
+            Result.Sample.LeftMuzzleRotation = A.Sample.LeftMuzzleRotation;
+            Result.Sample.WeaponRootFlags = Result.Sample.WeaponRootFlags & 1;
+        }
+        if (A.RightWeapon.ItemId != B.RightWeapon.ItemId || A.RightWeapon.WeaponClass != B.RightWeapon.WeaponClass)
+        {
+            Result.Sample.MuzzlePosition = A.Sample.MuzzlePosition;
+            Result.Sample.MuzzleRotation = A.Sample.MuzzleRotation;
+            Result.Sample.WeaponRootFlags = Result.Sample.WeaponRootFlags & 2;
+        }
+        // A shield uses this hand's optical slot. A role change switches the
+        // slot between shield root and gun muzzle; never blend those frames.
+        if (A.ShieldHandToken != B.ShieldHandToken)
+        {
+            if (A.ShieldHandToken == 1 || B.ShieldHandToken == 1)
+            {
+                Result.Sample.LeftMuzzlePosition = A.Sample.LeftMuzzlePosition;
+                Result.Sample.LeftMuzzleRotation = A.Sample.LeftMuzzleRotation;
+            }
+            if (A.ShieldHandToken == 2 || B.ShieldHandToken == 2)
+            {
+                Result.Sample.MuzzlePosition = A.Sample.MuzzlePosition;
+                Result.Sample.MuzzleRotation = A.Sample.MuzzleRotation;
+            }
+        }
         Result.Sample.LeftWristRotation = RLerp(A.Sample.LeftWristRotation, B.Sample.LeftWristRotation, Blend, true);
         Result.Sample.RightWristRotation = RLerp(A.Sample.RightWristRotation, B.Sample.RightWristRotation, Blend, true);
+        PumpA = A.Sample.LeftPumpLo | (A.Sample.LeftPumpHi << 8);
+        PumpB = B.Sample.LeftPumpLo | (B.Sample.LeftPumpHi << 8);
+        Pump = (PumpA > 0 && PumpB > 0) ? Round(Lerp(float(PumpA), float(PumpB), Blend)) : PumpB;
+        Result.Sample.LeftPumpLo = Pump & 255; Result.Sample.LeftPumpHi = (Pump >> 8) & 255;
+        PumpA = A.Sample.RightPumpLo | (A.Sample.RightPumpHi << 8);
+        PumpB = B.Sample.RightPumpLo | (B.Sample.RightPumpHi << 8);
+        Pump = (PumpA > 0 && PumpB > 0) ? Round(Lerp(float(PumpA), float(PumpB), Blend)) : PumpB;
+        Result.Sample.RightPumpLo = Pump & 255; Result.Sample.RightPumpHi = (Pump >> 8) & 255;
         return Result;
     }
     return PreviewHistory[PreviewHistory.Length-1].Pose;
@@ -453,6 +778,37 @@ simulated function bool HasFreshPose()
         && TargetPawn.Health > 0 && DisplaySnapshot.Sample.TrackingFlags != 0
         && WorldInfo.RealTimeSeconds - LastReceivedRealTime
             <= class'KF2VRNetTypes'.const.PoseLeaseSeconds;
+}
+
+// Read the frame already used by the body, including any held journal boundary.
+// Latest head validity overrides the delayed frame so tracking loss goes dark
+// immediately. This is observer presentation, never another tracking transport.
+simulated function bool GetFlashlightTransform(out vector Head, out rotator Aim)
+{
+    local vector Root;
+    local rotator Basis;
+    if (!bHaveFlashlightFrame || !HasFreshPose() || !TargetPawn.bFlashlightOn
+        || FlashlightFrame.Motion.bEnabled
+        || (DisplaySnapshot.Sample.TrackingFlags & 1) == 0
+        || (FlashlightFrame.Sample.TrackingFlags & 1) == 0) return false;
+    PresentationRoot(FlashlightFrame, Root, Basis);
+    Head = Root + (FlashlightFrame.Sample.HeadPosition >> Basis);
+    Aim = Normalize(Basis + FlashlightFrame.Sample.HeadRotation);
+    return true;
+}
+
+simulated function CacheFlashlightFrame(NetPoseSnapshot Frame)
+{
+    local PlayerController PC;
+    FlashlightFrame = Frame;
+    bHaveFlashlightFrame = true;
+    if (RemoteLight != None && !RemoteLight.bDeleteMe) return;
+    // One world light budget, matching the stock game's local observer. Every
+    // pose shares it; it survives a teammate leaving and dies with the observer.
+    foreach WorldInfo.DynamicActors(class'KF2VRNetRemoteLight', RemoteLight)
+        if (!RemoteLight.bDeleteMe) return;
+    PC = WorldInfo.GetALocalPlayerController();
+    if (PC != None) RemoteLight = Spawn(class'KF2VRNetRemoteLight', PC);
 }
 
 simulated function DrawDiagnosticPose()
@@ -574,7 +930,10 @@ simulated event Tick(float DeltaTime)
     ConsumeSnapshot();
     bFresh = HasFreshPose();
     UpdateRoomscaleAnimation(DeltaTime, bFresh);
+    bHaveFlashlightFrame = false;
     UpdateRemoteWeapons(bFresh);
+    if (!bHaveFlashlightFrame) FlashlightFrame = SamplePreview();
+    CacheFlashlightFrame(FlashlightFrame);
     UpdateAvatarPreview(bFresh);
     if (bFresh != bDiagnosticWasFresh)
     {
@@ -606,9 +965,14 @@ simulated event Destroyed()
 {
     local KF2VRNetPlayerController PC;
     local int I;
+    if (RemoteShield!=None) RemoteShield.Destroy();
+    ReleaseHeldGrenade();
+    if (ReloadProps != None) ReloadProps.Shutdown(self);
+    ReloadProps = None;
     for (I = 0; I < 2; ++I)
         if (RemoteWeapons[I] != None) RemoteWeapons[I].Destroy();
     if (RemoteBody != None) RemoteBody.Destroy();
+    if (WorldPresentation != None) WorldPresentation.Destroy();
     RestoreStockAttachment();
     if (AvatarPreview != None) AvatarPreview.Destroy();
     AvatarPreview = None;

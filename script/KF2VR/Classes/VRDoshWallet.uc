@@ -12,6 +12,7 @@ var rotator Torso;
 var int PendingHand, HoldingHand, Samples;
 var float PendingTime, LastTime, LastThrowTime;
 var vector LastPosition, LastPawnPosition, ThrowVelocity;
+var VRThrowRelease Thrower;
 var SkeletalMeshComponent Preview, PocketMesh;
 var vector PocketOffset;      // right pocket; the left hand mirrors Y
 var float PocketRadius, DwellSeconds, MinThrowSpeed, ThrowInterval;
@@ -84,6 +85,7 @@ function BeginHold(int Hand)
     PendingHand = -1; HoldingHand = Hand;
     LastPosition = Bridge.PalmPosition(Hand); LastPawnPosition = Bridge.Human.Location;
     LastTime = Bridge.WorldInfo.RealTimeSeconds; Samples = 0; ThrowVelocity = vect(0,0,0);
+    if (Thrower == None) Thrower = new(self) class'VRThrowRelease'; Thrower.Reset(Hand);
     InputOwner.Inventory.Pulse(Hand);
     // Show the stock dropped-dosh mesh in the hand when it can be found.
     MoneyClass = class<Inventory>(DynamicLoadObject("KFGameContent.KFInventory_Money", class'Class', true));
@@ -117,6 +119,7 @@ function Throw()
     local bool Thrown;
     Hand = HoldingHand;
     Position = Bridge.PalmPosition(Hand);
+    if (Thrower != None) ThrowVelocity = Thrower.Release(Hand, Bridge.WorldInfo.RealTimeSeconds, ThrowVelocity);
     if (HasDosh() && Bridge.Trace(HitLocation, HitNormal, Position, Bridge.HeadPosition, false) == None)
     {
         Thrown = Bridge.RequestNetworkDosh(Position, ThrowVelocity);
@@ -153,6 +156,7 @@ function Update(float Delta)
     Velocity = (Position - LastPosition - (Bridge.Human.Location - LastPawnPosition)) / Elapsed;
     if (VSize(Velocity) > 1800) { CancelHand(HoldingHand); return; }
     ThrowVelocity = Velocity * 0.65 + ThrowVelocity * 0.35;
+    if (Thrower != None) Thrower.Add(HoldingHand, Velocity, Now);
     LastPosition = Position; LastPawnPosition = Bridge.Human.Location; LastTime = Now; ++Samples;
     PlacePreview();
     if (InputOwner.GripReleased(HoldingHand))

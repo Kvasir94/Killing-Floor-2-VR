@@ -20,7 +20,8 @@ $packageNames = @('KF2VRNet')
 $companionSources = [ordered]@{}
 if ($IncludeVRClient) {
     $packageNames = @('KF2VR','KF2VRNet','KF2VRNetClient')
-    foreach ($name in @('KF2VR','KF2VRNetClient')) {
+    $companionNames = @('KF2VR','KF2VRNetClient')
+    foreach ($name in $companionNames) {
         $companionSources[$name] = Get-PackageSourceHashes (Join-Path $projectRoot "script/$name")
     }
 }
@@ -54,14 +55,8 @@ if ($IncludeVRClient) {
     $handReceipt = Get-Content (Join-Path $handRoot 'build.json') -Raw | ConvertFrom-Json
     if (-not $handReceipt.success -or $handReceipt.sdk_sha256 -ne $manifest.binaries.editor.sha256 -or
         (Get-FileHash -LiteralPath $handPackage).Hash -ne $handReceipt.package_sha256) { throw 'Hand art does not match its SDK build receipt.' }
-    Copy-Item -LiteralPath $handPackage -Destination $outputRoot
-    # Experimental Portal Gun art (branch portal-gun-proto): tools/build-portal-assets.ps1.
-    $portalRoot = Join-Path $projectRoot 'build/portal-assets'
-    $portalPackage = Join-Path $portalRoot 'KF2VRPortal.upk'
-    $portalReceipt = Get-Content (Join-Path $portalRoot 'build.json') -Raw | ConvertFrom-Json
-    if (-not $portalReceipt.success -or $portalReceipt.sdk_sha256 -ne $manifest.binaries.editor.sha256 -or
-        (Get-FileHash -LiteralPath $portalPackage).Hash -ne $portalReceipt.package_sha256) { throw 'Portal art does not match its SDK build receipt; run tools/build-portal-assets.ps1.' }
-    Copy-Item -LiteralPath $portalPackage -Destination $outputRoot
+    # The ~740 MB hand package is copied only once this run owns the SDK slot
+    # (or for -PrepareOnly): refused retries must not each leave a copy behind.
     $defaultEngine = Get-Content (Join-Path $GameRoot 'KFGame/Config/DefaultEngine.ini') -Raw
     $defaultEngine += "`r`n[Core.System]`r`n+Paths=$outputRoot`r`n+ScriptPaths=$outputRoot`r`n+SeekFreePCPaths=$outputRoot`r`n+BrewedPCPaths=$outputRoot`r`n"
     $defaultEnginePath = Join-Path $configRoot 'DefaultEngine.ini'
@@ -74,14 +69,18 @@ foreach ($kind in @('ENGINE','GAME','INPUT','UI','WEB','EDITOR','EDITORUSERSETTI
 $record['arguments']=$arguments
 $record['log']=$logPath
 $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $recordPath
-if ($PrepareOnly) { Write-Output "Prepared only: $recordPath"; return }
+if ($PrepareOnly) {
+    if ($IncludeVRClient) { Copy-Item -LiteralPath $handPackage -Destination $outputRoot }
+    Write-Output "Prepared only: $recordPath"; return
+}
 $mutex=[Threading.Mutex]::new($false,'Local\KF2VR_DevelopmentFixture')
 $locked=$false
 $ownedProcess=$null
 try {
     try { $locked=$mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked=$true }
     if (-not $locked) { throw 'Another KF2-VR fixture owns the SDK/game slot.' }
-    if (Get-Process KFGame,KFEditor,KFServer -ErrorAction SilentlyContinue) { throw 'KF2, its dedicated server or its editor is already running.' }
+    if ((Get-KF2VRSharedProcesses).Count) { throw 'KF2, its dedicated server or its editor is already running.' }
+    if ($IncludeVRClient) { Copy-Item -LiteralPath $handPackage -Destination $outputRoot }
     Write-Output "Compiler log: $logPath"
     $ownedProcess=Start-Process -FilePath $editor -ArgumentList $arguments -WorkingDirectory (Split-Path $editor -Parent) -WindowStyle Hidden -PassThru
     if (-not $ownedProcess.WaitForExit($TimeoutSeconds*1000)) { throw 'Network package compilation timed out.' }
@@ -115,10 +114,17 @@ try {
     New-Item -ItemType Directory -Path $stable -Force | Out-Null
     foreach ($name in $packageHashes.Keys) { Copy-Item -LiteralPath (Join-Path $outputRoot $name) -Destination (Join-Path $stable $name) -Force }
     Copy-Item -LiteralPath $recordPath -Destination (Join-Path $stable 'build.json') -Force
-    Write-Output "Built network package: $package"
+    # The stable folder now holds the packages; the run keeps only its record and log.
+    foreach ($name in $packageHashes.Keys) { Remove-Item -LiteralPath (Join-Path $outputRoot $name) -Force -ErrorAction SilentlyContinue }
+    Write-Output "Built network package: $(Join-Path $stable 'KF2VRNet.u')"
 } catch {
     $record['success']=$false
     $record['error']=$_.Exception.Message
+    # A refused or failed run keeps only its record and log: drop the copied
+    # hand art and partial packages so retries cannot fill the drive.
+    if ($ownedProcess -and -not $ownedProcess.HasExited) { $record['forced_stop']=$true; $ownedProcess.Kill(); $ownedProcess.WaitForExit(5000) | Out-Null }
+    Get-ChildItem -LiteralPath $outputRoot -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in @('.u','.upk') } | Remove-Item -Force -ErrorAction SilentlyContinue
     throw
 } finally {
     try {

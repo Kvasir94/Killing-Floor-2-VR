@@ -29,6 +29,12 @@ struct AppliedHeadAim {
 inline constexpr float kMaxWorldViewOffset = 400.0f;
 bool IsValidWorldViewOffset(const Vec3& offset) noexcept;
 
+// Tabletop presentation: eye separation and head motion
+// are multiplied by this, so the world reads as a scale model. 1 is life size;
+// anything non-finite, at or below 1, or above the cap is life size.
+inline constexpr float kMaxWorldScale = 200.0f;
+float SanitiseWorldScale(float scale) noexcept;
+
 // Game thread only: a second persistent FSceneViewState for the right eye of
 // a single-pass pair, allocated once like the player's own (never freed).
 void* AllocateRightEyeViewState(std::uintptr_t baseAddress);
@@ -42,7 +48,8 @@ bool BuildStereoMatrices(const pinned::NativeMatrix4& baseView,
                          const xr::FrameState& frame,
                          std::array<EyeMatrices, 2>& out, std::string& error,
                          const Quat& appliedCameraRotation = {},
-                         const Vec3& worldViewOffset = {});
+                         const Vec3& worldViewOffset = {},
+                         float worldScale = 1.0f);
 
 // One instance, used/reset only on the verified game thread. The adapter must
 // already have verified the pinned executable hash and normal family identity.
@@ -55,7 +62,7 @@ public:
                           pinned::SubmitSceneFamilyFn originalSubmit,
                           void* canvas, std::uintptr_t baseAddress,
                           std::string& error, const AppliedHeadAim* appliedAim = nullptr,
-                          const Vec3& worldViewOffset = {});
+                          const Vec3& worldViewOffset = {}, float worldScale = 1.0f);
     void ResetReference() noexcept;
     void SetSingleViewDiagnostic(bool enabled, unsigned eye=0) noexcept { singleViewDiagnostic_=enabled; singleEye_=eye?1:0; }
     bool ReferenceReady() const noexcept { return referenceReady_; }

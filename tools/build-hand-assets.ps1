@@ -76,6 +76,43 @@ if ($LASTEXITCODE -ne 0) {
         $propMutex.Dispose()
     }
 }
+# The door offer requires an actual welder mesh. A glob alone silently omitted
+# it on builds that had never run the standalone tool generator.
+$toolGenerator = Join-Path $projectRoot 'tools/generate_tool_holograms.py'
+$toolMesh = Join-Path $propRoot 'VRGlowTool_Wep_1stP_Welder_Rig.fbx'
+$toolSource = Join-Path $projectRoot 'build/welder-audit/export/WEP_1P_Welder_MESH/SkeletalMesh3/Wep_1stP_Welder_Rig.psk'
+$toolInputs = @($toolGenerator, $propGenerator, (Join-Path $PSScriptRoot 'generate_floating_hands.py'), $toolSource)
+$toolTime = if (Test-Path -LiteralPath $toolMesh) { (Get-Item -LiteralPath $toolMesh).LastWriteTimeUtc } else { [DateTime]::MinValue }
+$toolStale = -not (Test-Path -LiteralPath $toolSource)
+foreach ($toolInput in $toolInputs) {
+    if ((Test-Path -LiteralPath $toolInput) -and (Get-Item -LiteralPath $toolInput).LastWriteTimeUtc -gt $toolTime) { $toolStale = $true }
+}
+if ($toolStale) {
+    $toolMutex = [Threading.Mutex]::new($false, 'Local\KF2VR_DevelopmentFixture')
+    $toolLocked = $false
+    $toolProcess = $null
+    try {
+        try { $toolLocked = $toolMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $toolLocked = $true }
+        if (-not $toolLocked) { throw 'Another KF2-VR asset generation is active.' }
+        $toolLogRoot = Join-Path $projectRoot ('build/hand-asset-runs/tool-holograms-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff'))
+        New-Item -ItemType Directory -Path $toolLogRoot -Force | Out-Null
+        $toolProcess = Start-Process -FilePath 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' `
+            -ArgumentList ('--background --factory-startup --threads 2 --python-exit-code 1 --python "' + $toolGenerator + '"') `
+            -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $toolLogRoot 'stdout.log') -RedirectStandardError (Join-Path $toolLogRoot 'stderr.log')
+        $null = $toolProcess.Handle
+        if (-not $toolProcess.WaitForExit($TimeoutSeconds * 1000)) { throw "Welder hologram generation timed out: $toolLogRoot" }
+        $toolProcess.WaitForExit()
+        if ($toolProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $toolMesh)) { throw "Welder hologram generation failed: $toolLogRoot" }
+    } finally {
+        if ($toolProcess) {
+            if (-not $toolProcess.HasExited) { $toolProcess.Kill(); $toolProcess.WaitForExit() }
+            $toolProcess.Dispose()
+        }
+        if ($toolLocked) { $toolMutex.ReleaseMutex() }
+        $toolMutex.Dispose()
+    }
+}
 $hawkGenerator = Join-Path $projectRoot 'tools/generate_tomahawk.py'
 $hawkReport = Join-Path $propRoot 'VRTomahawk.json'
 $hawkGeneratorHash = (Get-FileHash -LiteralPath $hawkGenerator).Hash
@@ -118,7 +155,40 @@ if ($hawkReportHash -ne $hawkGeneratorHash -or $hawkModelReportHash -ne $hawkMod
         $hawkMutex.Dispose()
     }
 }
+$knifeGenerator = Join-Path $projectRoot 'tools/generate_world_knives.py'
+& python $knifeGenerator --check
+if ($LASTEXITCODE -ne 0) {
+    & python $knifeGenerator --prepare
+    if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the stock world-knife sources.' }
+    $knifeMutex = [Threading.Mutex]::new($false, 'Local\KF2VR_DevelopmentFixture')
+    $knifeLocked = $false
+    $knifeProcess = $null
+    try {
+        try { $knifeLocked = $knifeMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $knifeLocked = $true }
+        if (-not $knifeLocked) { throw 'Another KF2-VR development fixture is active.' }
+        $knifeLogRoot = Join-Path $projectRoot ('build/hand-asset-runs/world-knives-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff'))
+        New-Item -ItemType Directory -Path $knifeLogRoot -Force | Out-Null
+        $knifeArgs = '--background --factory-startup --threads 2 --python-exit-code 1 --python "' + $knifeGenerator + '" --'
+        $knifeProcess = Start-Process -FilePath 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' `
+            -ArgumentList $knifeArgs -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $knifeLogRoot 'stdout.log') -RedirectStandardError (Join-Path $knifeLogRoot 'stderr.log')
+        $null = $knifeProcess.Handle
+        if (-not $knifeProcess.WaitForExit($TimeoutSeconds * 1000)) { throw "World-knife export timed out: $knifeLogRoot" }
+        $knifeProcess.WaitForExit()
+        if ($knifeProcess.ExitCode -ne 0) { throw "World-knife export failed: $knifeLogRoot" }
+        & python $knifeGenerator --check
+        if ($LASTEXITCODE -ne 0) { throw "World-knife source/output hashes differ: $knifeLogRoot" }
+    } finally {
+        if ($knifeProcess) {
+            if (-not $knifeProcess.HasExited) { $knifeProcess.Kill(); $knifeProcess.WaitForExit() }
+            $knifeProcess.Dispose()
+        }
+        if ($knifeLocked) { $knifeMutex.ReleaseMutex() }
+        $knifeMutex.Dispose()
+    }
+}
 $propMeshes = @(@(Get-ChildItem -LiteralPath $propRoot -Filter 'VRTomahawk.fbx') +
+    @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRWorldKnife*.fbx') +
     @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRAmmo_*.fbx' -ErrorAction SilentlyContinue) +
     @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRAmmoEmpty*_*.fbx' -ErrorAction SilentlyContinue) +
     @(Get-ChildItem -LiteralPath $propRoot -Filter 'VRGlow*_*.fbx' -ErrorAction SilentlyContinue) +
@@ -152,6 +222,13 @@ if ((Test-Path -LiteralPath (Join-Path $propRoot 'VRRipcordRig.fbx')) -and (Test
     }
 }
 $textureRoot = Split-Path $InputMesh -Parent
+$handBoundsTool = Join-Path $projectRoot 'tools/generate_hand_bounds.py'
+$handBoundsPath = Join-Path $textureRoot 'VRFloatingHandsBounds.json'
+$handBoundsHashes = [ordered]@{
+    generator=(Get-FileHash -LiteralPath $handBoundsTool).Hash
+    reader=(Get-FileHash -LiteralPath (Join-Path $projectRoot 'tools/generate_floating_hands.py')).Hash
+}
+Copy-Item -LiteralPath (Join-Path $projectRoot 'assets/ui/VRHorzineKF2Logo.tga') -Destination (Join-Path $textureRoot 'VRHorzineKF2Logo.tga') -Force
 # Deadbolt trader/selector icon: rendered from the exported rig props whenever they are newer.
 $deadboltIcon = Join-Path $propRoot 'VRDeadboltIcon.tga'
 $deadboltIconTool = Join-Path $projectRoot 'tools/deadbolt/make_icon.py'
@@ -183,6 +260,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not generate the wrist display backing.' }
     & python (Join-Path $projectRoot 'tools/generate_wheel_spray.py') (Join-Path $textureRoot 'VRHorzineWheelSpray.tga') | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not generate the weapon wheel spray masks.' }
+    & python $handBoundsTool ([IO.Path]::ChangeExtension($InputMesh, '.psk')) $handBoundsPath
+    if ($LASTEXITCODE -ne 0) { throw 'Could not derive hand visibility bounds from the source skin.' }
 } finally {
     if ($glassLocked) { $glassMutex.ReleaseMutex() }
     $glassMutex.Dispose()
@@ -207,6 +286,8 @@ function Get-HandImportConfigHashes {
 $configHashes = Get-HandImportConfigHashes
 $pskPath = [IO.Path]::ChangeExtension($InputMesh, '.psk')
 $pskHash = if (Test-Path -LiteralPath $pskPath -PathType Leaf) { (Get-FileHash -LiteralPath $pskPath -Algorithm SHA256).Hash } else { $null }
+$handBoundsHash = (Get-FileHash -LiteralPath $handBoundsPath).Hash
+$handBounds = Get-Content -LiteralPath $handBoundsPath -Raw | ConvertFrom-Json
 $stablePackage = Join-Path $OutputRoot 'KF2VRHands.upk'
 $stableRecord = Join-Path $OutputRoot 'build.json'
 if (-not $Force -and (Test-Path -LiteralPath $stableRecord) -and (Test-Path -LiteralPath $stablePackage)) {
@@ -218,6 +299,8 @@ if (-not $Force -and (Test-Path -LiteralPath $stableRecord) -and (Test-Path -Lit
             ($cached.textures_sha256 | ConvertTo-Json -Compress) -ceq ($textureHashes | ConvertTo-Json -Compress) -and
             ($cached.prop_meshes_sha256 | ConvertTo-Json -Compress) -ceq ($propHashes | ConvertTo-Json -Compress) -and
             $cached.source_psk_sha256 -eq $pskHash -and $cached.importer_source_sha256 -eq $sourceHash -and
+            $cached.hand_bounds_sha256 -eq $handBoundsHash -and
+            ($cached.hand_bounds_generator_sha256 | ConvertTo-Json -Compress) -ceq ($handBoundsHashes | ConvertTo-Json -Compress) -and
             $cached.builder_sha256 -eq $builderHash -and
             $bridgeHashes -and ($cached.editor_bridge_sha256 | ConvertTo-Json -Compress) -ceq ($bridgeHashes | ConvertTo-Json -Compress) -and
             ($cached.config_sources_sha256 | ConvertTo-Json -Compress) -ceq ($configHashes | ConvertTo-Json -Compress) -and
@@ -235,8 +318,8 @@ $recordPath = $null
 try {
     try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
     if (-not $locked) { throw 'Another KF2-VR development fixture is active.' }
-    if (Get-Process KFGame,KFEditor -ErrorAction SilentlyContinue) { throw 'KF2 or its editor is running. Close it before importing hand assets.' }
-    & cmake -S $projectRoot -B (Join-Path $projectRoot 'build') -A x64
+    if ((Get-KF2VRSharedProcesses KFGame,KFEditor).Count) { throw 'KF2 or its editor is running. Close it before importing hand assets.' }
+    & cmake -S $projectRoot -B (Join-Path $projectRoot 'build') -A x64 '-DKF2VR_ENABLE_DLSS=ON'
     if ($LASTEXITCODE -ne 0) { throw 'Could not configure the editor save bridge.' }
     & cmake --build (Join-Path $projectRoot 'build') --config Release --target kf2vr_hand_asset_bridge
     if ($LASTEXITCODE -ne 0) { throw 'Could not build the editor save bridge.' }
@@ -251,6 +334,7 @@ try {
     $record = [ordered]@{
         schema='kf2vr/hand-asset-build/1'; started_utc=[DateTime]::UtcNow.ToString('o'); success=$false
         sdk_sha256=$sdkHash; input_mesh=$InputMesh; input_sha256=$inputHash; source_psk_sha256=$pskHash
+        hand_bounds_sha256=$handBoundsHash; hand_bounds_generator_sha256=$handBoundsHashes
         wristwatch_sha256=$watchHash
         textures_sha256=$textureHashes
         prop_meshes_sha256=$propHashes
@@ -282,11 +366,23 @@ try {
             $engineIni = Get-Content -LiteralPath $engineIniPath -Raw
             $engineIni = $engineIni.Replace('[Core.System]', "[Core.System]`r`nPaths=$scriptRoot`r`nScriptPaths=$scriptRoot`r`nSeekFreePCPaths=$scriptRoot`r`nBrewedPCPaths=$scriptRoot")
             $engineIni = $engineIni.Replace('EditorEngine=UnrealEd.EditorEngine', 'EditorEngine=UnrealEd.UnrealEdEngine')
+            # The game's download cache can hold a published KF2VRHands.upk (a
+            # Workshop/Join install). The editor then resolves the package name
+            # to that copy and refuses to save the fresh one as partially
+            # loaded. Point the cache at an empty run-local folder instead.
+            $emptyCache = Join-Path $runRoot 'EmptyCache'
+            New-Item -ItemType Directory -Force -Path $emptyCache | Out-Null
+            $engineIni = [regex]::Replace($engineIni, '(?m)^CachePath=.*$', "CachePath=$emptyCache")
             [IO.File]::WriteAllText($engineIniPath, $engineIni, [Text.Encoding]::ASCII)
             $editorIniPath = Join-Path $configRoot 'EDITOR.ini'
             $editorIni = Get-Content -LiteralPath $editorIniPath -Raw
             $editorIni += "`r`n[HandAssetTools.VRHandAssetCommandlet]`r`nInputMesh=$($InputMesh.Replace('\','/'))`r`nOutputPackage=$($assetPath.Replace('\','/'))`r`n"
             if ($textureFiles.Count) { $editorIni += "TextureRoot=$($textureRoot.Replace('\','/'))`r`n" }
+            foreach ($sphere in $handBounds) {
+                $radius = ([double]$sphere.radius).ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+                $length = ([double]$sphere.reference_length).ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+                $editorIni += "HandBounds=(Bone=$($sphere.bone),Radius=$radius,ReferenceLength=$length)`r`n"
+            }
             foreach ($prop in $propMeshes) { $editorIni += "PropMeshes=$($prop.FullName.Replace('\','/'))`r`n" }
             # RAVEN-7 sockets and takes, from the rig build's own report.
             $hawkRig = Get-Content -LiteralPath $hawkReport -Raw | ConvertFrom-Json

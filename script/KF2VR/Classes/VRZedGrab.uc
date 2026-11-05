@@ -13,6 +13,9 @@
 // damage scaled by impact speed. The pawn is never attached to a controller.
 class VRZedGrab extends Actor;
 
+// Alyx-style release velocity for this hand throw (VRThrowRelease).
+var VRThrowRelease Thrower;
+
 struct VRGrabState
 {
     var Actor Owner;                  // the pawn or gib being held
@@ -56,8 +59,10 @@ struct VRGrabState
     // world velocities. bMotion is false until two clean samples exist.
     var vector GripPoint, HeadPoint, GripVelocity, HeadVelocity;
     var bool bMotion, bHaveSample;
-    var float NextMoveSend;
     var bool bActive;
+    // Melee item 10, experimental: a standing hold (VRSM_StandingHold); no
+    // body is fixed in the hand and the Zed stays on its feet.
+    var bool bStanding;
 };
 
 // A released body still flying. It keeps dealing damage to Zeds it meets
@@ -68,9 +73,11 @@ struct VRThrownBody
     var KFPawn_Monster Pawn;
     var PrimitiveComponent Component;
     var name BoneName;
+    var RB_BodyInstance Body;
     var bool bLiving, bGib;
     var float Since, RestTime, LastSpeed;
-    var vector LastVelocity;
+    var vector LastVelocity, LastPoint;
+    var bool bHavePoint;
 };
 
 var VRHandsBridge Bridge;
@@ -83,13 +90,14 @@ var float PalmForward;         // palm point ahead of the tracked hand origin
 var float SearchRadius;        // candidate search around the palm
 var float RagdollTimeout;      // knockdown request must land within this
 var float KnockdownNudge;      // the least velocity stock knockdown accepts
-var float MoveSendInterval;    // grip-frame streaming period on a client
 var float BodyRadius;          // held body stops this far off a wall
 var float BlockedDrop;         // a wall this far between hand and body...
 var float BlockedGrace;        // ...for this long releases the body
 var float ThrowScale;          // released body speed per unit of hand speed
 var float MinThrowSpeed;       // slower releases just drop
 var float MaxThrowSpeed;
+var float CorpseThrowScale, MaxCorpseThrowSpeed;
+var float GibMass;             // kg for a loose gib, which has no stock pawn mass
 var float RestSpeed;           // a thrown body slower than this is settling
 var float RestTime;            // settling this long ends its damage
 var float ThrownLifetime;
@@ -123,6 +131,20 @@ var float RendStretch;
 var int RendSkillIndex;
 var int Rends;
 var float RendWaitUntil;
+var float NextDazeCheck;
+// Melee item 10, B&S HumanWrist (IK position weight 1): a standing hold on a
+// Zed's arm pins the gripped part in the hand. The arm between the held part
+// and the shoulder goes to physics like the stock injured-arm ragdoll
+// (KFPawn.RagdollArm) and the held body is placed at the palm every tick, so
+// the arm follows the hand while the rest of the Zed stays animated. Local
+// presentation on the grabber's machine; released if the pin cannot hold.
+struct ArmPinSet { var array<name> Bones; var bool bPinned, bSavedReactions; };
+var ArmPinSet ArmPinSets[2];
+var vector ArmPinOffset[2];
+var Quat ArmPinRelative[2];
+var matrix ArmPinStart[2];
+var float ArmPinTime[2], ArmPinBadSince[2], ArmPinMaxError, ArmPinMaxErrorTime;
+var int ArmPins, ArmPinFailures;
 
 // Contact classification. UnrealScript refuses a bool out parameter, so the
 // eligibility result is an int kind rather than a pair of flags.
@@ -147,6 +169,11 @@ simulated function bool IsHolding(int Hand)
 simulated function bool IsHoldingAny()
 {
     return Grabs[0].bActive || Grabs[1].bActive;
+}
+
+simulated function bool HoldsActor(Actor A)
+{
+    return A != None && ((Grabs[0].bActive && Grabs[0].Owner == A) || (Grabs[1].bActive && Grabs[1].Owner == A));
 }
 
 // Both hands of the one owning player may hold the same pawn; a pawn already
@@ -205,10 +232,7 @@ simulated function Pulse(int Hand, float Strength, float Duration)
     local VRHandsBridge B;
     if (Bridge == None || Hand < 0 || Hand > 1) return;
     B = Bridge.RootBridge != None ? Bridge.RootBridge : Bridge;
-    if (B.NativeHapticMask == 0) { B.NativeHapticStrength = 0; B.NativeHapticDuration = 0; }
-    B.NativeHapticMask = B.NativeHapticMask | (1 << Hand);
-    B.NativeHapticStrength = FMax(B.NativeHapticStrength, Strength);
-    B.NativeHapticDuration = FMax(B.NativeHapticDuration, Duration);
+    B.QueueHandHaptic(1 << Hand, Strength, Duration);
 }
 
 // ---------------------------------------------------------------------------
@@ -259,17 +283,16 @@ simulated function int Classify(int Hand, KFPawn_Monster M)
 // nearest major body part, not the nearest bone: a tongue, claw or finger has
 // a physics body of its own, but it is a thin chain on weak joints, and hit
 // zones are exactly the parts worth holding -- head, neck, torso, limbs.
+// Distances are to each part's bone line (from its parent joint to its own),
+// not to bone origins alone, so a palm on a thigh, upper arm or belly holds
+// that part even though the nearest joint is a knee, shoulder or spine (#117).
 simulated function bool ResolveBody(KFPawn_Monster M, vector Palm, out name OutBone, out float OutDistance)
 {
-    local name Closest, RBBone, Best;
-    local vector BoneLocation;
-    local float Distance, BestDistance;
+    local name RBBone, ParentRB, Parent, Best;
+    local vector BoneLocation, ParentLocation, Nearest;
+    local float Distance, BestDistance, Along, Span;
     local int I;
     OutBone = '';
-    // Contact: the palm has to be at the body at all.
-    Closest = M.Mesh.FindClosestBone(Palm, BoneLocation);
-    if (Closest == '') return false;
-    if (VSize(BoneLocation - Palm) > GrabRadius + GrabNearMissAllowance) return false;
     BestDistance = GrabRadius * 2.5;
     for (I = 0; I < M.HitZones.Length; ++I)
     {
@@ -277,14 +300,32 @@ simulated function bool ResolveBody(KFPawn_Monster M, vector Palm, out name OutB
         if (I == HZI_HEAD && M.IsHeadless()) continue;
         RBBone = M.GetRBBoneFromBoneName(M.HitZones[I].BoneName);
         if (RBBone == '' || class'VRBodyHold'.static.BodyFor(M.Mesh,RBBone) == None) continue;
-        Distance = VSize(M.Mesh.GetBoneLocation(RBBone, 0) - Palm);
-        if (Distance < BestDistance)
-        {
-            BestDistance = Distance;
-            Best = RBBone;
-        }
+        BoneLocation = M.Mesh.GetBoneLocation(M.HitZones[I].BoneName, 0);
+        Distance = VSize(BoneLocation - Palm);
+        if (Distance < BestDistance) { BestDistance = Distance; Best = RBBone; }
+        // Along the line from the parent joint the palm holds the parent's
+        // part (a palm mid-thigh between hip and knee holds the thigh).
+        Parent = M.Mesh.GetParentBone(M.HitZones[I].BoneName);
+        if (Parent == '') continue;
+        ParentLocation = M.Mesh.GetBoneLocation(Parent, 0);
+        Span = VSizeSq(BoneLocation - ParentLocation);
+        if (Span < 1) continue;
+        Along = FClamp(((Palm - ParentLocation) dot (BoneLocation - ParentLocation)) / Span, 0, 1);
+        Nearest = ParentLocation + (BoneLocation - ParentLocation) * Along;
+        Distance = VSize(Nearest - Palm);
+        if (Distance >= BestDistance) continue;
+        ParentRB = M.GetRBBoneFromBoneName(Parent);
+        if (Along < 0.9 && ParentRB != '' && class'VRBodyHold'.static.BodyFor(M.Mesh, ParentRB) != None)
+            RBBone = ParentRB;
+        BestDistance = Distance;
+        Best = RBBone;
     }
+    // Contact: the palm has to be at a part's bone line, or at any bone (a
+    // claw or jaw still counts as touching the Zed).
     if (Best == '') return false;
+    if (BestDistance > GrabRadius + GrabNearMissAllowance
+        && (M.Mesh.FindClosestBone(Palm, BoneLocation) == ''
+        || VSize(BoneLocation - Palm) > GrabRadius + GrabNearMissAllowance)) return false;
     OutDistance = BestDistance;
     OutBone = Best;
     return true;
@@ -324,9 +365,10 @@ simulated function KFGiblet FindGib(vector Palm, out float OutDistance)
     foreach DynamicActors(class'KFGiblet', G)
     {
         if (G.bDeleteMe || G.GibMeshComp == None || G.Physics != PHYS_RigidBody) continue;
-        Distance = VSize(G.Location - Palm);
-        if (Distance >= OutDistance) continue;
         if (G.GibMeshComp.GetRootBodyInstance() == None) continue;
+        // A long gib's origin can sit at one end: measure to its bounds.
+        Distance = FMax(0, VSize(G.GibMeshComp.Bounds.Origin - Palm) - G.GibMeshComp.Bounds.SphereRadius * 0.5);
+        if (Distance >= OutDistance) continue;
         Best = G;
         OutDistance = Distance;
     }
@@ -357,7 +399,12 @@ simulated function bool TryGrab(int Hand)
     M = FindTarget(Hand, Palm, Bone, Kind, PawnDistance);
     Gib = FindGib(Palm, GibDistance);
     if (Gib != None && (M == None || GibDistance < PawnDistance)) { M = None; Kind = GRAB_Gib; }
-    if (M == None && Gib == None) { ++Rejects; return false; }
+    if (M == None && Gib == None)
+    {
+        ++Rejects;
+        if (class'VRSM_HeldKnockdown'.static.EscapeEnabled()) RefuseLarge(Hand, Palm);
+        return false;
+    }
 
     ResetGrab(Hand);
     Grabs[Hand].StartTime = WorldInfo.TimeSeconds;
@@ -381,6 +428,24 @@ simulated function bool TryGrab(int Hand)
     Grabs[Hand].bLiving = Kind == GRAB_Living;
     if (Grabs[Hand].bLiving && M.Physics != PHYS_RigidBody)
     {
+        // Melee item 10: catching the wrist or forearm of a Zed mid-attack
+        // interrupts it with the stock parry first, at the fist guard's
+        // strength 3 (B&S: a grabbed arm cannot strike).
+        if (!Bridge.UseLegacyMelee(Bridge.bLegacyMeleeRegionGrab) && class'VRGrapplePose'.static.RegionForBone(Bone) == class'VRGrapplePose'.const.REGION_LIMB
+            && IsArmBone(Bone) && class'VRPhysicalFist'.static.AttackParryable(M, class'VRFistGuard'.default.ParryStrength))
+        {
+            if (IsNetworkClient()) Bridge.RequestNetworkFistParry(M, Hand);
+            else class'VRPhysicalFist'.static.ApplyParry(M, Bridge.Human, class'VRFistGuard'.default.ParryStrength);
+            `log("KF2VR_ZEDGRAB action=wrist_parry hand=" $ Hand $ " pawn=" $ M.Class);
+        }
+        if (StandingWanted(M))
+        {
+            if (!BeginStanding(Hand, M, Bone)) { ClearGrab(Hand, "standing_refused"); ++Rejects; return false; }
+            ++LivingGrabs;
+            Pulse(Hand, 1.0, 0.035);
+            `log("KF2VR_ZEDGRAB action=grab hand=" $ Hand $ " pawn=" $ M.Class $ " bone=" $ Bone $ " standing=1");
+            return true;
+        }
         if (!RequestKnockdown(M))
         {
             ClearGrab(Hand, "knockdown_refused");
@@ -511,7 +576,6 @@ simulated function bool TryRend(int Hand)
         if (RendWaitUntil==0) RendWaitUntil=WorldInfo.RealTimeSeconds+0.75;
         if (WorldInfo.RealTimeSeconds>=RendWaitUntil)
         { ClearGrab(0,"rend_authority_timeout"); ClearGrab(1,"rend_authority_timeout"); return true; }
-        StreamServerGrip(0,PalmPoint(0)); StreamServerGrip(1,PalmPoint(1));
         return true;
     }
     if (Bridge.Human.Role!=ROLE_Authority) return false;
@@ -567,6 +631,8 @@ simulated function bool AttachHold(int Hand, optional bool bPreserveFrame)
     // Two controllers cannot independently fix the same rigid body.
     if (Grabs[Other].bAttached && Grabs[Other].Body == Body) return false;
     class'VRBodyHold'.static.YieldPins(Grabs[Hand].Component);
+    // Pin cleanup is a callback and may rebuild or retire the captured body.
+    if (Body.OwnerComponent != Grabs[Hand].Component || !Body.IsValidBodyInstance()) return false;
     if (Grabs[Other].bAttached && Grabs[Other].Component == Grabs[Hand].Component
         && Grabs[Other].Body != None && Grabs[Other].Body.IsValidBodyInstance())
     {
@@ -578,6 +644,8 @@ simulated function bool AttachHold(int Hand, optional bool bPreserveFrame)
     {
         if (!class'VRBodyHold'.static.Capture(Body, PalmPoint(Hand), HandRotation(Hand),
             Grabs[Hand].OffsetLocal, Grabs[Hand].RelativeQuat)) return false;
+        if (!Grabs[Hand].bGib && Grabs[Hand].Pawn != None)
+            class'VRBodyHold'.static.SeatInPalm(Hand, Grabs[Hand].BoneName, Grabs[Hand].OffsetLocal);
         Grabs[Hand].bHaveGripFrame = true;
     }
     Grabs[Hand].Body = Body;
@@ -600,6 +668,7 @@ simulated function bool AttachHold(int Hand, optional bool bPreserveFrame)
     class'VRBodyHold'.static.Begin(Body, Grabs[Hand].Component);
     Grabs[Hand].Component.WakeRigidBody();
     if (Grabs[Hand].bLiving) CountHold(Hand);
+    RetireThrownPiece(Hand);
     class'VRGrabOwnership'.static.Update(Bridge.PC,byte(Hand),Grabs[Hand].Owner,Grabs[Hand].BoneName,PalmPoint(Hand));
     return true;
 }
@@ -625,24 +694,16 @@ simulated function ClaimServerHold(int Hand)
     if (!Bridge.RequestNetworkGrabHold(Grabs[Hand].Pawn, Grabs[Hand].BoneName,
         Hand, PalmPoint(Hand), HandRotation(Hand))) return;
     Grabs[Hand].bServerHeld = true;
-    Grabs[Hand].NextMoveSend = WorldInfo.TimeSeconds + MoveSendInterval;
-}
-
-// Grip frames are a stream, not a fact: a dropped one is corrected by the
-// next, so this is unreliable on purpose.
-simulated function StreamServerGrip(int Hand, vector Palm)
-{
-    if (!Grabs[Hand].bServerHeld) return;
-    if (WorldInfo.TimeSeconds < Grabs[Hand].NextMoveSend) return;
-    Grabs[Hand].NextMoveSend = WorldInfo.TimeSeconds + MoveSendInterval;
-    Bridge.RequestNetworkGrabMove(Hand, Palm, HandRotation(Hand));
 }
 
 // End a hold. Throw is the release velocity for a deliberate let-go; every
-// other ending passes none and the body simply drops.
-simulated function ClearGrab(int Hand, string Reason, optional vector Throw)
+// other ending passes none and the body simply drops. Carry is a let-go too
+// slow to count as a throw: the local body still leaves with the hand's
+// motion instead of stopping dead where it was held (#25).
+simulated function ClearGrab(int Hand, string Reason, optional vector Throw, optional vector Carry)
 {
     local VRSM_HeldKnockdown Move;
+    local VRSM_StandingHold Standing;
     local bool bOwnerLive, bThrown;
     if (Hand < 0 || Hand > 1) return;
     RendWaitUntil=0;
@@ -658,15 +719,22 @@ simulated function ClearGrab(int Hand, string Reason, optional vector Throw)
     // thrown out of a grip that is still closed, and a body the other hand
     // holds by the very same bone stays fixed.
     if (Grabs[1 - Hand].bActive && Grabs[1 - Hand].Owner == Grabs[Hand].Owner
-        && class'VRBodyHold'.static.SamePiece(Grabs[Hand].Component, Grabs[Hand].BoneName, Grabs[1 - Hand].BoneName)) Throw = vect(0,0,0);
+        && class'VRBodyHold'.static.SamePiece(Grabs[Hand].Component, Grabs[Hand].BoneName, Grabs[1 - Hand].BoneName))
+    { Throw = vect(0,0,0); Carry = vect(0,0,0); }
     // Only authority spends pressure. Clients send their original bounded throw.
     if (!IsZero(Throw) && bOwnerLive && !IsNetworkClient())
         Throw=class'VRBreacherPhysics'.static.EmpowerThrow(Bridge.PC,Grabs[Hand].Owner,PalmPoint(Hand),Throw);
     class'VRGrabOwnership'.static.Release(Bridge.PC,byte(Hand),Throw);
+    if (Grabs[Hand].bStanding) EndArmPin(Hand, true);
+    if (Grabs[Hand].bStanding && !IsNetworkClient())
+    {
+        Standing = class'VRSM_StandingHold'.static.Current(Grabs[Hand].Pawn);
+        if (Standing != None) Standing.ReleaseHold(byte(Hand));
+    }
     bThrown = !IsZero(Throw);
-    if (Grabs[Hand].bAttached && bOwnerLive
+    if (Grabs[Hand].bAttached && bOwnerLive && HeldBodyCurrent(Hand)
         && !(Grabs[1 - Hand].bActive && Grabs[1 - Hand].Body == Grabs[Hand].Body))
-        class'VRBodyHold'.static.End(Grabs[Hand].Body, Grabs[Hand].Component, Throw, Grabs[Hand].BoneName);
+        class'VRBodyHold'.static.End(Grabs[Hand].Body, Grabs[Hand].Component, bThrown ? Throw : Carry, Grabs[Hand].BoneName);
     if (Grabs[Hand].bOwnsKinematicUpdate && bOwnerLive
         && !(Grabs[1 - Hand].bOwnsKinematicUpdate && Grabs[1 - Hand].Component == Grabs[Hand].Component))
         SkeletalMeshComponent(Grabs[Hand].Component).bUpdateKinematicBonesFromAnimation =
@@ -682,7 +750,7 @@ simulated function ClearGrab(int Hand, string Reason, optional vector Throw)
     // counts a knockdown, so bHoldCounted cannot stand in for it.
     if (Grabs[Hand].bServerHeld && IsNetworkClient())
         Bridge.RequestNetworkReleaseGrab(Grabs[Hand].Pawn, Hand, Throw);
-    if (bThrown && bOwnerLive) AddThrown(Hand);
+    if (bThrown && bOwnerLive) AddThrown(Hand, Throw);
     if (Grabs[Hand].bGib && KFGiblet(Grabs[Hand].Owner) != None && bOwnerLive)
         Grabs[Hand].Owner.LifeSpan = 8.0;
     ResetGrab(Hand);
@@ -690,18 +758,46 @@ simulated function ClearGrab(int Hand, string Reason, optional vector Throw)
 
 simulated function Release(int Hand)
 {
-    local vector Throw;
+    local vector Throw, Carry;
+    local float Scale, Limit;
     if (Hand < 0 || Hand > 1 || !Grabs[Hand].bActive) return;
-    if (Grabs[Hand].bAttached && Grabs[Hand].bHavePalm
-        && VSize(Grabs[Hand].HandVelocity) * ThrowScale >= MinThrowSpeed)
+    // Alyx's release: drop the braking frames, average direction at peak speed.
+    if (Thrower != None) Grabs[Hand].HandVelocity = Thrower.Release(Hand, WorldInfo.RealTimeSeconds, Grabs[Hand].HandVelocity);
+    Scale = Grabs[Hand].bLiving ? ThrowScale : CorpseThrowScale;
+    Limit = Grabs[Hand].bLiving ? MaxThrowSpeed : MaxCorpseThrowSpeed;
+    // A dead weight leaves at the speed it was following the hand (#25): the
+    // hand's speed, up to the most this piece's mass lets it keep up with.
+    if (!Grabs[Hand].bLiving && HoldSpeedLimit(Hand) > 0) Limit = FMin(Limit, HoldSpeedLimit(Hand));
+    if (Bridge != None && Bridge.bSuperStrength)
     {
-        Throw = Grabs[Hand].HandVelocity * ThrowScale;
-        if (VSize(Throw) > MaxThrowSpeed) Throw = Normal(Throw) * MaxThrowSpeed;
-        ++Throws;
+        Scale = Grabs[Hand].bLiving ? 1.5 : 0.85;
+        Limit = Grabs[Hand].bLiving ? 2200.0 : 1000.0;
     }
-    `log("KF2VR_ZEDGRAB action=release hand=" $ Hand $ " throw=" $ int(VSize(Throw)));
-    ClearGrab(Hand, "release", Throw);
+    if (Grabs[Hand].bAttached && Grabs[Hand].bHavePalm)
+    {
+        Carry = Grabs[Hand].HandVelocity * Scale;
+        if (VSize(Carry) > Limit) Carry = Normal(Carry) * Limit;
+        if (VSize(Grabs[Hand].HandVelocity) * Scale >= MinThrowSpeed) { Throw = Carry; ++Throws; }
+    }
+    `log("KF2VR_ZEDGRAB action=release hand=" $ Hand $ " throw=" $ int(VSize(Throw)) $ " carry=" $ int(VSize(Carry)) $ " mass=" $ int(HeldMass(Hand)));
+    ClearGrab(Hand, "release", Throw, Carry);
     Pulse(Hand, 0.35, 0.035);
+}
+
+// Stock pawn mass (kg) shared out by physics-body mass to the connected
+// piece in the hand, so a severed limb weighs its share of the Zed.
+simulated function float HeldMass(int Hand)
+{
+    if (Grabs[Hand].bGib || Grabs[Hand].Pawn == None) return GibMass;
+    return class'VRBodyHold'.static.PieceMass(Grabs[Hand].Pawn, SkeletalMeshComponent(Grabs[Hand].Component), Grabs[Hand].BoneName);
+}
+
+// Fastest this dead hold follows the hand (VRBodyHold.Weigh); 0 for a living
+// Zed or super strength, which keep up with any swing.
+simulated function float HoldSpeedLimit(int Hand)
+{
+    if (Grabs[Hand].bLiving || (Bridge != None && Bridge.bSuperStrength)) return 0;
+    return class'VRBodyHold'.static.WeightSpeed(HeldMass(Hand));
 }
 
 simulated function ReleaseAll()
@@ -721,7 +817,7 @@ simulated function bool HoldStillValid(int Hand)
     if (!ContextValid() || !HandValid(Hand)) return false;
     if (Grabs[Hand].bGib) return Grabs[Hand].Component != None;
     M = Grabs[Hand].Pawn;
-    if (M.Mesh != Grabs[Hand].Component) return false;
+    if (M == None || M.Mesh == None || M.Mesh != Grabs[Hand].Component) return false;
     if (!Grabs[Hand].bLiving) return true;
     if (IsCorpse(M)) return false;
     return true;
@@ -730,7 +826,8 @@ simulated function bool HoldStillValid(int Hand)
 // Keep the exact held part and grip while death or gore rebuilds its physics.
 simulated function BeginRegrip(int Hand)
 {
-    if (Grabs[Hand].bAttached) class'VRBodyHold'.static.End(Grabs[Hand].Body, Grabs[Hand].Component);
+    if (Grabs[Hand].bAttached && HeldBodyCurrent(Hand))
+        class'VRBodyHold'.static.End(Grabs[Hand].Body, Grabs[Hand].Component);
     Grabs[Hand].bAttached = false;
     Grabs[Hand].Body = None;
     if (IsCorpse(Grabs[Hand].Pawn))
@@ -749,6 +846,7 @@ simulated function UpdateHand(int Hand, float DeltaTime)
     local KFPawn_Monster M;
     local VRSM_HeldKnockdown Move;
     if (!Grabs[Hand].bActive) return;
+    if (Grabs[Hand].bStanding) { UpdateStanding(Hand); return; }
     M = Grabs[Hand].Pawn;
     if (Grabs[Hand].bAttached)
         class'VRGrabOwnership'.static.Update(Bridge.PC,byte(Hand),Grabs[Hand].Owner,Grabs[Hand].BoneName,PalmPoint(Hand));
@@ -781,13 +879,13 @@ simulated function UpdateHand(int Hand, float DeltaTime)
         Grabs[Hand].bLiving = false;
     }
     if (!HoldStillValid(Hand)) { ++InvalidDrops; ClearGrab(Hand, "invalid"); return; }
+    if (Escaped(Hand)) return;
 
     if (Grabs[Hand].bRegrip)
     {
         // Keep the existing authority hand lease alive while the local death
         // ragdoll rebuilds. Only the bounded, already-owned hand frame crosses
         // the network; no client corpse transform or new target claim does.
-        StreamServerGrip(Hand,PalmPoint(Hand));
         // Wait for the death to finish: PlayDying re-initialises the ragdoll
         // after the health reaches zero, and a grip taken before that is on
         // bodies about to be replaced.
@@ -805,10 +903,23 @@ simulated function UpdateHand(int Hand, float DeltaTime)
 
     if (Grabs[Hand].bPendingRagdoll)
     {
+        // On a network client the knockdown's new ragdoll can report its
+        // bodies far from the Zed for a few frames after PHYS_RigidBody. A
+        // grip captured then blended in from that frame and was dropped as a
+        // tracking jump a few ticks later (#177: "fell to the floor but I did
+        // not grab them"). Wait for the held body to sit by the palm.
+        if (M.Physics == PHYS_RigidBody && !RagdollSettledAtPalm(Hand, M))
+        {
+            if (WorldInfo.TimeSeconds - Grabs[Hand].StartTime > RagdollTimeout)
+            { ++TimeoutDrops; ClearGrab(Hand, "ragdoll_far"); }
+            return;
+        }
         if (M.Physics == PHYS_RigidBody)
         {
             Grabs[Hand].bPendingRagdoll = false;
             if (!AttachHold(Hand)) { ClearGrab(Hand, "attach_failed"); return; }
+            `log("KF2VR_ZEDGRAB action=attach hand=" $ Hand $ " waited=" $ (WorldInfo.TimeSeconds - Grabs[Hand].StartTime)
+                $ " body_to_palm=" $ VSize(MatrixGetOrigin(Grabs[Hand].StartTM) - PalmPoint(Hand)));
             ClaimServerHold(Hand);
         }
         // Two waits, not one. On a client the knockdown request costs a round
@@ -850,6 +961,254 @@ simulated function UpdateHand(int Hand, float DeltaTime)
     class'VRBodyHold'.static.Begin(Grabs[Hand].Body, Grabs[Hand].Component);
     PlaceHeld(Hand, DeltaTime);
     if (Grabs[Hand].bActive && Grabs[Hand].bGib) Grabs[Hand].Owner.LifeSpan = FMax(Grabs[Hand].Owner.LifeSpan, 8.0);
+}
+
+// The knocked-down Zed's held body is where the hand closed on it, not still
+// at an uninitialised ragdoll frame.
+simulated function bool RagdollSettledAtPalm(int Hand, KFPawn_Monster M)
+{
+    local RB_BodyInstance Body;
+    Body = class'VRBodyHold'.static.BodyFor(M.Mesh, Grabs[Hand].BoneName);
+    return Body != None && Body.IsValidBodyInstance()
+        && VSize(MatrixGetOrigin(Body.GetUnrealWorldTM()) - PalmPoint(Hand)) <= SearchRadius;
+}
+
+// Melee item 11, mirroring the authority's timer in VRSM_HeldKnockdown: a
+// held living Zed breaks the second hand of a two-handed hold after 2 s and
+// the whole hold after 5 s (scaled by class), with a shove-back pulse.
+simulated function bool Escaped(int Hand)
+{
+    local float Held, Scale;
+    local int Other;
+    local VRSM_HeldKnockdown Move;
+    if (!Grabs[Hand].bLiving || Grabs[Hand].bPendingRagdoll || Grabs[Hand].Pawn == None
+        || !class'VRSM_HeldKnockdown'.static.EscapeEnabled()) return false;
+    Move = class'VRSM_HeldKnockdown'.static.Current(Grabs[Hand].Pawn);
+    if (Move != None && Move.RecoveringFromImpact()) return false;
+    Scale = class'VRSM_HeldKnockdown'.static.EscapeScale(Grabs[Hand].Pawn);
+    Other = 1 - Hand;
+    Held = WorldInfo.TimeSeconds - Grabs[Hand].StartTime;
+    if (Grabs[Other].bActive && Grabs[Other].bLiving && Grabs[Other].Pawn == Grabs[Hand].Pawn)
+        Held = FMax(Held, WorldInfo.TimeSeconds - Grabs[Other].StartTime);
+    if (Held >= class'VRSM_HeldKnockdown'.default.EscapeFull * Scale)
+    {
+        ClearGrab(Hand, "escaped");
+        Pulse(Hand, 0.8, 0.06);
+        return true;
+    }
+    // One hand frees: the later of two hands on the same Zed lets go.
+    if (Held >= class'VRSM_HeldKnockdown'.default.EscapeOneHand * Scale
+        && Grabs[Other].bActive && Grabs[Other].Pawn == Grabs[Hand].Pawn
+        && Grabs[Hand].StartTime >= Grabs[Other].StartTime && Hand != Other)
+    {
+        if (Grabs[Hand].StartTime == Grabs[Other].StartTime && Hand == 0) return false;
+        ClearGrab(Hand, "escaped_hand");
+        Pulse(Hand, 0.6, 0.05);
+        return true;
+    }
+    return false;
+}
+
+static function bool IsArmBone(name Bone)
+{
+    local string S;
+    S = Locs(string(Bone));
+    return InStr(S, "arm") >= 0 || InStr(S, "hand") >= 0 || InStr(S, "wrist") >= 0;
+}
+
+// A standing hold seen on a machine that never installed VRSM_StandingHold
+// runs the stock stun, whose dazed effect would hover over a choked Zed.
+// The replicated hold flag identifies it; switch that effect off.
+simulated function HideHoldDazes()
+{
+    if (WorldInfo.NetMode == NM_DedicatedServer || WorldInfo.RealTimeSeconds < NextDazeCheck) return;
+    NextDazeCheck = WorldInfo.RealTimeSeconds + 0.2;
+    class'VRSM_StandingHold'.static.PrepareViewer(WorldInfo);
+}
+
+// Melee item 10, experimental standing holds (VRSM_StandingHold).
+simulated function bool StandingWanted(KFPawn_Monster M)
+{
+    return class'VRExperimentalPolicy'.static.StandingHoldsEnabled()
+        && Bridge.ExperimentalInteractionsEnabled() && Bridge.bExperimentalStandingHolds && M != None && !M.IsLargeZed()
+        && class'VRSM_StandingHold'.static.Install(M) && class'VRSM_StandingHold'.static.CanStart(M);
+}
+
+simulated function bool BeginStanding(int Hand, KFPawn_Monster M, name Bone)
+{
+    Grabs[Hand].bStanding = true;
+    Grabs[Hand].StartTime = WorldInfo.TimeSeconds;
+    if (!IsNetworkClient())
+        return class'VRSM_StandingHold'.static.Begin(M, Bridge.Human, Bone, Hand, PalmPoint(Hand));
+    if (!Bridge.RequestNetworkGrabHold(M, Bone, Hand, PalmPoint(Hand), HandRotation(Hand), true)) return false;
+    Grabs[Hand].bServerHeld = true;
+    return true;
+}
+
+// The authority steers the Zed toward this palm; a network client streams it.
+// The hold ends when the Zed dies, is knocked down, breaks free or the hold
+// move ends for any other reason.
+simulated function UpdateStanding(int Hand)
+{
+    local KFPawn_Monster M;
+    local VRSM_StandingHold Move;
+    M = Grabs[Hand].Pawn;
+    if (M == None || M.bDeleteMe || IsCorpse(M) || !ContextValid() || !HandValid(Hand))
+    { ClearGrab(Hand, "standing_lost"); return; }
+    if (Escaped(Hand)) return;
+    // The pin waits for the hold to be running so the struggle pose is set.
+    if (!ArmPinSets[Hand].bPinned && M.IsDoingSpecialMove(SM_Stunned) && M.Physics != PHYS_RigidBody) StartArmPin(Hand);
+    if (ArmPinSets[Hand].bPinned && (M.Physics == PHYS_RigidBody || M.IsDoingSpecialMove(SM_Knockdown))) EndArmPin(Hand, false);
+    UpdateArmPin(Hand);
+    if (IsNetworkClient())
+    {
+        if (M.IsDoingSpecialMove(SM_Knockdown))
+        {
+            // The server converts its own half when it sees the fall.
+            EndArmPin(Hand, false);
+            Grabs[Hand].bStanding = false;
+            Grabs[Hand].bPendingRagdoll = true;
+            Grabs[Hand].bKnockdownSeen = true;
+            Grabs[Hand].StartTime = WorldInfo.TimeSeconds;
+            return;
+        }
+        // The server's move lands a round trip later.
+        if (!M.IsDoingSpecialMove(SM_Stunned) && WorldInfo.TimeSeconds - Grabs[Hand].StartTime > 0.6)
+        { ClearGrab(Hand, "standing_ended"); return; }
+        return;
+    }
+    Move = class'VRSM_StandingHold'.static.Current(M);
+    if (Move == None)
+    {
+        if (!FallToKnockdown(Hand, M)) ClearGrab(Hand, "standing_ended");
+        return;
+    }
+    Move.SetTarget(Hand, PalmPoint(Hand));
+}
+
+// A lifted standing hold fell (VRSM_StandingHold.Fall): keep the hand and
+// continue as the ordinary knockdown hold once the ragdoll exists.
+simulated function bool FallToKnockdown(int Hand, KFPawn_Monster M)
+{
+    if (M == None || !M.IsDoingSpecialMove(SM_Knockdown) || class'VRSM_HeldKnockdown'.static.Current(M) == None) return false;
+    EndArmPin(Hand, false);
+    Grabs[Hand].bStanding = false;
+    Grabs[Hand].bPendingRagdoll = true;
+    Grabs[Hand].bKnockdownSeen = true;
+    Grabs[Hand].StartTime = WorldInfo.TimeSeconds;
+    `log("KF2VR_ZEDGRAB action=standing_fall hand=" $ Hand $ " pawn=" $ M.Class);
+    return true;
+}
+
+simulated function bool StartArmPin(int Hand)
+{
+    local KFPawn_Monster M;
+    local RB_BodyInstance Body;
+    local name Bone, Parent;
+    local string S;
+    local int Guard;
+    M = Grabs[Hand].Pawn;
+    if (ArmPinSets[Hand].bPinned || Bridge.UseLegacyMelee(Bridge.bLegacyMeleeArmPin) || M == None || M.Mesh == None || M.Mesh.PhysicsAssetInstance == None
+        || class'VRSM_StandingHold'.static.ArmSide(Grabs[Hand].BoneName) == 0) return false;
+    // Never pin over the other hand's pin on the same Zed.
+    if (ArmPinSets[1 - Hand].bPinned && Grabs[1 - Hand].Pawn == M) return false;
+    Bone = M.GetRBBoneFromBoneName(Grabs[Hand].BoneName);
+    Body = class'VRBodyHold'.static.BodyFor(M.Mesh, Bone);
+    if (Body == None || !Body.IsValidBodyInstance()) return false;
+    ArmPinSets[Hand].Bones.Length = 0;
+    // The held part and its parents up to, not including, the shoulder.
+    while (Bone != '' && Guard++ < 4)
+    {
+        S = Locs(string(Bone));
+        if (InStr(S, "shoulder") >= 0 || InStr(S, "clav") >= 0 || InStr(S, "spine") >= 0 || InStr(S, "neck") >= 0) break;
+        ArmPinSets[Hand].Bones.AddItem(Bone);
+        Parent = M.GetRBBoneFromBoneName(M.Mesh.GetParentBone(Bone));
+        if (Parent == Bone) break;
+        Bone = Parent;
+    }
+    if (ArmPinSets[Hand].Bones.Length == 0) return false;
+    if (M.PhysicsImpactBlendTimeToGo > 0) M.StopPhysicsBodyImpact();
+    ArmPinSets[Hand].bSavedReactions = M.bCanPlayPhysicsHitReactions;
+    M.bCanPlayPhysicsHitReactions = false;
+    M.Mesh.PhysicsAssetInstance.SetNamedBodiesFixed(false, ArmPinSets[Hand].Bones, M.Mesh, false, true);
+    if (M.Mesh.PhysicsWeight < 1.f) M.InitPartialKinematics();
+    if (!class'VRBodyHold'.static.Capture(Body, PalmPoint(Hand), HandRotation(Hand), ArmPinOffset[Hand], ArmPinRelative[Hand]))
+    {
+        EndArmPin(Hand, true);
+        return false;
+    }
+    class'VRBodyHold'.static.SeatInPalm(Hand, Grabs[Hand].BoneName, ArmPinOffset[Hand]);
+    ArmPinStart[Hand] = Body.GetUnrealWorldTM();
+    ArmPinTime[Hand] = WorldInfo.TimeSeconds;
+    ArmPinBadSince[Hand] = 0;
+    ArmPinSets[Hand].bPinned = true;
+    ++ArmPins;
+    return true;
+}
+
+simulated function UpdateArmPin(int Hand)
+{
+    local KFPawn_Monster M;
+    local RB_BodyInstance Body;
+    local matrix Target;
+    local name Bone;
+    M = Grabs[Hand].Pawn;
+    if (!ArmPinSets[Hand].bPinned) return;
+    Bone = M.GetRBBoneFromBoneName(Grabs[Hand].BoneName);
+    Body = class'VRBodyHold'.static.BodyFor(M.Mesh, Bone);
+    if (Body == None || !Body.IsValidBodyInstance()) { EndArmPin(Hand, true); return; }
+    Target = class'VRBodyHold'.static.Blend(ArmPinStart[Hand],
+        class'VRBodyHold'.static.TargetFor(PalmPoint(Hand), HandRotation(Hand), ArmPinOffset[Hand], ArmPinRelative[Hand]),
+        (WorldInfo.TimeSeconds - ArmPinTime[Hand]) / FMax(class'VRBodyHold'.default.CatchTime, 0.01));
+    // If the arm cannot reach (the Zed was carried off, an animation fights
+    // the pin) let it go rather than stretch or flail.
+    if (WorldInfo.TimeSeconds - ArmPinTime[Hand] > class'VRBodyHold'.default.CatchTime
+        && class'VRBodyHold'.static.PositionError(Body, Target) > ArmPinMaxError)
+    {
+        if (ArmPinBadSince[Hand] == 0) ArmPinBadSince[Hand] = WorldInfo.TimeSeconds;
+        else if (WorldInfo.TimeSeconds - ArmPinBadSince[Hand] > ArmPinMaxErrorTime)
+        {
+            ++ArmPinFailures;
+            `log("KF2VR_ZEDGRAB action=arm_pin_released hand=" $ Hand $ " pawn=" $ M.Class);
+            EndArmPin(Hand, true);
+            return;
+        }
+    }
+    else ArmPinBadSince[Hand] = 0;
+    class'VRBodyHold'.static.Move(M.Mesh, Bone, Target);
+}
+
+// bRefix returns the arm to its animation; a Zed falling into the knockdown
+// keeps its bodies free for the ragdoll.
+simulated function EndArmPin(int Hand, bool bRefix)
+{
+    local KFPawn_Monster M;
+    if (!ArmPinSets[Hand].bPinned && ArmPinSets[Hand].Bones.Length == 0) return;
+    M = Grabs[Hand].Pawn;
+    if (M != None && !M.bDeleteMe && M.Mesh != None && M.Mesh.PhysicsAssetInstance != None)
+    {
+        if (bRefix && M.Health > 0 && !M.bPlayedDeath && M.Physics != PHYS_RigidBody && ArmPinSets[Hand].Bones.Length > 0)
+            M.Mesh.PhysicsAssetInstance.SetNamedBodiesFixed(true, ArmPinSets[Hand].Bones, M.Mesh, false, true);
+        M.bCanPlayPhysicsHitReactions = ArmPinSets[Hand].bSavedReactions;
+    }
+    ArmPinSets[Hand].bPinned = false;
+    ArmPinSets[Hand].Bones.Length = 0;
+}
+
+// A Scrake, Fleshpound or boss shrugs off a fresh grab at once: a shove-back
+// pulse instead of a silent miss.
+simulated function bool RefuseLarge(int Hand, vector Palm)
+{
+    local KFPawn_Monster M;
+    foreach WorldInfo.AllPawns(class'KFPawn_Monster', M, Palm, GrabRadius + 20)
+    {
+        if (M.bDeleteMe || IsCorpse(M) || M.Physics == PHYS_RigidBody || Bridge.Human.GetTeamNum() == M.GetTeamNum()) continue;
+        if (!M.IsLargeZed() && !IsBossOrigin(M)) continue;
+        Pulse(Hand, 0.8, 0.06);
+        `log("KF2VR_ZEDGRAB action=refused hand=" $ Hand $ " pawn=" $ M.Class);
+        return true;
+    }
+    return false;
 }
 
 // Put the held body in the hand for this tick. The body is kinematic, so it
@@ -897,8 +1256,15 @@ simulated function PlaceHeld(int Hand, float DeltaTime)
     }
     Palm = PalmPoint(Hand);
     if (Grabs[Hand].bHavePalm && DeltaTime > 0 && DeltaTime <= 0.1)
+    {
         Grabs[Hand].HandVelocity = Grabs[Hand].HandVelocity * 0.5 + ((Palm - Grabs[Hand].LastPalm) / DeltaTime) * 0.5;
-    else Grabs[Hand].HandVelocity = vect(0,0,0);
+        if (Thrower != None) Thrower.Add(Hand, (Palm - Grabs[Hand].LastPalm) / DeltaTime, WorldInfo.RealTimeSeconds);
+    }
+    else
+    {
+        Grabs[Hand].HandVelocity = vect(0,0,0);
+        if (Thrower == None) Thrower = new(self) class'VRThrowRelease'; Thrower.Reset(Hand);
+    }
     Grabs[Hand].LastPalm = Palm;
     Grabs[Hand].bHavePalm = true;
     SwingHum(Hand);
@@ -925,6 +1291,13 @@ simulated function PlaceHeld(int Hand, float DeltaTime)
     {
         ClearGrab(Hand, "two_point_stretch");
         return;
+    }
+    // A dead body has weight: it trails a fast swing instead of riding the
+    // palm exactly, and the release continues at the speed it was moving.
+    if (HoldSpeedLimit(Hand) > 0 && Grabs[Hand].bHavePalm)
+    {
+        Want = class'VRBodyHold'.static.Weigh(Grabs[Hand].Placed, Want, HeldMass(Hand), DeltaTime);
+        Target = MakeRotationTranslationMatrix(Want, MatrixGetRotator(Target));
     }
     Direction = Want - Grabs[Hand].Placed;
     Distance = VSize(Direction);
@@ -954,6 +1327,11 @@ simulated function PlaceHeld(int Hand, float DeltaTime)
             WorldImpact(Hand, Surface, HitNormal, Grabs[Hand].HandVelocity dot -HitNormal);
         }
     }
+    // Damage and optional impact callbacks can terminate the rigid body while
+    // leaving its pooled RB_BodyInstance object alive. Rebind next update; do
+    // not move or sample the pre-impact body again in this frame.
+    RefreshImpactHolds();
+    if (!Holding(Hand)) return;
     if (Surface != Want) Target = MakeRotationTranslationMatrix(Surface, MatrixGetRotator(Target));
     class'VRBodyHold'.static.Move(Grabs[Hand].Component, Grabs[Hand].BoneName, Target);
     Grabs[Hand].Placed = Surface;
@@ -976,7 +1354,6 @@ simulated function PlaceHeld(int Hand, float DeltaTime)
     // same player knocked down.
     CountHold(Hand);
     ClaimServerHold(Hand);
-    StreamServerGrip(Hand, Palm);
 }
 
 simulated function Update()
@@ -990,6 +1367,7 @@ simulated function Update()
     DeltaTime = WorldInfo.TimeSeconds - LastImpactSample;
     LastImpactSample = WorldInfo.TimeSeconds;
     for (I = 0; I < 2; ++I) UpdateHand(I, DeltaTime);
+    HideHoldDazes();
     UpdateImpacts(DeltaTime);
     UpdateThrown();
 }
@@ -1005,10 +1383,44 @@ simulated event Destroyed()
 // ---------------------------------------------------------------------------
 // Held bodies as weapons.
 
+// RB_BodyInstance objects are pooled; object existence alone is not a live
+// PhysX actor. Check the current named body and component before native reads.
+simulated function bool HeldBodyCurrent(int Hand)
+{
+    local RB_BodyInstance Current;
+    if (Grabs[Hand].Component == None || Grabs[Hand].Body == None
+        || Grabs[Hand].Body.OwnerComponent != Grabs[Hand].Component) return false;
+    if (Grabs[Hand].Pawn != None && (Grabs[Hand].Pawn.bDeleteMe
+        || Grabs[Hand].Pawn.Mesh != Grabs[Hand].Component)) return false;
+    if (Grabs[Hand].bGib) Current = Grabs[Hand].Component.GetRootBodyInstance();
+    else Current = class'VRBodyHold'.static.BodyFor(Grabs[Hand].Component, Grabs[Hand].BoneName);
+    return Current == Grabs[Hand].Body && Current.IsValidBodyInstance();
+}
+
+// TakeDamage can destroy/rebuild either held pawn before UpdateHand runs
+// again (death, gore, knockdown recovery). Preserve the grip, not its body.
+simulated function RefreshImpactHolds()
+{
+    local int Hand;
+    for (Hand = 0; Hand < 2; ++Hand)
+    {
+        if (!Grabs[Hand].bActive || !Grabs[Hand].bAttached || Grabs[Hand].bStanding) continue;
+        if (Grabs[Hand].Owner == None || Grabs[Hand].Owner.bDeleteMe)
+            ClearGrab(Hand, "impact_destroyed");
+        else if (!HeldBodyCurrent(Hand)
+            || (Grabs[Hand].bLiving && IsCorpse(Grabs[Hand].Pawn)))
+        {
+            if (Grabs[Hand].Pawn != None) BeginRegrip(Hand);
+            else ClearGrab(Hand, "impact_body_lost");
+        }
+    }
+}
+
 simulated function bool Holding(int Hand)
 {
     return Grabs[Hand].bActive && Grabs[Hand].bAttached && !Grabs[Hand].bPendingRagdoll && !Grabs[Hand].bRegrip
-        && Grabs[Hand].Owner != None && !Grabs[Hand].Owner.bDeleteMe;
+        && Grabs[Hand].Owner != None && !Grabs[Hand].Owner.bDeleteMe
+        && HeldBodyCurrent(Hand);
 }
 
 simulated function name HeadBone(KFPawn P)
@@ -1128,12 +1540,14 @@ simulated function bool CanHit(KFPawn P)
 simulated function DealImpact(KFPawn Victim, float Amount, vector HitLocation, vector Direction, name Zone)
 {
     local TraceHitInfo Info;
-    if (!ContextValid() || !Bridge.ZedGrabAllowed() || !CanHit(Victim) || Amount <= 0) return;
+    if (!ContextValid() || !Bridge.ZedGrabAllowed()
+        || (!CanHit(Victim) && !class'VRCorpseContact'.static.Eligible(Victim)) || Amount <= 0) return;
     Info.BoneName = Zone;
     Victim.TakeDamage(int(Amount), Bridge.Human.Controller, HitLocation,
         Direction * 600, class'VRDT_ZedSlam', Info, Bridge.Human);
-    if (IsNetworkClient())
+    if (IsNetworkClient() && !Victim.bPlayedDeath)
         Bridge.RequestNetworkGrabDamage(Victim, int(Amount), HitLocation, Direction * 600, Zone);
+    RefreshImpactHolds();
     StartCooldown(Victim);
     if (Bridge.HandInventory != None && Bridge.HandInventory.HitStop != None)
         Bridge.HandInventory.HitStop.Freeze(Victim, Bridge.HandInventory.HitStop.ImpactDuration);
@@ -1159,7 +1573,8 @@ simulated function WorldImpact(int Hand, vector Surface, vector Normal, float Sp
     if (Speed < MinImpactSpeed || M == None || CoolingDown(M)) return;
     if (NearestZone(M, Surface, Zone, ZoneLocation) > ContactRadius * 2) return;
     Amount = ImpactDamage(Speed);
-    if (Grabs[Hand].bLiving && CanHit(M)) DealImpact(M, Amount, Surface, -Normal, Zone);
+    if (CanHit(M) || class'VRCorpseContact'.static.Eligible(M))
+        DealImpact(M, Amount, Surface, -Normal, Zone);
     class'VRBreacherCharge'.static.Report(Bridge,M,Grabs[Hand].BoneName,None,Surface,-Normal,Speed,Amount);
     StartCooldown(M);
     ++WorldSmashes;
@@ -1264,6 +1679,7 @@ simulated function TrySwing(int Hand)
     if (Holding(1 - Hand)) Other = Grabs[1 - Hand].Owner;
     for (P = 0; P < 2; ++P)
     {
+        if (!Holding(Hand) || !Grabs[Hand].bMotion) return;
         Point = Grabs[Hand].HeadPoint;
         PointVelocity = Grabs[Hand].HeadVelocity;
         if (P == 1)
@@ -1296,9 +1712,21 @@ simulated function TrySwing(int Hand)
 // ---------------------------------------------------------------------------
 // Thrown bodies.
 
-simulated function AddThrown(int Hand)
+simulated function RetireThrownPiece(int Hand)
+{
+    local int I;
+    for (I = Thrown.Length - 1; I >= 0; --I)
+        if (Thrown[I].Owner == Grabs[Hand].Owner
+            && (Grabs[Hand].bGib || class'VRBodyHold'.static.SamePiece(
+                Grabs[Hand].Component, Thrown[I].BoneName, Grabs[Hand].BoneName)))
+            Thrown.Remove(I, 1);
+}
+
+simulated function AddThrown(int Hand, vector ReleaseVelocity)
 {
     local VRThrownBody T;
+    local RB_BodyInstance Body;
+    RetireThrownPiece(Hand);
     T.Owner = Grabs[Hand].Owner;
     T.Pawn = Grabs[Hand].Pawn;
     T.Component = Grabs[Hand].Component;
@@ -1306,18 +1734,67 @@ simulated function AddThrown(int Hand)
     T.bLiving = Grabs[Hand].bLiving;
     T.bGib = Grabs[Hand].bGib;
     T.Since = WorldInfo.TimeSeconds;
+    // The first physics tick can already be the collision. Seed the incoming
+    // motion at release instead of requiring one freely flying sample first.
+    T.LastVelocity = ReleaseVelocity;
+    T.LastSpeed = VSize(ReleaseVelocity);
+    Body = Grabs[Hand].Body;
+    if (Body == None || !Body.IsValidBodyInstance() || Body.OwnerComponent != T.Component) return;
+    T.Body = Body;
+    T.LastPoint = MatrixGetOrigin(Body.GetUnrealWorldTM());
+    T.bHavePoint = true;
     if (Thrown.Length >= 8) Thrown.Remove(0, 1);
     Thrown.AddItem(T);
 }
 
-simulated function vector ThrownPoint(int I, out vector PointVelocity)
+simulated function bool ThrownBodyCurrent(int I)
 {
     local RB_BodyInstance Body;
+    if (I < 0 || I >= Thrown.Length || Thrown[I].Owner == None || Thrown[I].Owner.bDeleteMe
+        || Thrown[I].Component == None || (Thrown[I].Pawn != None
+            && (Thrown[I].Pawn.bDeleteMe || Thrown[I].Pawn.Mesh != Thrown[I].Component))) return false;
     if (Thrown[I].bGib) Body = Thrown[I].Component.GetRootBodyInstance();
     else Body = class'VRBodyHold'.static.BodyFor(Thrown[I].Component, Thrown[I].BoneName);
-    if (Body == None || !Body.IsValidBodyInstance()) { PointVelocity = vect(0,0,0); return vect(0,0,0); }
-    PointVelocity = Body.GetUnrealWorldVelocity();
-    return MatrixGetOrigin(Body.GetUnrealWorldTM());
+    return Body != None && Body == Thrown[I].Body && Body.OwnerComponent == Thrown[I].Component
+        && Body.IsValidBodyInstance();
+}
+
+simulated function bool ThrownPoint(int I, out vector Point, out vector PointVelocity)
+{
+    if (!ThrownBodyCurrent(I)) return false;
+    PointVelocity = Thrown[I].Body.GetUnrealWorldVelocity();
+    Point = MatrixGetOrigin(Thrown[I].Body.GetUnrealWorldTM());
+    return FiniteVector(Point) && FiniteVector(PointVelocity);
+}
+
+// Sweep the released part against world geometry and blocking props. Pawns
+// belong to the body-to-body path, and the source ragdoll cannot hit itself.
+simulated function bool ThrownSurface(Actor Source, vector Start, vector End,
+    out vector HitLocation, out vector HitNormal)
+{
+    local Actor A;
+    local vector SurfacePoint, SurfaceNormal;
+    local TraceHitInfo Info;
+    local float Best, Distance;
+    local bool Found;
+    Best = 100000000;
+    // BSP/world geometry is queried separately from dynamic props, matching
+    // the held-body collision path.
+    if (Trace(HitLocation, HitNormal, End, Start, false, vect(1,1,1) * BodyRadius) != None)
+    {
+        Best = VSizeSq(HitLocation - Start);
+        Found = true;
+    }
+    foreach TraceActors(class'Actor', A, SurfacePoint, SurfaceNormal, End, Start,
+        vect(1,1,1) * BodyRadius, Info)
+    {
+        if (A == None || A == Source || A == Bridge.Human || Pawn(A) != None
+            || (!A.bWorldGeometry && !A.bBlockActors)) continue;
+        Distance = VSizeSq(SurfacePoint - Start);
+        if (Distance >= Best) continue;
+        Best = Distance; HitLocation = SurfacePoint; HitNormal = SurfaceNormal; Found = true;
+    }
+    return Found;
 }
 
 // Until a thrown body comes to rest it hits every Zed it meets, and a living
@@ -1325,8 +1802,8 @@ simulated function vector ThrownPoint(int I, out vector PointVelocity)
 simulated function UpdateThrown()
 {
     local int I;
-    local vector Point, PointVelocity, RootVelocity, ZoneLocation, Direction, HitLocation, HitNormal;
-    local name Zone;
+    local vector Point, PointVelocity, RootVelocity, ZoneLocation, Direction, HitLocation, HitNormal, SourceLocation;
+    local name Zone, SourceZone;
     local float Speed, ImpactSpeed, Amount;
     local KFPawn_Monster Victim;
     local RB_BodyInstance Root;
@@ -1338,7 +1815,10 @@ simulated function UpdateThrown()
             Thrown.Remove(I, 1);
             continue;
         }
-        Point = ThrownPoint(I, PointVelocity);
+        // A removed/rebuilt part has no continuous trajectory. Never turn a
+        // failed sample into a sweep toward world origin with old velocity.
+        if (!ThrownPoint(I, Point, PointVelocity))
+        { Thrown.Remove(I, 1); continue; }
         Root = Thrown[I].Component.GetRootBodyInstance();
         RootVelocity = PointVelocity;
         if (Root != None && Root.IsValidBodyInstance() && (Thrown[I].Pawn == None
@@ -1363,22 +1843,32 @@ simulated function UpdateThrown()
             if (Thrown[I].bGib) Amount *= GibDamageScale;
             DealImpact(Victim, Amount, ZoneLocation, Direction, Zone);
             if (Thrown[I].bLiving && CanHit(Thrown[I].Pawn) && !CoolingDown(Thrown[I].Pawn))
-                DealImpact(Thrown[I].Pawn, Amount * HeldSelfDamageScale, Point, -Direction, Zone);
+            {
+                NearestZone(Thrown[I].Pawn, Point, SourceZone, SourceLocation);
+                DealImpact(Thrown[I].Pawn, Amount * HeldSelfDamageScale, SourceLocation, -Direction, SourceZone);
+            }
             class'VRBreacherCharge'.static.Report(Bridge,Thrown[I].Owner,Thrown[I].BoneName,
                 Victim,ZoneLocation,Direction,ImpactSpeed,Amount);
             ++ThrownHits;
             `log("KF2VR_ZEDGRAB action=thrown_hit thrown=" $ Thrown[I].Owner.Class $ " living=" $ Thrown[I].bLiving
                 $ " victim=" $ Victim.Class $ " speed=" $ int(ImpactSpeed) $ " damage=" $ int(Amount));
         }
-        // A living Zed thrown into a wall: a sudden stop right against the
-        // world, from a speed worth a hit.
+        // Self-damage above can rebuild this source's ragdoll or remove the
+        // released limb in the same iteration, before the wall sweep.
+        if (!ThrownBodyCurrent(I)) { Thrown.Remove(I, 1); continue; }
+        // Carry the incoming part's swept contact across release. Waiting for
+        // a 50% whole-ragdoll speed drop missed glancing/head impacts, props,
+        // and collisions on the first tick after letting go.
         if (Thrown[I].Pawn!=None && !CoolingDown(Thrown[I].Pawn)
-            && Thrown[I].LastSpeed >= MinImpactSpeed && Speed < Thrown[I].LastSpeed * 0.5
-            && Trace(HitLocation, HitNormal, Point + Normal(Thrown[I].LastVelocity) * (BodyRadius + 20), Point, false) != None)
+            && Thrown[I].bHavePoint && Thrown[I].LastSpeed >= MinImpactSpeed
+            && ThrownSurface(Thrown[I].Owner, Thrown[I].LastPoint,
+                Point + Normal(Thrown[I].LastVelocity) * BodyRadius, HitLocation, HitNormal)
+            && (Thrown[I].LastVelocity dot -HitNormal) >= MinImpactSpeed
+            && NearestZone(Thrown[I].Pawn, HitLocation, Zone, ZoneLocation) <= ContactRadius * 2)
         {
-            NearestZone(Thrown[I].Pawn, HitLocation, Zone, ZoneLocation);
-            Amount = ImpactDamage(Thrown[I].LastSpeed);
-            if (Thrown[I].bLiving && CanHit(Thrown[I].Pawn))
+            ImpactSpeed = Thrown[I].LastVelocity dot -HitNormal;
+            Amount = ImpactDamage(ImpactSpeed);
+            if (CanHit(Thrown[I].Pawn) || class'VRCorpseContact'.static.Eligible(Thrown[I].Pawn))
                 DealImpact(Thrown[I].Pawn, Amount, HitLocation, -HitNormal, Zone);
             class'VRBreacherCharge'.static.Report(Bridge,Thrown[I].Owner,Thrown[I].BoneName,
                 None,HitLocation,-HitNormal,Thrown[I].LastSpeed,Amount);
@@ -1388,8 +1878,9 @@ simulated function UpdateThrown()
                 $ " speed=" $ int(Thrown[I].LastSpeed) $ " damage=" $ int(Amount));
         }
         Thrown[I].LastSpeed = Speed;
-        Thrown[I].LastVelocity = RootVelocity;
-        if (VSize(PointVelocity) >= VSize(RootVelocity)) Thrown[I].LastVelocity = PointVelocity;
+        Thrown[I].LastVelocity = PointVelocity;
+        Thrown[I].LastPoint = Point;
+        Thrown[I].bHavePoint = true;
     }
 }
 
@@ -1404,7 +1895,7 @@ defaultproperties
     bCollideWorld=false
     TickGroup=TG_PreAsyncWork
 
-    GrabRadius=22.0
+    GrabRadius=26.0
     GrabNearMissAllowance=2.0 // modest 9% contact margin; keep body-selection and release limits
     PalmForward=4.0
     SearchRadius=220.0
@@ -1413,16 +1904,20 @@ defaultproperties
     RagdollTimeout=1.50
     // The least velocity KFSM_RagdollKnockdown accepts without a warning.
     KnockdownNudge=2.0
-    // 20 Hz. Enough for the authority's copy, which only decides where the
-    // Zed gets up and what it can be hit through.
-    MoveSendInterval=0.05
+    ArmPinMaxError=22
+    ArmPinMaxErrorTime=0.3
     BodyRadius=8.0
     BlockedDrop=90.0
     BlockedGrace=0.4
-    // A little over the hand: a throw that only matched the hand felt weak.
-    ThrowScale=1.25
+    ThrowScale=0.65
     MinThrowSpeed=160.0
-    MaxThrowSpeed=2200.0
+    MaxThrowSpeed=600.0
+    // Dead bodies carry weight; preserve living swing-to-release impacts.
+    CorpseThrowScale=1.0
+    MaxCorpseThrowSpeed=600.0
+    // 65 kg Clot ~0.30, 130 kg Scrake ~0.19, 200 kg Fleshpound ~0.14,
+    // a 5 kg forearm ~0.60 of hand speed.
+    GibMass=3.0
     RestSpeed=90.0
     RestTime=0.25
     ThrownLifetime=5.0

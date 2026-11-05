@@ -7,6 +7,7 @@ Bots and synthetic poses never stand in for a second network connection.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from evidence import (events, mode_is, query_loopback, verify_transport, verify_fire_reload, verify_held_ledger, verify_server_pending, verify_held_network, verify_dual_weapons, verify_dual_damage,
@@ -26,9 +28,8 @@ from vr_config import DEFAULTS, import_preferences
 from release_state import verify_release
 from workshop_map import MAP_NAME, ensure_map, add_map_path, receipt as map_receipt
 from evidence import verify_paired_smoke, local_lan_readiness
-
-
-ROOT = Path(__file__).resolve().parents[2]
+from launch_support import (ROOT, NET_RATE, CONFIG_KINDS, digest, unreal_command, read_ini, set_ini, set_ini_defaults,
+                            VR_CONTROL_DEFAULTS, config_hashes, refresh_ini_versions, role_config, log_text, check_port)
 
 
 def replay_core_evidence(logs, *, native_replay=False, server_adapter=False,
@@ -45,84 +46,6 @@ def replay_core_evidence(logs, *, native_replay=False, server_adapter=False,
             and e.get("valid") == "3" and e.get("calibrated", "").lower() == "true"
             and e.get("connection") == "2" for e in events(logs[1], "native_frame"))}
     return result
-
-
-# Bytes/second per connection, for both the hosted server and every client.
-NET_RATE = "150000"
-CONFIG_KINDS = ("ENGINE", "GAME", "INPUT", "UI", "WEB", "SYSTEMSETTINGS", "LIGHTMASS", "BENCHMARKING", "MAP")
-
-
-def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest().upper()
-
-
-def unreal_command(executable: Path, arguments: list[str]) -> str:
-    """UE3 reads the raw Windows command line, not CRT argv splitting.
-
-    For a path with spaces it requires -KEY="value", rather than quoting the
-    whole -KEY=value token as subprocess.list2cmdline normally would.
-    """
-    parts = [subprocess.list2cmdline([str(executable)])]
-    for argument in arguments:
-        if '"' in argument or '\n' in argument or '\r' in argument:
-            raise ValueError("Unexpected quote/control character in Unreal argument")
-        if argument.startswith("-") and "=" in argument:
-            key, value = argument.split("=", 1)
-            if any(c.isspace() for c in value):
-                parts.append(f'{key}="{value}"')
-                continue
-        parts.append(subprocess.list2cmdline([argument]))
-    return " ".join(parts)
-
-
-def read_ini(path: Path) -> str:
-    data = path.read_bytes()
-    text = data.decode("utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig")
-    # write_text translates LF on Windows. Normalize decoded bytes first so
-    # repeated configuration passes cannot grow CRCRLF and defeat section/key
-    # replacement, leaving stale duplicates ahead of an explicit override.
-    return re.sub(r"\r+\n", "\n", text).replace("\r", "\n")
-
-
-def set_ini(text: str, section: str, values: dict[str, str | list[str]]) -> str:
-    """Replace keys in one section; never depend on duplicate-section precedence."""
-    pattern = re.compile(r"(?ims)^[ \t]*\[" + re.escape(section) + r"\][^\r\n]*(?:\r?\n|$).*?(?=^[ \t]*\[|\Z)")
-    matches = list(pattern.finditer(text))
-    if len(matches) > 1:
-        raise ValueError(f"Duplicate INI section: {section}")
-    old = matches[0].group() if matches else f"[{section}]\n"
-    for key in values:
-        old = re.sub(r"(?im)^[ \t]*[+!.-]?" + re.escape(key) + r"[ \t]*=[^\r\n]*(?:\r?\n|$)", "", old)
-    head, _, tail = old.partition("\n")
-    lines = [f"{key}={item}" for key, value in values.items() for item in (value if isinstance(value, list) else [value])]
-    replacement = head.rstrip("\r") + "\n" + "\n".join(lines) + "\n" + tail
-    return pattern.sub(lambda _: replacement, text) if matches else text.rstrip() + "\n\n" + replacement
-
-
-def set_ini_defaults(text: str, section: str, values: dict[str, str]) -> str:
-    """Seed only keys the copied profile does not already define.
-
-    The pinned SDK ignores defaultproperties assignments to config fields, so
-    an absent key means false/0 rather than the intended playable value. This
-    mirrors tools/test-bootstrap.ps1 so the multiplayer client starts with the
-    same controls as the standalone playable build while preserving whatever
-    the player has already saved.
-    """
-    pattern = re.compile(r"(?ims)^[ \t]*\[" + re.escape(section) + r"\][^\r\n]*(?:\r?\n|$).*?(?=^[ \t]*\[|\Z)")
-    match = pattern.search(text)
-    body = match.group() if match else ""
-    missing = {key: value for key, value in values.items()
-               if not re.search(r"(?im)^[ \t]*[+!.-]?" + re.escape(key) + r"[ \t]*=", body)}
-    return set_ini(text, section, missing) if missing else text
-
-
-# Controls parity with the standalone playable build. bIndependentHands is
-# forced in KF2VRNetHandsBridge and is deliberately not listed here.
-VR_CONTROL_DEFAULTS = DEFAULTS["KF2VR.VRHandsBridge"]
-
-
-def config_hashes(directory: Path) -> dict[str, str]:
-    return {p.name: digest(p) for p in sorted(directory.glob("*.ini"))}
 
 
 def source_hashes() -> dict[str, str]:
@@ -158,162 +81,6 @@ def verify_server(server: Path) -> tuple[Path, dict]:
     return exe, receipt
 
 
-def role_config(run: Path, role: str, user: Path, package_dir: Path, game: Path, port: int, query_port: int,
-                cache_root: Path, combat: bool, online_server: bool = False, native_replay: bool = False,
-                damage: bool = False, movement: bool = False, room_movement: bool = False,
-                room_clamp: bool = False, room_residual: bool = False,
-                vr_controls: bool = False, expected_clients: int = 1,
-                pose_dropout: bool = False, lifecycle: bool = False, dual_weapons: bool = False,
-                dual_vr_owners: bool = False) -> dict:
-    role_root = run / role
-    configs = role_root / "Config"
-    configs.mkdir(parents=True)
-    for file in user.glob("*.ini"):
-        shutil.copy2(file, configs / file.name)
-    dual_vr_low_memory_config = None
-    if dual_vr_owners and role != "server":
-        system_path = configs / "KFSystemSettings.ini"
-        system_ini = read_ini(system_path) if system_path.exists() else ""
-        system_ini = set_ini(system_ini, "SystemSettings", {
-            "ResX": "640", "ResY": "360", "ScreenPercentage": "50.000000",
-            "MotionBlur": "False", "MotionBlurPause": "False",
-            "DepthOfField": "False", "AmbientOcclusion": "False", "Bloom": "False"})
-        system_path.write_text(system_ini, encoding="utf-16")
-        dual_vr_low_memory_config = {"res_x": 640, "res_y": 360, "screen_percentage": 50.0}
-    engine_path = configs / "KFEngine.ini"
-    if not engine_path.exists():
-        raise RuntimeError("Expected an initialized KF2 user profile (KFEngine.ini)")
-    engine = read_ini(engine_path)
-    # Preserve existing stock content paths while prepending only our compiled package.
-    core = re.search(r"(?ims)^\[Core\.System\][^\n]*\n(.*?)(?=^\[|\Z)", engine)
-    if not core:
-        raise RuntimeError("Missing Core.System in KFEngine.ini")
-    paths = {key: [str(package_dir)] + re.findall(r"(?im)^" + key + r"=([^\r\n]*)", core[1])
-             for key in ("Paths", "ScriptPaths", "SeekFreePCPaths", "BrewedPCPaths")}
-    paths["Suppress"] = [value for value in re.findall(r"(?im)^Suppress=([^\r\n]*)", core[1])
-                         if not value.lower().startswith(("devnet", "devonline", "devauth"))]
-    for key in ("CachePath", "SavePath", "ScreenShotPath"):
-        target = cache_root if key == "CachePath" else role_root / key
-        target.mkdir(parents=True, exist_ok=True)
-        paths[key] = str(target)
-    engine = set_ini(engine, "Core.System", paths)
-    save = role_root / "SaveData"
-    save.mkdir()
-    engine = set_ini(engine, "OnlineSubsystemSteamworks.OnlineSubsystemSteamworks", {
-        "bUseVAC": "false", "bRelaunchInSteam": "false", "ProfileDataDirectory": str(save)})
-    # Match the playable launcher: the stock Steam lobby path expects the
-    # Vivox interface to exist even for synthetic desktop clients.
-    engine = set_ini(engine, "VoIP", {"bHasVoiceEnabled": "false" if role == "server" else "true"})
-    # The 120 Hz pose streams need more room than the stock 10 kB/s internet
-    # cap. The client asks for ConfiguredInternetSpeed (LanSpeed for a
-    # LAN URL); the server clamps that to MaxClientRate and, for an internet
-    # connection, MaxInternetClientRate. Raise every link of that chain.
-    engine = set_ini(engine, "Engine.Player", {"ConfiguredInternetSpeed": NET_RATE,
-                                               "ConfiguredLanSpeed": NET_RATE})
-    engine = set_ini(engine, "IpDrv.TcpNetDriver", {"MaxClientRate": NET_RATE,
-                                                    "MaxInternetClientRate": NET_RATE})
-    if role == "server":
-        # KF2's default 1s unverified handshake limit expires while a cold
-        # local client blocks loading its startup menu/EOS state. Friend co-op
-        # tolerates that startup delay; this does not delay in-game input.
-        engine = set_ini(engine, "IpDrv.TcpNetDriver", {"HandShakeTimeOutSec": "60",
-            "NetServerMaxTickRate": "120", "LanServerMaxTickRate": "120"})
-    native_driver = native_replay and (role == "driver" or (dual_vr_owners and role == "observer"))
-    if native_replay and role != "server":
-        engine = set_ini(engine, "Engine.Engine", {"GameViewportClientClassName": "KF2VRNetClient.KF2VRNetViewportClient"})
-        engine = set_ini(engine, "KF2VRNetClient.KF2VRNetViewportClient", {"bDiagnosticInputIsolation": "true"})
-    engine_path.write_text(engine, encoding="utf-16")
-    game_path = configs / "KFGame.ini"
-    game_ini = read_ini(game_path) if game_path.exists() else ""
-    game_ini = set_ini(game_ini, "KF2VRNet.KF2VRNetPlayerController", {
-        "bDiagnosticSyntheticAutoStart": "true" if role == "driver" and not native_driver else "false",
-        "bEnableVRClient": "true" if native_driver else "false",
-        "bDiagnosticDamage": "true" if damage and role == "driver" else "false",
-        "bDiagnosticMovement": "true" if movement and role == "driver" else "false",
-        "bDiagnosticLocomotionReplay": "false",
-        "bDiagnosticRoomMovement": "true" if (room_movement or room_clamp) and role == "driver" else "false",
-        "bDiagnosticRoomClamp": "true" if room_clamp and role == "driver" else "false",
-        "bDiagnosticRoomResidual": "true" if room_residual and role == "driver" else "false",
-        "bDiagnosticVRControls": "true" if vr_controls and role == "driver" else "false",
-        "bDiagnosticDualWeapons": "true" if dual_weapons and role != "server" else "false",
-        "bDiagnosticPairedWeapons": "false",
-        "bDiagnosticPoseDropout": "true" if pose_dropout and role == "driver" else "false",
-        "bDiagnosticLifecycle": "true" if lifecycle and role == "driver" else "false",
-        "bDiagnosticVisualReplay": "false",
-        "bDiagnosticAvatarPreview": "false",
-        "bDiagnosticAvatarCamera": "false",
-        "bDiagnosticAvatarReplay": "false",
-        "bDiagnosticObserverDebug": "true",
-        "bDiagnosticObserverOnly": "true" if role == "observer" and not lifecycle and not dual_vr_owners else "false",
-        "bDiagnosticAutoFire9mm": "true" if combat and role == "driver" else "false"})
-    access = {"GamePassword": "kf2vr-local-diagnostic"}
-    if role != "server":
-        # Stock server skips Steam authentication for 127.0.0.1. Avoid the
-        # client's matching server-auth retry on this local diagnostic only.
-        access["bAuthenticateServer"] = "false"
-    game_ini = set_ini(game_ini, "Engine.AccessControl", access)
-    if role != "server":
-        game_ini = set_ini_defaults(game_ini, "KF2VR.VRHandsBridge", VR_CONTROL_DEFAULTS)
-    if native_driver:
-        # Recorded inputs assume the shipped control layout (including button
-        # reload and stick walking). A copied player's physical reload,
-        # handedness or teleport preferences must not reinterpret the replay.
-        for section, defaults in DEFAULTS.items():
-            game_ini = set_ini(game_ini, section, defaults)
-    game_path.write_text(game_ini, encoding="utf-16")
-    if role != "server":
-        import_preferences(configs, persistent=False)
-    log = role_root / "game.log"
-    url = ("KF-BurningParis?Game=KF2VRNet.KF2VRNetGame?VRNetDiagnostics=1?VRNetAutoReady=1?VRNet9mm=1?Difficulty=0?GameLength=0?bIsLanMatch=true"
-           if role == "server" else f"127.0.0.1:{port}?Password=kf2vr-local-diagnostic?Name=VRNet_{role}")
-    if role == "server" and online_server:
-        url = url.replace("?bIsLanMatch=true", "")
-    if role == "server":
-        url += f"?VRNetClients={expected_clients}"
-        if pose_dropout:
-            url += "?VRNetRecovery=1"
-        if lifecycle:
-            url += "?VRNetLifecycle=1"
-        # The room fixtures measure a walk over tens of seconds and are not
-        # measuring combat. An ambient wave kills the pawn mid-measurement and
-        # the run reports a frozen walk rather than a result.
-        if room_movement or room_clamp or room_residual:
-            url += "?VRNetQuietZeds=1"
-    if role == "observer" and not lifecycle and not dual_vr_owners:
-        url += "?SpectatorOnly=1"
-    args = [url, "-useunpublished", "-nosplash", "-nostartupmovies",
-        "-unattended", "-nopause", "-AUTOINIUPDATE" if role == "server" else "-NOAUTOINIUPDATE",
-        "-NOINI", "-FORCELOGFLUSH", f"-ABSLOG={log}"]
-    # Working Steam mode uses all server interfaces; clients connect locally.
-    # No router or firewall changes are made by the diagnostic.
-    bind_address = "0.0.0.0" if role == "server" and online_server else "127.0.0.1"
-    args += [f"-MULTIHOME={bind_address}", f"-Port={port if role == 'server' else port + (10 if role == 'driver' else 20)}",
-             f"-QueryPort={query_port if role == 'server' else query_port + (10 if role == 'driver' else 20)}"]
-    if role != "server":
-        args += ["-windowed", "-ResX=640", "-ResY=360"]
-        # Diagnostic clients keep fallback output beside their explicit role
-        # paths, matching the previously isolated capture fixture.
-        if native_replay:
-            args.append("-nohomedir")
-    if native_driver:
-        args += ["-kf2vr-probe", "-kf2vr-network", "-kf2vr-hand-replay", "-onethread", "-kf2vr-no-portals"]
-    for kind in CONFIG_KINDS:
-        name = {"SYSTEMSETTINGS": "KFSystemSettings"}.get(kind, "KF" + kind.title())
-        args.append(f"-{kind}INI={configs / (name + '.ini')}")
-    return {"role": role, "args": args, "log": str(log), "config_root": str(configs),
-            "config_hashes": config_hashes(configs), "native_adapter": native_driver,
-            "dual_vr_low_memory_config": dual_vr_low_memory_config}
-
-
-def log_text(role: dict) -> str:
-    path = Path(role["log"])
-    if not path.exists():
-        return ""
-    data = path.read_bytes()
-    encoding = "utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
-    return data.decode(encoding, errors="replace")
-
-
 def await_client_startup(role, server, process, timeout, *, read_log=log_text, clock=time.monotonic, sleep=time.sleep):
     """Startup gets its own finite budget; the caller starts handshake time afterward."""
     began = clock()
@@ -339,11 +106,6 @@ def await_client_startup(role, server, process, timeout, *, read_log=log_text, c
             return round(clock() - began, 3)
         sleep(0.5)
     raise RuntimeError(f"Engine-startup phase exceeded {timeout}s for {role['role']}")
-
-
-def check_port(port: int) -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.bind(("127.0.0.1", port))
 
 
 def main() -> int:
@@ -383,7 +145,23 @@ def main() -> int:
     parser.add_argument("--output-root", type=Path, help="Parent directory for this session's receipt and logs")
     parser.add_argument("--test-map", action="store_true", help="Load the same Remilly map as Play-KF2VR.cmd -TestMap")
     parser.add_argument("--paired-weapons", action="store_true", help="Short 1858/9mm check through production network conversion and shared presentation")
+    parser.add_argument("--physical-reload-9mm", action="store_true", help="Opt-in full physical 9mm reload and two target hits, with owner/server/observer checks; prepares unless --run")
+    parser.add_argument("--sharing-replay", action="store_true", help="Explicit two-player dedicated throw/share/magazine/return replay; prepares unless --run")
     options = parser.parse_args()
+    if options.sharing_replay:
+        if any((options.paired_weapons, options.physical_reload_9mm, options.combat, options.damage,
+                options.movement, options.vr_controls, options.recovery, options.lifecycle,
+                options.room_movement, options.room_clamp, options.room_residual, options.motion_fixture, options.motion_clip)):
+            parser.error("Run --sharing-replay separately from other scenarios")
+        options.clients = 2
+        options.native_replay = options.server_adapter = options.dual_weapons = options.dual_vr_owners = True
+    if options.physical_reload_9mm:
+        if any((options.paired_weapons, options.dual_weapons, options.dual_vr_owners, options.combat,
+                options.damage, options.movement, options.vr_controls, options.recovery, options.lifecycle,
+                options.room_movement, options.room_clamp, options.room_residual, options.motion_fixture, options.motion_clip)):
+            parser.error("Run --physical-reload-9mm separately from other input scenarios")
+        options.clients = 2
+        options.native_replay = options.server_adapter = True
     if options.paired_weapons:
         if options.dual_vr_owners or options.lifecycle:
             parser.error("--paired-weapons is the short 1858/9mm scenario; run lifecycle or dual owners separately")
@@ -484,6 +262,12 @@ def main() -> int:
             config = Path(role["config_root"]) / "KFGame.ini"
             config.write_text(set_ini(read_ini(config), "KF2VRNet.KF2VRNetPlayerController", {
                 "bDiagnosticPairedWeapons": "true" if role["native_adapter"] else "false"}), encoding="utf-16")
+    if options.physical_reload_9mm:
+        from physical_reload import configure
+        configure(roles)
+    if options.sharing_replay:
+        from sharing_replay import configure
+        configure(roles)
     test_map = None
     if options.test_map:
         test_map = ensure_map(options.cache_root, options.server_root.parent / "steamcmd", download=options.run)
@@ -537,6 +321,7 @@ def main() -> int:
               "dual_weapons_requested": options.dual_weapons,
               "dual_vr_owners_requested": options.dual_vr_owners,
               "paired_weapons_requested": options.paired_weapons,
+              "physical_reload_9mm_requested": options.physical_reload_9mm,
               "release": options.release.name if options.release else None,
               "release_manifest_sha256": digest(options.release / "release.json") if options.release else None,
               "test_map": map_receipt(test_map) if test_map else None,
@@ -561,9 +346,14 @@ def main() -> int:
         sessions = events(logs[0], "session")
         return world_logs(*logs, sessions[-1]["world"]) if options.lifecycle and sessions else logs
     def core_evidence():
-        return replay_core_evidence(current_logs(), native_replay=options.native_replay,
+        result = replay_core_evidence(current_logs(), native_replay=options.native_replay,
             server_adapter=options.server_adapter, dual_weapons=options.dual_weapons,
             paired_weapons=options.paired_weapons)
+        if options.physical_reload_9mm or options.sharing_replay:
+            # This case measures production input/reload, not the older direct
+            # ledger/pending-fire probes used by the legacy single-gun fixture.
+            result = {k: result[k] for k in ('transport', 'native_replay')}
+        return result
     save()
     print(f"Session receipt: {output}", flush=True)
     if not options.run:
@@ -630,7 +420,16 @@ def main() -> int:
                     child_environment["KF2VR_CAPTURE_ROOT"] = str(captures)
             # Server distribution's own KF2Server.bat starts from its root.
             # Capture pre-engine startup errors as well as the later ABSLOG.
-            with Path(role["console_log"]).open("wb") as console:
+            # One KF2 cold start at a time machine-wide when the replay tools are
+            # beside this checkout (several at once crash Steam); packaged copies
+            # have no tools/replay and launch as before.
+            try:
+                sys.path.insert(0, str(ROOT / "tools/replay"))
+                from run import launch_slot
+                slot = launch_slot(role["log"], timeout=20 if role["role"] == "server" else 90)
+            except ImportError:
+                slot = contextlib.nullcontext()
+            with slot, Path(role["console_log"]).open("wb") as console:
                 process = subprocess.Popen(unreal_command(executable, role["args"]), cwd=working_dir, env=child_environment,
                     startupinfo=startup, stdin=subprocess.DEVNULL, stdout=console, stderr=subprocess.STDOUT)
             processes.append(process)
@@ -751,6 +550,10 @@ def main() -> int:
             deadline = max(minimum_end, time.monotonic() + 60)
         if options.paired_weapons:
             deadline = max(minimum_end, time.monotonic() + 95)
+        if options.physical_reload_9mm:
+            deadline = max(minimum_end, time.monotonic() + 105)
+        if options.sharing_replay:
+            deadline = max(minimum_end, time.monotonic() + 180)
         if options.lifecycle:
             deadline = time.monotonic() + 300
         fire_reload = None
@@ -772,7 +575,7 @@ def main() -> int:
                 *current_logs()[:2], respawn_required=options.lifecycle)["passed"]
             controls_done = not options.vr_controls or verify_vr_controls(*current_logs()[:2])["passed"]
             dual_owner_done = True
-            if options.dual_vr_owners:
+            if options.dual_vr_owners and not options.sharing_replay:
                 server_log, driver_log, observer_log = current_logs()
                 dual_owner_evidence = verify_dual_vr_owners(server_log, driver_log, observer_log)
                 dual_owner_done = dual_owner_evidence["passed"]
@@ -782,6 +585,14 @@ def main() -> int:
                 and (options.clients != 2 or verify_remote_weapons(*current_logs()[1:])["passed"]))
             if options.paired_weapons:
                 dual_done = verify_paired_smoke(*current_logs()[:2])["passed"]
+            sharing_done = True
+            if options.sharing_replay:
+                from sharing_replay import analyze
+                record['sharing_replay'] = analyze(*current_logs())
+                sharing_done = record['sharing_replay']['passed']
+                dual_done = True
+                if any(e.get('phase') == 'failed' for e in events(current_logs()[0], 'sharing_case')):
+                    raise RuntimeError('Dedicated sharing replay failed; inspect sharing_case and sharing_client logs')
             dropout_done = not options.recovery or verify_pose_dropout(log_text(roles[0]), log_text(roles[1]), log_text(roles[2]))["passed"]
             if options.motion_fixture:
                 latest = events(log_text(roles[1]), "motion_sent")
@@ -797,12 +608,29 @@ def main() -> int:
                             "precision": "log observation; polling/flush latency included"})
             lifecycle_done = not options.lifecycle or verify_lifecycle(log_text(roles[0]), log_text(roles[1]), log_text(roles[2]), dual_weapons=options.dual_weapons)["passed"]
             core_done = all(check["passed"] for check in core_evidence().values())
-            if time.monotonic() >= minimum_end and core_done and (not options.combat or fire_reload["passed"]) and damage_done and movement_done and room_done and clamp_done and residual_done and controls_done and dual_done and dropout_done and lifecycle_done:
+            physical_done = True
+            if options.physical_reload_9mm:
+                from physical_reload import analyze
+                record['physical_reload_9mm'] = analyze(*current_logs())
+                physical_done = record['physical_reload_9mm']['passed']
+                if any(e.get('phase') == 'failed' for log in current_logs()[:2] for e in events(log, 'reload_case')):
+                    raise RuntimeError('9mm physical reload failed; inspect the owner/server transition logs')
+            if time.monotonic() >= minimum_end and core_done and physical_done and sharing_done and (not options.combat or fire_reload["passed"]) and damage_done and movement_done and room_done and clamp_done and residual_done and controls_done and dual_done and dropout_done and lifecycle_done:
                 break
             time.sleep(0.5)
         core = core_evidence()
         record.update({key: value for key, value in core.items() if key != "native_replay"})
         record["runtime_pass"] = all(check["passed"] for check in core.values())
+        if options.sharing_replay:
+            from sharing_replay import analyze
+            record['sharing_replay'] = analyze(*current_logs())
+            record['runtime_pass'] = record['runtime_pass'] and record['sharing_replay']['passed']
+        if options.physical_reload_9mm:
+            from physical_reload import analyze
+            record['physical_reload_9mm'] = analyze(*current_logs())
+            record['runtime_pass'] = record['runtime_pass'] and record['physical_reload_9mm']['passed']
+            record['physical_reload_9mm_tested'] = True
+            print('PHASE physical_reload_9mm=' + str(record['physical_reload_9mm']['passed']), flush=True)
         if options.motion_fixture and options.clients == 2:
             from friends import collect_avatar_captures
             record["observer_captures"] = collect_avatar_captures(
@@ -810,14 +638,14 @@ def main() -> int:
                 datetime.fromisoformat(roles[2]["started_utc"]).timestamp(), time.time(), expected_requests=1,
                 max_requests=options.motion_capture_limit, budget_bytes=128*1024*1024)
             record["runtime_pass"] = record["runtime_pass"] and record["observer_captures"]["collection_complete"]
-        if options.dual_vr_owners:
+        if options.dual_vr_owners and not options.sharing_replay:
             record["dual_vr_owners_evidence"] = verify_dual_vr_owners(*current_logs())
             record["runtime_pass"] = record["runtime_pass"] and record["dual_vr_owners_evidence"]["passed"]
         if options.server_adapter:
             if options.paired_weapons:
                 record["paired_smoke"] = verify_paired_smoke(*current_logs()[:2])
                 record["runtime_pass"] = record["runtime_pass"] and record["paired_smoke"]["passed"]
-            elif options.dual_weapons:
+            elif options.dual_weapons and not options.sharing_replay:
                 record["dual_weapons"] = verify_dual_weapons(*current_logs()[:2])
                 record["dual_damage"] = verify_dual_damage(*current_logs())
                 record["runtime_pass"] = record["runtime_pass"] and record["dual_weapons"]["passed"] and record["dual_damage"]["passed"]

@@ -6,10 +6,64 @@ class VRSM_HeldKnockdown extends KFSM_RagdollKnockdown;
 
 // One owning player, but that player may hold with both hands.
 var int HoldCount;
+// Melee item 11: when the first hand took hold (game time).
+var float HoldStarted;
+var int LastHeldHealth;
+var float ImpactRecoveryUntil;
+
+// B&S BrainModuleGrabbed: a grabbed NPC frees one hand after 2 s and both
+// after 5 s. Here the Zed breaks a one-handed hold's second hand and then the
+// whole hold, sooner for stronger Zeds.
+var float EscapeOneHand, EscapeFull;
+
+// Actual damage interrupts the effort to escape. Repeated hits renew a short
+// recovery window; once they stop, the original escape clock resumes.
+function bool RecoveringFromImpact()
+{
+    if (HoldCount <= 0 || KFPOwner == None) return false;
+    if (KFPOwner.Health < LastHeldHealth)
+        ImpactRecoveryUntil = KFPOwner.WorldInfo.TimeSeconds + 0.85;
+    LastHeldHealth = KFPOwner.Health;
+    return KFPOwner.WorldInfo.TimeSeconds < ImpactRecoveryUntil;
+}
+
+// Escape time scale by Zed class: trash x1, medium x0.6, large (admitted
+// only through Overpressure) x0.4.
+static function float EscapeScale(KFPawn_Monster M)
+{
+    if (M == None) return 1.0;
+    if (M.IsLargeZed()) return 0.4;
+    if (M.IsA('KFPawn_ZedBloat') || M.IsA('KFPawn_ZedSiren') || M.IsA('KFPawn_ZedHusk')
+        || M.IsA('KFPawn_ZedGorefast') || M.IsA('KFPawn_ZedDAR')) return 0.6;
+    return 1.0;
+}
+
+static function bool EscapeEnabled()
+{
+    return !class'VRHandsBridge'.default.bLegacyMeleeGrabEscape;
+}
+
+// The authority owns the timer; the holding client mirrors it (VRZedGrab).
+function Tick(float DeltaTime)
+{
+    Super.Tick(DeltaTime);
+    if (HoldCount > 0 && KFPOwner != None && KFPOwner.Role == ROLE_Authority && EscapeEnabled()
+        && !RecoveringFromImpact()
+        && KFPOwner.WorldInfo.TimeSeconds - HoldStarted >= EscapeFull * EscapeScale(KFPawn_Monster(KFPOwner)))
+        ReleaseAllHolds();
+}
+
+// An ordinary missed grab remains in Attempt until its animation ends. It
+// may yield only while neither side of an interaction has been attached.
+static function bool UnattachedAttempt(byte Flags, bool bHasFollower, bool bHasInteraction)
+{
+    return !bHasFollower && !bHasInteraction
+        && Flags == class'KFSM_GrappleCombined'.static.PackFlagsBase(None);
+}
 
 // Stock grapple refuses knockdown chaining even though damage can interrupt
-// it. Only the ordinary stock move with its live reciprocal human victim may
-// yield to a physical hold; stronger derived grabs keep their own rules.
+// it. Only an ordinary unattached attempt or a live reciprocal human grapple
+// may yield to a physical hold; stronger derived grabs keep their own rules.
 static function bool HasBreakableGrapple(KFPawn_Monster M)
 {
     local KFSM_GrappleCombined Grapple;
@@ -22,6 +76,8 @@ static function bool HasBreakableGrapple(KFPawn_Monster M)
     Grapple = KFSM_GrappleCombined(M.SpecialMoves[SM_GrappleAttack]);
     if (Grapple == None || Grapple.Class != class'KFSM_GrappleCombined' || !Grapple.bCanBeInterrupted
         || Grapple.KFPOwner != M || Grapple.PawnOwner != M) return false;
+    if (UnattachedAttempt(M.SpecialMoveFlags, Grapple.Follower != None, M.InteractionPawn != None))
+        return true;
     Human = KFPawn_Human(Grapple.Follower);
     if (Human == None || Human.bDeleteMe || Human.Health <= 0 || Human.bPlayedDeath
         || M.InteractionPawn != Human || Human.InteractionPawn != M
@@ -63,6 +119,12 @@ protected function EndKnockdown(optional bool bForceEnd = false)
 
 function AddHold()
 {
+    if (HoldCount <= 0 && KFPOwner != None)
+    {
+        HoldStarted = KFPOwner.WorldInfo.TimeSeconds;
+        LastHeldHealth = KFPOwner.Health;
+        ImpactRecoveryUntil = 0;
+    }
     ++HoldCount;
 }
 
@@ -117,4 +179,6 @@ static function VRSM_HeldKnockdown Current(KFPawn_Monster M)
 
 defaultproperties
 {
+    EscapeOneHand=2
+    EscapeFull=5
 }

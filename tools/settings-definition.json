@@ -1,0 +1,3736 @@
+{
+ "schema": 1,
+ "about": "The one list of KF2-VR player settings, shared by the launcher and its tests; the headset menus (VRSessionUI) use the same categories, labels and preset rules. Keys and stores are the saved names and never change; labels may. depth: everyday = a category's main page, customize = under that page's Customize row, setup = the launcher's Setup page. owner: the preset whose label a hand edit turns to CUSTOM, or player. applies: live (also in the headset), next_launch, launch_only.",
+ "categories": [
+  {
+   "id": "Comfort",
+   "description": "How you move and turn, and staying comfortable in VR.",
+   "customize": "Customize comfort",
+   "aliases": [
+    "Comfort & Movement"
+   ],
+   "reset_note": "Your height calibration is kept."
+  },
+  {
+   "id": "Hands & Weapons",
+   "description": "How you hold, reload and aim, and what you can grab.",
+   "customize": "Customize hands & weapons",
+   "aliases": [
+    "Hands & Aiming",
+    "Reloading",
+    "Weapons & Pickups",
+    "Weapons & Interactions",
+    "Hands & Controls",
+    "Aiming"
+   ],
+   "reset_note": "Your hand and gun calibration is kept."
+  },
+  {
+   "id": "Graphics & HUD",
+   "description": "How the game looks, and what you see on your watch and gun.",
+   "customize": "Customize graphics & HUD",
+   "aliases": [
+    "Graphics",
+    "HUD & Menus",
+    "Interface & HUD",
+    "Gore & Physics"
+   ],
+   "reset_note": "Your menu, watch and ammo counter placement is kept."
+  },
+  {
+   "id": "Audio",
+   "description": "Your microphone in VR.",
+   "customize": "Customize audio",
+   "aliases": [
+    "Audio & Communication"
+   ],
+   "reset_note": ""
+  }
+ ],
+ "group_notes": {},
+ "server_governed_note": "Online, the host's setting applies",
+ "vr_menu": {
+  "name": "the in-game VR menu",
+  "about": "Paths to VRSessionUI pages, by category or category/group; a group not listed is under its category's Customize page. Text in this file says {menu} for the menu's name and {path:Category/Group} for a path.",
+  "paths": {
+   "Comfort": "Settings › Comfort",
+   "Comfort/Movement": "Settings › Comfort › Customize",
+   "Comfort/Teleport": "Settings › Comfort › Customize",
+   "Comfort/Weapon wheel": "Settings › Comfort › Customize",
+   "Hands & Weapons": "Settings › Hands & Weapons",
+   "Hands & Weapons/Calibrate hands, gun, pouch, grenade": "Settings › Hands & Weapons › Calibrate hands, gun, pouch, grenade",
+   "Graphics & HUD": "Settings › Graphics & HUD",
+   "Graphics & HUD/Calibrate menu position": "Settings › Graphics & HUD › Calibrate menu, watch & ammo counter",
+   "Graphics & HUD/Calibrate watch and ammo counter": "Settings › Graphics & HUD › Calibrate menu, watch & ammo counter",
+   "Graphics & HUD/Image": "Settings › Graphics & HUD",
+   "Graphics & HUD/Bodies": "Settings › Graphics & HUD › Customize › Gore & bodies",
+   "Graphics & HUD/Corpse physics": "Settings › Graphics & HUD › Customize › Gore & bodies › More › Corpse physics",
+   "Graphics & HUD/Gore limits": "Settings › Graphics & HUD › Customize › Gore & bodies › More",
+   "Graphics & HUD/Gore lifetimes": "Settings › Graphics & HUD › Customize › Gore & bodies › More › Effect lifetimes",
+   "Graphics & HUD/HUD": "Settings › Graphics & HUD › Customize › HUD & menus",
+   "Graphics & HUD/Menus": "Settings › Graphics & HUD › Customize › HUD & menus",
+   "Graphics & HUD/Screen effects": "Settings › Graphics & HUD › Customize › Screen effects & brightness",
+   "Audio": "Settings › Audio"
+  }
+ },
+ "first_time_setup": {
+  "label": "First-time setup",
+  "aliases": [
+   "Quick Setup"
+  ],
+  "flag": {
+   "store": "session",
+   "key": "QuickSetupRevision",
+   "done": "1"
+  },
+  "help": "A few choices to start with; you can change any of them later in Settings. ★ marks our recommendation.",
+  "cards": [
+   {
+    "id": "dominant_hand",
+    "label": "Dominant hand",
+    "setting": "PreferredWeaponHand",
+    "recommended": "1",
+    "hints": {
+     "PreferredWeaponHand": {
+      "0": "Left-handed: your watch is on your right wrist and you move with the right stick.",
+      "1": "Right-handed: your watch is on your left wrist and you move with the left stick."
+     }
+    }
+   },
+   {
+    "id": "seated_mode",
+    "label": "Seated mode",
+    "setting": "bSeatedPlay",
+    "recommended": "False",
+    "hints": {
+     "bSeatedPlay": {
+      "False": "Play standing up.",
+      "True": "Raises your view so you can play sitting down."
+     }
+    }
+   },
+   {
+    "id": "locomotion",
+    "label": "Locomotion",
+    "settings": [
+     "LocomotionMode",
+     "bSnapTurn"
+    ],
+    "recommended": {
+     "LocomotionMode": "0",
+     "bSnapTurn": "True",
+     "SnapTurnDegrees": "30"
+    },
+    "hints": {
+     "LocomotionMode": {
+      "0": "Walk with the stick.",
+      "1": "Aim with the stick and let go to jump there."
+     },
+     "bSnapTurn": {
+      "True": "Turn in quick 30° steps (change the angle in {menu}).",
+      "False": "Turn smoothly."
+     }
+    }
+   },
+   {
+    "id": "grip_mode",
+    "label": "Grip mode",
+    "preset": "grip_mode"
+   },
+   {
+    "id": "reload_mode",
+    "label": "Reload mode",
+    "preset": "reload_mode"
+   },
+   {
+    "id": "ammo_rules",
+    "label": "Ammo rules",
+    "preset": "ammo_rules",
+    "requires": [
+     [
+      "bInteractiveReloads",
+      [
+       true
+      ]
+     ]
+    ]
+   },
+   {
+    "id": "graphics_preset",
+    "label": "Graphics preset",
+    "preset": "graphics_preset"
+   },
+   {
+    "id": "damage_numbers",
+    "label": "Damage numbers",
+    "setting": "bDamagePopups",
+    "recommended": "False",
+    "hints": {
+     "bDamagePopups": {
+      "False": "No numbers when you hit Zeds.",
+      "True": "Shows the damage you deal over Zeds' heads."
+     }
+    }
+   }
+  ]
+ },
+ "presets": {
+  "reload_mode": {
+   "label": "Reload mode",
+   "aliases": [
+    "Reloading",
+    "Reload style",
+    "Classic",
+    "Interactive",
+    "Advanced",
+    "Reload preset"
+   ],
+   "category": "Hands & Weapons",
+   "stored_as": {
+    "store": "hands",
+    "key": "ReloadPreset"
+   },
+   "help": "How you reload and cycle guns.",
+   "recommended": "CLASSIC",
+   "options": [
+    {
+     "id": "CLASSIC",
+     "number": 0,
+     "label": "Button",
+     "values": {
+      "bInteractiveReloads": false,
+      "bFreeWeaponCycling": false
+     },
+     "help": "Press a button to reload; guns rack and cycle themselves, as in the normal game.",
+     "short": "press a button, guns cycle themselves"
+    },
+    {
+     "id": "INTERACTIVE",
+     "number": 1,
+     "label": "Manual",
+     "values": {
+      "bInteractiveReloads": true,
+      "bFreeWeaponCycling": false,
+      "bEmptyTriggerReloads": true,
+      "bGrabReleasesMagazine": true,
+      "bAllowFullMagazineEject": false
+     },
+     "help": "Swap mags and rack slides, bolts and pumps by hand. An empty trigger pull starts the reload and a new mag pushes out the old one.",
+     "short": "mags and racking by hand, with help"
+    },
+    {
+     "id": "ADVANCED",
+     "number": 2,
+     "label": "Realistic",
+     "values": {
+      "bInteractiveReloads": true,
+      "bFreeWeaponCycling": true,
+      "bEmptyTriggerReloads": false,
+      "bGrabReleasesMagazine": false,
+      "bAllowFullMagazineEject": true
+     },
+     "help": "Everything by hand, with no help: eject the old mag yourself, rack slides, bolts and pumps, and you can rack a loaded gun.",
+     "short": "everything by hand, no help"
+    }
+   ]
+  },
+  "ammo_rules": {
+   "label": "Ammo rules",
+   "aliases": [
+    "Ammunition rules",
+    "Ammo preset"
+   ],
+   "category": "Hands & Weapons",
+   "requires": [
+    [
+     "bInteractiveReloads",
+     [
+      true
+     ]
+    ]
+   ],
+   "requires_reason": "show with Manual or Realistic reloads",
+   "help": "How rounds are counted when you reload by hand.",
+   "recommended": "STANDARD",
+   "options": [
+    {
+     "id": "STANDARD",
+     "number": 0,
+     "label": "Standard",
+     "values": {
+      "bKeepChamberedRound": false,
+      "bLoseReloadAmmo": false,
+      "bRecoverMagazineAmmo": false
+     },
+     "help": "Rounds are counted as in the normal game.",
+     "short": "counted as in the normal game"
+    },
+    {
+     "id": "REALISTIC",
+     "number": 1,
+     "label": "Realistic",
+     "values": {
+      "bKeepChamberedRound": true,
+      "bLoseReloadAmmo": true,
+      "bRecoverMagazineAmmo": true
+     },
+     "help": "A reload keeps the round in the chamber, and a dropped mag's rounds are lost unless you pick it up.",
+     "short": "chambered rounds and dropped mags count"
+    }
+   ]
+  },
+  "grip_mode": {
+   "label": "Grip mode",
+   "aliases": [
+    "Grip style",
+    "Grip preset"
+   ],
+   "category": "Hands & Weapons",
+   "recommended": "MIXED",
+   "help": "How grip holds guns in each hand.",
+   "options": [
+    {
+     "id": "MIXED",
+     "number": 0,
+     "label": "Mixed",
+     "values": {
+      "bToggleGrip": "True",
+      "bHoldSupportGrip": "True"
+     },
+     "help": "One press holds a gun in your gun hand; your other hand holds only while you squeeze.",
+     "short": "one press holds the gun"
+    },
+    {
+     "id": "HOLD",
+     "number": 1,
+     "label": "Hold",
+     "values": {
+      "bToggleGrip": "False",
+      "bHoldSupportGrip": "True"
+     },
+     "help": "Both hands hold only while you squeeze grip.",
+     "short": "keep squeezing"
+    },
+    {
+     "id": "TOGGLE",
+     "number": 2,
+     "label": "Toggle",
+     "values": {
+      "bToggleGrip": "True",
+      "bHoldSupportGrip": "False"
+     },
+     "help": "Both hands: press grip to hold, press again to let go.",
+     "short": "press once to hold, again to let go"
+    }
+   ]
+  },
+  "locomotion": {
+   "label": "Locomotion",
+   "aliases": [
+    "Comfort preset",
+    "Movement style"
+   ],
+   "category": "Comfort",
+   "recommended": "SMOOTH_SNAP",
+   "row": false,
+   "help": "Smooth or Teleport movement, with Snap or Smooth turning.",
+   "options": [
+    {
+     "id": "SMOOTH_SNAP",
+     "label": "Smooth + Snap turn",
+     "values": {
+      "LocomotionMode": "0",
+      "bSnapTurn": "True"
+     }
+    },
+    {
+     "id": "SMOOTH_SMOOTH",
+     "label": "Smooth + Smooth turn",
+     "values": {
+      "LocomotionMode": "0",
+      "bSnapTurn": "False"
+     }
+    },
+    {
+     "id": "TELEPORT_SNAP",
+     "label": "Teleport + Snap turn",
+     "values": {
+      "LocomotionMode": "1",
+      "bSnapTurn": "True"
+     }
+    },
+    {
+     "id": "TELEPORT_SMOOTH",
+     "label": "Teleport + Smooth turn",
+     "values": {
+      "LocomotionMode": "1",
+      "bSnapTurn": "False"
+     }
+    }
+   ]
+  },
+  "hud_preset": {
+   "label": "HUD preset",
+   "aliases": [
+    "Information preset",
+    "HUD style"
+   ],
+   "category": "Graphics & HUD",
+   "recommended": "STANDARD",
+   "help": "What the watch and gun show you.",
+   "options": [
+    {
+     "id": "STANDARD",
+     "label": "Standard",
+     "values": {
+      "bWristwatchHUD": true,
+      "bWeaponAmmoReadouts": true
+     },
+     "help": "Watch and the ammo counter on the gun.",
+     "short": "watch and ammo counter"
+    },
+    {
+     "id": "MINIMAL",
+     "label": "Minimal",
+     "values": {
+      "bWristwatchHUD": true,
+      "bWeaponAmmoReadouts": false
+     },
+     "help": "Watch only.",
+     "short": "watch only"
+    }
+   ]
+  },
+  "graphics_preset": {
+   "label": "Graphics preset",
+   "aliases": [
+    "Quality preset",
+    "Graphics quality",
+    "fps",
+    "frame rate",
+    "performance"
+   ],
+   "category": "Graphics & HUD",
+   "recommended": "QUALITY",
+   "values_from": "settings_graphics.TIERS",
+   "help": "Overall detail and lighting. Render scale, DLSS, Bloom and Gore & bodies are separate settings.",
+   "options": [
+    {
+     "id": "QUALITY",
+     "tier": "quality",
+     "label": "Quality",
+     "values": {
+      "hbao": true,
+      "reflections": true
+     },
+     "help": "The most detail and lighting; needs a fast graphics card."
+    },
+    {
+     "id": "BALANCED",
+     "tier": "balanced",
+     "label": "Balanced",
+     "values": {
+      "hbao": false,
+      "reflections": false
+     },
+     "help": "Less detail and lighting, for a steadier frame rate."
+    },
+    {
+     "id": "PERFORMANCE",
+     "tier": "performance",
+     "label": "Performance",
+     "values": {
+      "hbao": false,
+      "reflections": false
+     },
+     "help": "The least detail, for the highest frame rate."
+    }
+   ]
+  }
+ },
+ "settings": [
+  {
+   "key": "LocomotionMode",
+   "store": "hands",
+   "category": "Comfort",
+   "depth": "everyday",
+   "label": "Locomotion",
+   "aliases": [
+    "Movement"
+   ],
+   "help": "How the stick moves you.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Smooth"
+    ],
+    [
+     "1",
+     "Teleport"
+    ]
+   ],
+   "applies": "live",
+   "choice_help": {
+    "0": "Walk with the stick.",
+    "1": "Aim with the stick and let go to jump there."
+   }
+  },
+  {
+   "key": "bSnapTurn",
+   "store": "session",
+   "category": "Comfort",
+   "depth": "everyday",
+   "label": "Turning",
+   "help": "How the turning stick turns you.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "True",
+     "Snap turn"
+    ],
+    [
+     "False",
+     "Smooth turn"
+    ]
+   ],
+   "applies": "live",
+   "choice_help": {
+    "True": "Turn in quick steps (30° unless you change it in {menu}).",
+    "False": "Turn smoothly while you hold the stick."
+   }
+  },
+  {
+   "key": "SnapTurnDegrees",
+   "store": "session",
+   "category": "Comfort",
+   "depth": "everyday",
+   "label": "Snap angle",
+   "help": "Degrees per snap turn. 30° is the default.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "15",
+     "15°"
+    ],
+    [
+     "30",
+     "30°"
+    ],
+    [
+     "45",
+     "45°"
+    ],
+    [
+     "60",
+     "60°"
+    ],
+    [
+     "75",
+     "75°"
+    ],
+    [
+     "90",
+     "90°"
+    ]
+   ],
+   "requires": [
+    [
+     "bSnapTurn",
+     [
+      "True"
+     ]
+    ]
+   ],
+   "requires_reason": "Only with snap turning",
+   "applies": "live",
+   "headset_only": true
+  },
+  {
+   "key": "SmoothTurnScale",
+   "store": "session",
+   "category": "Comfort",
+   "depth": "everyday",
+   "label": "Turn speed",
+   "aliases": [
+    "Smooth Sensitivity"
+   ],
+   "help": "How fast Smooth turn turns you.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "0.25",
+     "25%"
+    ],
+    [
+     "0.50",
+     "50%"
+    ],
+    [
+     "0.75",
+     "75%"
+    ],
+    [
+     "1.00",
+     "100%"
+    ],
+    [
+     "1.25",
+     "125%"
+    ],
+    [
+     "1.50",
+     "150%"
+    ],
+    [
+     "1.75",
+     "175%"
+    ],
+    [
+     "2.00",
+     "200%"
+    ]
+   ],
+   "requires": [
+    [
+     "bSnapTurn",
+     [
+      "False"
+     ]
+    ]
+   ],
+   "requires_reason": "Only with smooth turning",
+   "applies": "live",
+   "headset_only": true
+  },
+  {
+   "key": "bControllerRelativeMovement",
+   "store": "hands",
+   "category": "Comfort",
+   "depth": "everyday",
+   "label": "Movement direction",
+   "aliases": [
+    "Forward Is"
+   ],
+   "help": "Which way pushing the stick forward takes you.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "False",
+     "Head"
+    ],
+    [
+     "True",
+     "Hand"
+    ]
+   ],
+   "applies": "live",
+   "choice_help": {
+    "False": "Where you look.",
+    "True": "Where your movement hand points."
+   },
+   "recommended": "False",
+   "choice_short": {
+    "False": "where you look",
+    "True": "where your hand points"
+   }
+  },
+  {
+   "key": "bSeatedPlay",
+   "store": "hands",
+   "category": "Comfort",
+   "depth": "everyday",
+   "label": "Seated mode",
+   "aliases": [
+    "You Play",
+    "Play position",
+    "Standing"
+   ],
+   "help": "Raises your view for playing seated; set your seated height in {menu}.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "False",
+     "Off"
+    ],
+    [
+     "True",
+     "On"
+    ]
+   ],
+   "applies": "live"
+  },
+  {
+   "key": "calibrate_height",
+   "kind": "headset",
+   "category": "Comfort",
+   "depth": "everyday",
+   "label": "Calibrate height",
+   "help": "Stand or sit as you play and recapture your height.",
+   "headset_only": true
+  },
+  {
+   "key": "HapticStrength",
+   "store": "hands",
+   "category": "Comfort",
+   "depth": "everyday",
+   "label": "Haptic intensity",
+   "aliases": [
+    "Haptic Strength"
+   ],
+   "help": "Controller vibration. 0% turns it off.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 100,
+   "step": 10,
+   "scale": 100,
+   "unit": "%",
+   "applies": "live",
+   "headset_only": true
+  },
+  {
+   "key": "bEnabled",
+   "store": "focus",
+   "category": "Comfort",
+   "depth": "everyday",
+   "label": "Weapon wheel slow-mo",
+   "aliases": [
+    "Slow Time at the Weapon Wheel",
+    "Weapon Wheel Slowdown",
+    "Inventory focus"
+   ],
+   "help": "Solo only: the world slows while you choose a weapon.",
+   "owner": "player",
+   "applies": "live",
+   "server_governed": true
+  },
+  {
+   "key": "first_time_setup",
+   "kind": "action",
+   "category": "Setup",
+   "depth": "setup",
+   "label": "Run first-time setup again",
+   "help": "Shows the first-time setup choices again."
+  },
+  {
+   "key": "bStickCrouch",
+   "store": "hands",
+   "category": "Comfort",
+   "group": "Movement",
+   "depth": "customize",
+   "label": "Stick crouch",
+   "aliases": [
+    "Stick Crouch (Down)"
+   ],
+   "help": "Pull the turning stick down to crouch.",
+   "owner": "player",
+   "applies": "live"
+  },
+  {
+   "key": "ClotGrabTurn",
+   "store": "stock",
+   "category": "Comfort",
+   "group": "Movement",
+   "depth": "customize",
+   "label": "Auto-turn on Clot grab",
+   "aliases": [
+    "Clot Grab Turning"
+   ],
+   "help": "Turn toward a Clot that grabs you.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "BlinkScale",
+   "store": "hands",
+   "category": "Comfort",
+   "group": "Teleport",
+   "depth": "customize",
+   "label": "Teleport blink",
+   "aliases": [
+    "Teleport Fade"
+   ],
+   "help": "A brief fade when you teleport.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "1.0",
+     "On"
+    ],
+    [
+     "0.0",
+     "Off"
+    ]
+   ],
+   "requires": [
+    [
+     "LocomotionMode",
+     [
+      "1"
+     ]
+    ]
+   ],
+   "requires_reason": "Only with teleport movement",
+   "applies": "live"
+  },
+  {
+   "key": "BlinkOutSeconds",
+   "store": "hands",
+   "category": "Comfort",
+   "group": "Teleport",
+   "depth": "customize",
+   "label": "Teleport fade out",
+   "aliases": [
+    "Fade Out"
+   ],
+   "help": "How long the view takes to fade out.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 0.5,
+   "step": 0.01,
+   "unit": "s",
+   "requires": [
+    [
+     "LocomotionMode",
+     [
+      "1"
+     ]
+    ]
+   ],
+   "requires_reason": "Only with teleport movement",
+   "applies": "live",
+   "headset_only": true
+  },
+  {
+   "key": "BlinkInSeconds",
+   "store": "hands",
+   "category": "Comfort",
+   "group": "Teleport",
+   "depth": "customize",
+   "label": "Teleport fade in",
+   "aliases": [
+    "Fade In"
+   ],
+   "help": "How long the view takes to come back.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 0.5,
+   "step": 0.01,
+   "unit": "s",
+   "requires": [
+    [
+     "LocomotionMode",
+     [
+      "1"
+     ]
+    ]
+   ],
+   "requires_reason": "Only with teleport movement",
+   "applies": "live",
+   "headset_only": true
+  },
+  {
+   "key": "bTeleportArrivalFacing",
+   "store": "hands",
+   "category": "Comfort",
+   "group": "Teleport",
+   "depth": "customize",
+   "label": "Teleport facing",
+   "aliases": [
+    "Choose Arrival Direction"
+   ],
+   "help": "Pick which way you face when you land, instead of keeping your facing.",
+   "owner": "player",
+   "requires": [
+    [
+     "LocomotionMode",
+     [
+      "1"
+     ]
+    ]
+   ],
+   "requires_reason": "Only with teleport movement",
+   "applies": "live"
+  },
+  {
+   "key": "FocusSimulationSpeed",
+   "store": "focus",
+   "category": "Comfort",
+   "group": "Weapon wheel",
+   "depth": "customize",
+   "label": "Solo world speed at the wheel",
+   "aliases": [
+    "Slowdown World Speed"
+   ],
+   "help": "How slow the world gets while Weapon wheel slow-mo is on.",
+   "owner": "player",
+   "kind": "number",
+   "min": 5,
+   "max": 100,
+   "step": 5,
+   "scale": 100,
+   "unit": "%",
+   "applies": "live",
+   "headset_only": true
+  },
+  {
+   "key": "PreferredWeaponHand",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "depth": "everyday",
+   "label": "Dominant hand",
+   "aliases": [
+    "Gun Hand"
+   ],
+   "help": "Your main hand. The watch and HUD go on your other wrist, and movement and the menu switch hands to match.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Left"
+    ],
+    [
+     "1",
+     "Right"
+    ]
+   ],
+   "applies": "live"
+  },
+  {
+   "key": "MovementHand",
+   "store": "hands",
+   "category": "Comfort",
+   "depth": "everyday",
+   "label": "Movement hand",
+   "help": "The hand whose stick moves you; it follows Dominant hand unless you change it.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Left"
+    ],
+    [
+     "1",
+     "Right"
+    ]
+   ],
+   "applies": "live",
+   "launcher_tab": "Hands & Weapons"
+  },
+  {
+   "key": "grip_mode",
+   "kind": "preset",
+   "category": "Hands & Weapons",
+   "depth": "everyday",
+   "label": "Grip mode",
+   "preset": "grip_mode"
+  },
+  {
+   "key": "reload_mode",
+   "kind": "preset",
+   "category": "Hands & Weapons",
+   "depth": "everyday",
+   "label": "Reload mode",
+   "preset": "reload_mode"
+  },
+  {
+   "key": "ammo_rules",
+   "kind": "preset",
+   "category": "Hands & Weapons",
+   "depth": "everyday",
+   "label": "Ammo rules",
+   "preset": "ammo_rules"
+  },
+  {
+   "key": "bReloadHints",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "depth": "everyday",
+   "label": "Reload hints",
+   "help": "Glows and rings showing where the next reload step goes.",
+   "owner": "player",
+   "applies": "live"
+  },
+  {
+   "key": "bDisableGravityPull",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "depth": "everyday",
+   "label": "Gravity grab",
+   "aliases": [
+    "Ammo / pickup gravity pull"
+   ],
+   "help": "Point at a gun or pickup and flick to pull it to your hand.",
+   "owner": "player",
+   "invert": true,
+   "applies": "live",
+   "server_governed": true
+  },
+  {
+   "key": "bWeaponLasers",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "depth": "everyday",
+   "label": "Laser sight",
+   "aliases": [
+    "Aim Laser",
+    "aim"
+   ],
+   "help": "A laser from the gun you hold shows where it will hit.",
+   "owner": "player",
+   "applies": "live"
+  },
+  {
+   "key": "FirearmAimPitchDegrees",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Gun pitch",
+   "help": "Independent gun-angle calibration. Adjust with a live preview in headset.",
+   "owner": "player",
+   "kind": "number",
+   "min": -80,
+   "max": 80,
+   "step": 1,
+   "unit": "°",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "FirearmAimYawDegrees",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Gun yaw",
+   "help": "Independent gun-angle calibration. Adjust with a live preview in headset.",
+   "owner": "player",
+   "kind": "number",
+   "min": -80,
+   "max": 80,
+   "step": 1,
+   "unit": "°",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "FirearmAimRollDegrees",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Gun roll",
+   "help": "Independent gun-angle calibration. Adjust with a live preview in headset.",
+   "owner": "player",
+   "kind": "number",
+   "min": -80,
+   "max": 80,
+   "step": 1,
+   "unit": "°",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "HandWristAdjust.X",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Hand forward",
+   "help": "Saved physical offset. Use the headset editor to see the actual fit or pickup volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": -10,
+   "max": 10,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "HandWristAdjust.Y",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Hand outward",
+   "help": "Saved physical offset. Use the headset editor to see the actual fit or pickup volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": -10,
+   "max": 10,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "HandWristAdjust.Z",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Hand height",
+   "help": "Saved physical offset. Use the headset editor to see the actual fit or pickup volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": -10,
+   "max": 10,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "GrenadeZoneScale",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Grenade zone size",
+   "help": "Size of the actual pickup volume. Both ammunition pouches remain permanently linked; position them in headset.",
+   "owner": "player",
+   "kind": "number",
+   "min": 50,
+   "max": 150,
+   "step": 5,
+   "scale": 100,
+   "unit": "%",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "AmmoPouchScale",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Ammo pouch size",
+   "help": "Size of the actual pickup volume. Both ammunition pouches remain permanently linked; position them in headset.",
+   "owner": "player",
+   "kind": "number",
+   "min": 50,
+   "max": 150,
+   "step": 5,
+   "scale": 100,
+   "unit": "%",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "ChestGrenadeOffset.X",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Grenade forward",
+   "help": "Saved physical offset. Use the headset editor to see the actual fit or pickup volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": -30,
+   "max": 40,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "ChestGrenadeOffset.Y",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Grenade side",
+   "help": "Saved physical offset. Use the headset editor to see the actual fit or pickup volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": -40,
+   "max": 40,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "ChestGrenadeOffset.Z",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Grenade height",
+   "help": "Saved physical offset. Use the headset editor to see the actual fit or pickup volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": -30,
+   "max": 40,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "AmmoPouchAdjustment.X",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Pouch forward",
+   "help": "Saved physical offset. Use the headset editor to see the actual fit or pickup volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": -15,
+   "max": 20,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "AmmoPouchAdjustment.Y",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Pouch width",
+   "help": "Saved physical offset. Use the headset editor to see the actual fit or pickup volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": -3,
+   "max": 25,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "AmmoPouchAdjustment.Z",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Calibrate hands, gun, pouch, grenade",
+   "depth": "everyday",
+   "label": "Pouch height",
+   "help": "Saved physical offset. Use the headset editor to see the actual fit or pickup volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": -20,
+   "max": 20,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "bInteractiveReloads",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Reloads",
+   "depth": "customize",
+   "label": "Manual reloading",
+   "aliases": [
+    "Reload by Hand",
+    "Physical reloads"
+   ],
+   "help": "Reload and cycle guns by hand. Off: X / A reloads.",
+   "owner": "reload_mode",
+   "applies": "live"
+  },
+  {
+   "key": "bFreeWeaponCycling",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Reloads",
+   "depth": "customize",
+   "label": "Rack a loaded gun",
+   "help": "Working the action on a loaded gun throws out the chambered round, which is lost.",
+   "owner": "reload_mode",
+   "applies": "live"
+  },
+  {
+   "key": "bEmptyTriggerReloads",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Reloads",
+   "depth": "customize",
+   "label": "Auto-eject on empty trigger",
+   "aliases": [
+    "Empty Trigger Reloads",
+    "Reload on empty trigger"
+   ],
+   "help": "Pulling the trigger on an empty gun ejects the mag, as X / A does, instead of clicking.",
+   "owner": "reload_mode",
+   "requires": [
+    [
+     "bInteractiveReloads",
+     [
+      true
+     ]
+    ]
+   ],
+   "requires_reason": "Only with Manual or Realistic reloads",
+   "applies": "live"
+  },
+  {
+   "key": "bGrabReleasesMagazine",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Reloads",
+   "depth": "customize",
+   "label": "Auto-eject on new mag",
+   "aliases": [
+    "New Mag Releases Old"
+   ],
+   "help": "Taking a mag from your pouch drops the one in the gun, so you don't eject it first.",
+   "owner": "reload_mode",
+   "requires": [
+    [
+     "bInteractiveReloads",
+     [
+      true
+     ]
+    ]
+   ],
+   "requires_reason": "Only with Manual or Realistic reloads",
+   "applies": "live"
+  },
+  {
+   "key": "bAllowFullMagazineEject",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Reloads",
+   "depth": "customize",
+   "label": "Button ejects a full mag",
+   "aliases": [
+    "X / A Ejects Full Mag"
+   ],
+   "help": "X / A drops the mag even when it's full; a part-used mag always drops.",
+   "owner": "reload_mode",
+   "requires": [
+    [
+     "bInteractiveReloads",
+     [
+      true
+     ]
+    ]
+   ],
+   "requires_reason": "Only with Manual or Realistic reloads",
+   "applies": "live"
+  },
+  {
+   "key": "bReloadStopsSprint",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Reloads",
+   "depth": "customize",
+   "label": "Sprint while reloading",
+   "help": "Keep running while you reload by hand instead of pausing your sprint.",
+   "owner": "player",
+   "invert": true,
+   "requires": [
+    [
+     "bInteractiveReloads",
+     [
+      true
+     ]
+    ]
+   ],
+   "requires_reason": "Only with Manual or Realistic reloads",
+   "applies": "live"
+  },
+  {
+   "key": "bPerkReloadMagnet",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Reloads",
+   "depth": "customize",
+   "label": "Perk reload assist",
+   "aliases": [
+    "Perk Insertion Assistance"
+   ],
+   "help": "Perks that reload faster also guide mags into the gun.",
+   "owner": "player",
+   "requires": [
+    [
+     "bInteractiveReloads",
+     [
+      true
+     ]
+    ]
+   ],
+   "requires_reason": "Only with Manual or Realistic reloads",
+   "applies": "live"
+  },
+  {
+   "key": "bKeepChamberedRound",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Ammo rules",
+   "depth": "customize",
+   "label": "Keep chambered round",
+   "aliases": [
+    "Keep Chambered Round",
+    "Keep chambered round / +1",
+    "Keep chambered round (+1)"
+   ],
+   "help": "A reload before the gun is empty keeps the round in the chamber.",
+   "owner": "ammo_rules",
+   "requires": [
+    [
+     "bInteractiveReloads",
+     [
+      true
+     ]
+    ]
+   ],
+   "requires_reason": "Only with Manual or Realistic reloads",
+   "applies": "live"
+  },
+  {
+   "key": "bLoseReloadAmmo",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Ammo rules",
+   "depth": "customize",
+   "label": "Dropped mags lose their rounds",
+   "aliases": [
+    "Lose Rounds in a Dropped Mag",
+    "Lose dropped / ejected ammo"
+   ],
+   "help": "Rounds left in a mag you drop, or live rounds you eject from a cylinder, are lost.",
+   "owner": "ammo_rules",
+   "requires": [
+    [
+     "bInteractiveReloads",
+     [
+      true
+     ]
+    ]
+   ],
+   "requires_reason": "Only with Manual or Realistic reloads",
+   "applies": "live"
+  },
+  {
+   "key": "bRecoverMagazineAmmo",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Ammo rules",
+   "depth": "customize",
+   "label": "Recover dropped mags",
+   "aliases": [
+    "Pick It Up to Get Them Back",
+    "Recover dropped-mag ammo"
+   ],
+   "help": "Pick a dropped mag back up to get its rounds back.",
+   "owner": "ammo_rules",
+   "requires": [
+    [
+     "bInteractiveReloads",
+     [
+      true
+     ]
+    ],
+    [
+     "bLoseReloadAmmo",
+     [
+      true
+     ]
+    ]
+   ],
+   "requires_reason": "Only with lost rounds in dropped mags",
+   "applies": "live"
+  },
+  {
+   "key": "bToggleGrip",
+   "headset_only": true,
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Grip",
+   "depth": "customize",
+   "label": "Main grip",
+   "aliases": [
+    "Gun Stays in Hand",
+    "Transfer / brace grip",
+    "Latched"
+   ],
+   "help": "Toggle: a grabbed gun stays in your hand until you drop it. Hold: keep squeezing.",
+   "owner": "grip_mode",
+   "kind": "choice",
+   "choices": [
+    [
+     "True",
+     "Toggle"
+    ],
+    [
+     "False",
+     "Hold"
+    ]
+   ],
+   "applies": "live"
+  },
+  {
+   "key": "bHoldSupportGrip",
+   "headset_only": true,
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Grip",
+   "depth": "customize",
+   "label": "Support grip",
+   "aliases": [
+    "Second Hand on the Gun"
+   ],
+   "help": "Hold: squeeze to keep your other hand on pumps and grips. Toggle: press once on, once off.",
+   "owner": "grip_mode",
+   "kind": "choice",
+   "choices": [
+    [
+     "True",
+     "Hold"
+    ],
+    [
+     "False",
+     "Toggle"
+    ]
+   ],
+   "applies": "live"
+  },
+  {
+   "key": "bSupportHandCarry",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Grip",
+   "depth": "customize",
+   "label": "Support-hand carry",
+   "aliases": [
+    "Allow Support-Hand Carry"
+   ],
+   "help": "Let go with your gun hand and your other hand keeps holding a two-handed gun by its foregrip. It can't fire until your gun hand takes it back; letting go then drops it.",
+   "owner": "player",
+   "applies": "live"
+  },
+  {
+   "key": "ActiveControllerFitProfile",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Grip",
+   "depth": "customize",
+   "label": "Gun angle",
+   "aliases": [
+    "Gun aim angle"
+   ],
+   "help": "How guns sit in your hand. Fine-tune the fit in {menu}.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "Relaxed",
+     "Relaxed wrist"
+    ],
+    [
+     "Neutral",
+     "Straight"
+    ]
+   ],
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "bDisableSupportHandAim",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Grip",
+   "depth": "customize",
+   "label": "Two-handed aiming",
+   "aliases": [
+    "Two-Handed Aim",
+    "Support hand aims gun",
+    "Aiming style"
+   ],
+   "help": "Both hands steer a two-handed gun; when off, the gun hand aims and the other hand only braces.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "False",
+     "On"
+    ],
+    [
+     "True",
+     "Off"
+    ]
+   ],
+   "applies": "live"
+  },
+  {
+   "key": "AimAssistPreset",
+   "store": "assist",
+   "category": "Hands & Weapons",
+   "group": "Aim & bullet path",
+   "depth": "customize",
+   "label": "Aim assist",
+   "aliases": [
+    "Headshot Help",
+    "Aim assistance"
+   ],
+   "help": "Helps shots that only just miss.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Off"
+    ],
+    [
+     "1",
+     "Standard"
+    ],
+    [
+     "2",
+     "Custom"
+    ]
+   ],
+   "applies": "live",
+   "choice_help": {
+    "0": "Shots go exactly where you aim.",
+    "1": "Shots that just miss are nudged onto the head, as the game does for gamepads.",
+    "2": "Your own strength and range, set in {menu}."
+   },
+   "recommended": "1",
+   "choice_short": {
+    "0": "no help",
+    "1": "nudges near misses onto the head",
+    "2": "your own strength and range"
+   }
+  },
+  {
+   "key": "CustomAimCorrectionStrength",
+   "store": "assist",
+   "category": "Hands & Weapons",
+   "group": "Aim & bullet path",
+   "depth": "customize",
+   "label": "Aim assist strength",
+   "help": "How strongly a near miss is pulled to the head. 100% is the game's normal amount.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 100,
+   "step": 1,
+   "scale": 100,
+   "unit": "%",
+   "requires": [
+    [
+     "AimAssistPreset",
+     [
+      "2"
+     ]
+    ]
+   ],
+   "requires_reason": "Only with custom aim assist",
+   "applies": "live",
+   "aliases": [
+    "Correction strength"
+   ],
+   "headset_only": true
+  },
+  {
+   "key": "CustomAimCorrectionTolerance",
+   "store": "assist",
+   "category": "Hands & Weapons",
+   "group": "Aim & bullet path",
+   "depth": "customize",
+   "label": "Aim assist area",
+   "help": "How far from the head a shot can land and still get help. 100% is the game's normal area.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 100,
+   "step": 1,
+   "scale": 100,
+   "unit": "%",
+   "requires": [
+    [
+     "AimAssistPreset",
+     [
+      "2"
+     ]
+    ]
+   ],
+   "requires_reason": "Only with custom aim assist",
+   "applies": "live",
+   "aliases": [
+    "Near-headshot tolerance"
+   ],
+   "headset_only": true
+  },
+  {
+   "key": "CustomAimCorrectionMinRangeMeters",
+   "store": "assist",
+   "category": "Hands & Weapons",
+   "group": "Aim & bullet path",
+   "depth": "customize",
+   "label": "Aim assist min range",
+   "help": "Closer shots get no help. Can't be more than the max range.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 100,
+   "step": 0.1,
+   "unit": "m",
+   "requires": [
+    [
+     "AimAssistPreset",
+     [
+      "2"
+     ]
+    ]
+   ],
+   "requires_reason": "Only with custom aim assist",
+   "applies": "live",
+   "aliases": [
+    "Minimum correction range"
+   ],
+   "headset_only": true
+  },
+  {
+   "key": "CustomAimCorrectionMaxRangeMeters",
+   "store": "assist",
+   "category": "Hands & Weapons",
+   "group": "Aim & bullet path",
+   "depth": "customize",
+   "label": "Aim assist max range",
+   "help": "Farther shots get no help. Up to 100 m; can't be less than the min range.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 100,
+   "step": 0.1,
+   "unit": "m",
+   "requires": [
+    [
+     "AimAssistPreset",
+     [
+      "2"
+     ]
+    ]
+   ],
+   "requires_reason": "Only with custom aim assist",
+   "applies": "live",
+   "aliases": [
+    "Maximum correction range"
+   ],
+   "headset_only": true
+  },
+  {
+   "key": "AimMode",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Aim & bullet path",
+   "depth": "customize",
+   "label": "Bullet path",
+   "aliases": [
+    "Bullets Go to",
+    "Aim mode",
+    "Shot alignment",
+    "Converge at 20 m",
+    "Where bullets go",
+    "aim"
+   ],
+   "help": "Bullets always leave the muzzle; this sets where they fly to. Guns with no sights always shoot along the barrel.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "sight",
+     "Sight line"
+    ],
+    [
+     "bore",
+     "Barrel"
+    ],
+    [
+     "converge",
+     "Meet at 20 m"
+    ]
+   ],
+   "applies": "live",
+   "choice_help": {
+    "sight": "From the muzzle to whatever your sights are on, so shots land on the sights at any range.",
+    "bore": "From the muzzle straight along the barrel, like a real gun, so shots land a little below the sights.",
+    "converge": "From the muzzle to the spot your sights are on 20 m away: on target at 20 m, a little low closer and a little high farther out."
+   },
+   "recommended": "sight",
+   "choice_short": {
+    "sight": "lands on your sights at any range",
+    "bore": "straight along the barrel",
+    "converge": "on your sights at 20 m only"
+   }
+  },
+  {
+   "key": "bLaserFromBore",
+   "store": "assist",
+   "category": "Hands & Weapons",
+   "group": "Aim & bullet path",
+   "depth": "customize",
+   "label": "Laser source",
+   "aliases": [
+    "Laser Origin"
+   ],
+   "help": "The gun's own laser emitter where it has one, or the barrel.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "False",
+     "Gun's emitter"
+    ],
+    [
+     "True",
+     "Barrel"
+    ]
+   ],
+   "requires": [
+    [
+     "bWeaponLasers",
+     [
+      true
+     ]
+    ]
+   ],
+   "requires_reason": "Only with the laser sight on",
+   "applies": "live",
+   "headset_only": true
+  },
+  {
+   "key": "WorldDropReturnPolicy",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Pickups & Zed grabs",
+   "depth": "customize",
+   "label": "Auto-return dropped guns",
+   "aliases": [
+    "Dropped Guns Come Back",
+    "Auto Return"
+   ],
+   "help": "Dropped guns come back to you on their own.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "On"
+    ],
+    [
+     "2",
+     "Off"
+    ]
+   ],
+   "applies": "live"
+  },
+  {
+   "key": "WorldDropReturnSeconds",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Pickups & Zed grabs",
+   "depth": "customize",
+   "label": "Auto-return delay",
+   "aliases": [
+    "Return Delay"
+   ],
+   "help": "Seconds before a dropped gun comes back.",
+   "owner": "player",
+   "kind": "number",
+   "min": 1,
+   "max": 300,
+   "step": 1,
+   "unit": "s",
+   "requires": [
+    [
+     "WorldDropReturnPolicy",
+     [
+      "0"
+     ]
+    ]
+   ],
+   "requires_reason": "Only with auto-return on",
+   "applies": "live"
+  },
+  {
+   "key": "bWorldDropRadialRecall",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Pickups & Zed grabs",
+   "depth": "customize",
+   "label": "Recall from weapon wheel",
+   "aliases": [
+    "Recall From the Wheel",
+    "Radial Recall"
+   ],
+   "help": "Call a dropped gun back from the weapon wheel.",
+   "owner": "player",
+   "applies": "live"
+  },
+  {
+   "key": "bZedGrabEnabled",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Pickups & Zed grabs",
+   "depth": "customize",
+   "label": "Zed grab and throw",
+   "aliases": [
+    "Zed Grab / Throw"
+   ],
+   "help": "Grab and throw Zeds with a free hand.",
+   "owner": "player",
+   "applies": "live",
+   "server_governed": true
+  },
+  {
+   "key": "bMeleeHitStop",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Melee",
+   "depth": "customize",
+   "label": "Melee hit stop",
+   "help": "A short pause on melee hits so they feel solid.",
+   "owner": "player",
+   "applies": "live"
+  },
+  {
+   "key": "bExperimentalInteractions",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "depth": "customize",
+   "group": "Melee",
+   "label": "Physical melee",
+   "help": "Hit by swinging melee weapons with your own arm.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true
+  },
+  {
+   "key": "graphics_preset",
+   "kind": "preset",
+   "category": "Graphics & HUD",
+   "depth": "everyday",
+   "label": "Graphics preset",
+   "preset": "graphics_preset"
+  },
+  {
+   "key": "eye_render_percent",
+   "store": "session",
+   "category": "Graphics & HUD",
+   "depth": "everyday",
+   "label": "Render scale",
+   "help": "Resolution per eye: lower runs faster but looks softer.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "100",
+     "100%"
+    ],
+    [
+     "95",
+     "95%"
+    ],
+    [
+     "90",
+     "90%"
+    ],
+    [
+     "85",
+     "85%"
+    ],
+    [
+     "80",
+     "80%"
+    ],
+    [
+     "75",
+     "75%"
+    ],
+    [
+     "70",
+     "70%"
+    ],
+    [
+     "65",
+     "65%"
+    ],
+    [
+     "60",
+     "60%"
+    ],
+    [
+     "55",
+     "55%"
+    ],
+    [
+     "50",
+     "50%"
+    ]
+   ],
+   "applies": "live",
+   "aliases": [
+    "fps",
+    "frame rate",
+    "resolution"
+   ]
+  },
+  {
+   "key": "dlss",
+   "store": "launcher",
+   "category": "Graphics & HUD",
+   "depth": "everyday",
+   "label": "DLSS",
+   "help": "NVIDIA upscaling for the headset; Auto uses Quality on RTX cards and stays off on others.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "auto",
+     "Auto"
+    ],
+    [
+     "off",
+     "Off"
+    ],
+    [
+     "dlaa",
+     "Full resolution (DLAA)"
+    ],
+    [
+     "quality",
+     "Quality"
+    ],
+    [
+     "balanced",
+     "Balanced"
+    ],
+    [
+     "performance",
+     "Performance"
+    ],
+    [
+     "ultraperformance",
+     "Ultra performance"
+    ]
+   ],
+   "applies": "next_launch",
+   "aliases": [
+    "DLAA",
+    "fps",
+    "frame rate"
+   ]
+  },
+  {
+   "key": "hud_preset",
+   "kind": "preset",
+   "category": "Graphics & HUD",
+   "depth": "everyday",
+   "label": "HUD preset",
+   "preset": "hud_preset"
+  },
+  {
+   "key": "SpatialMenuDistance",
+   "store": "session",
+   "category": "Graphics & HUD",
+   "group": "Calibrate menu position",
+   "depth": "everyday",
+   "label": "Menu distance",
+   "help": "Distance from your head. Adjust physically in headset.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0.6,
+   "max": 3,
+   "step": 0.05,
+   "unit": "m",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "SpatialMenuHeight",
+   "store": "session",
+   "category": "Graphics & HUD",
+   "group": "Calibrate menu position",
+   "depth": "everyday",
+   "label": "Menu height",
+   "help": "Vertical offset. Backdrop changes preserve placement.",
+   "owner": "player",
+   "kind": "number",
+   "min": -0.8,
+   "max": 0.5,
+   "step": 0.05,
+   "unit": "m",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "SpatialMenuScale",
+   "store": "session",
+   "category": "Graphics & HUD",
+   "group": "Calibrate menu position",
+   "depth": "everyday",
+   "label": "Menu size",
+   "help": "Scale of the menu panel.",
+   "owner": "player",
+   "kind": "number",
+   "min": 50,
+   "max": 150,
+   "step": 5,
+   "scale": 100,
+   "unit": "%",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "WristwatchScale",
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "Calibrate watch and ammo counter",
+   "depth": "everyday",
+   "label": "Wristwatch size",
+   "help": "Use Wristwatch Fit in headset for position, rotation and a live watch preview.",
+   "owner": "player",
+   "kind": "number",
+   "min": 50,
+   "max": 200,
+   "step": 5,
+   "scale": 100,
+   "unit": "%",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "WristwatchOffset.X",
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "Calibrate watch and ammo counter",
+   "depth": "everyday",
+   "label": "Watch forward",
+   "help": "Saved physical offset. Use the headset editor to see the actual fit or pickup volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": -12,
+   "max": 12,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "WristwatchOffset.Y",
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "Calibrate watch and ammo counter",
+   "depth": "everyday",
+   "label": "Watch side",
+   "help": "Saved physical offset. Use the headset editor to see the actual fit or pickup volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": -12,
+   "max": 12,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "WristwatchOffset.Z",
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "Calibrate watch and ammo counter",
+   "depth": "everyday",
+   "label": "Watch height",
+   "help": "Saved physical offset. Use the headset editor to see the actual fit or pickup volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": -12,
+   "max": 12,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "WristwatchRotation.Pitch",
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "Calibrate watch and ammo counter",
+   "depth": "everyday",
+   "label": "Watch pitch",
+   "help": "Saved watch rotation. Use Wristwatch Fit in headset for a live preview.",
+   "owner": "player",
+   "kind": "number",
+   "min": -180,
+   "max": 180,
+   "step": 5,
+   "scale": 0.0054931640625,
+   "unit": "°",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "WristwatchRotation.Yaw",
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "Calibrate watch and ammo counter",
+   "depth": "everyday",
+   "label": "Watch yaw",
+   "help": "Saved watch rotation. Use Wristwatch Fit in headset for a live preview.",
+   "owner": "player",
+   "kind": "number",
+   "min": -180,
+   "max": 180,
+   "step": 5,
+   "scale": 0.0054931640625,
+   "unit": "°",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "WristwatchRotation.Roll",
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "Calibrate watch and ammo counter",
+   "depth": "everyday",
+   "label": "Watch roll",
+   "help": "Saved watch rotation. Use Wristwatch Fit in headset for a live preview.",
+   "owner": "player",
+   "kind": "number",
+   "min": -180,
+   "max": 180,
+   "step": 5,
+   "scale": 0.0054931640625,
+   "unit": "°",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "WeaponAmmoReadoutScale",
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "Calibrate watch and ammo counter",
+   "depth": "everyday",
+   "label": "Readout size",
+   "help": "Scale of the weapon ammo readout.",
+   "owner": "player",
+   "kind": "number",
+   "min": 50,
+   "max": 200,
+   "step": 5,
+   "scale": 100,
+   "unit": "%",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "WeaponAmmoReadoutForward",
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "Calibrate watch and ammo counter",
+   "depth": "everyday",
+   "label": "Readout forward",
+   "help": "Forward offset along the gun.",
+   "owner": "player",
+   "kind": "number",
+   "min": -12,
+   "max": 12,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "WeaponAmmoReadoutHeight",
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "Calibrate watch and ammo counter",
+   "depth": "everyday",
+   "label": "Readout height",
+   "help": "Vertical offset from the gun.",
+   "owner": "player",
+   "kind": "number",
+   "min": -12,
+   "max": 12,
+   "step": 0.5,
+   "unit": "cm",
+   "applies": "live",
+   "calibration": true,
+   "headset_only": true
+  },
+  {
+   "key": "Bloom",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Image",
+   "depth": "customize",
+   "label": "Bloom",
+   "help": "Glow around bright lights.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Off"
+    ],
+    [
+     "1",
+     "Low"
+    ],
+    [
+     "2",
+     "High"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "dlss_sharpness",
+   "store": "launcher",
+   "category": "Graphics & HUD",
+   "group": "Image",
+   "depth": "customize",
+   "label": "DLSS sharpening",
+   "help": "Sharpening after DLSS. 0% turns it off.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 100,
+   "step": 1,
+   "unit": "%",
+   "integer": true,
+   "requires": [
+    [
+     "dlss",
+     [
+      "auto",
+      "dlaa",
+      "quality",
+      "balanced",
+      "performance",
+      "ultraperformance"
+     ]
+    ]
+   ],
+   "requires_reason": "Only with DLSS on",
+   "applies": "next_launch",
+   "headset_only": true
+  },
+  {
+   "key": "hbao",
+   "store": "launcher",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Ambient occlusion",
+   "help": "Soft shadows in corners and under objects.",
+   "owner": "graphics_preset",
+   "applies": "next_launch",
+   "aliases": [
+    "Ambient occlusion (HBAO+)"
+   ],
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "reflections",
+   "store": "launcher",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Screen-space reflections",
+   "help": "Reflections on wet and shiny surfaces.",
+   "owner": "graphics_preset",
+   "applies": "next_launch",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "EnvironmentDetail",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Environment detail",
+   "help": "Detail of level geometry, props and foliage.",
+   "owner": "graphics_preset",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Low"
+    ],
+    [
+     "1",
+     "Medium"
+    ],
+    [
+     "2",
+     "High"
+    ],
+    [
+     "3",
+     "Ultra"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "CharacterDetail",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Character detail",
+   "help": "Detail of Zed and player models.",
+   "owner": "graphics_preset",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Low"
+    ],
+    [
+     "1",
+     "High"
+    ],
+    [
+     "2",
+     "Ultra"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "EffectsQuality",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Effects quality",
+   "help": "Detail of muzzle flashes, fire, explosions and blood.",
+   "owner": "graphics_preset",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Low"
+    ],
+    [
+     "1",
+     "Medium"
+    ],
+    [
+     "2",
+     "High"
+    ],
+    [
+     "3",
+     "Ultra"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "TextureQuality",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Texture quality",
+   "help": "Texture resolution. Higher settings need more video memory.",
+   "owner": "graphics_preset",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Low"
+    ],
+    [
+     "1",
+     "Medium"
+    ],
+    [
+     "2",
+     "High"
+    ],
+    [
+     "3",
+     "Ultra"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "TextureFiltering",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Texture filtering",
+   "help": "Sharpness of floors and walls seen at an angle. 16× is sharpest and costs little.",
+   "owner": "graphics_preset",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Bilinear"
+    ],
+    [
+     "1",
+     "Trilinear"
+    ],
+    [
+     "2",
+     "4×"
+    ],
+    [
+     "3",
+     "16×"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "ShadowQuality",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Shadows",
+   "help": "Shadow detail and distance; one of the bigger costs.",
+   "owner": "graphics_preset",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Low"
+    ],
+    [
+     "1",
+     "Medium"
+    ],
+    [
+     "2",
+     "High"
+    ],
+    [
+     "3",
+     "Ultra"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "VolumetricLighting",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Volumetric lighting",
+   "help": "Light scattering visibly through fog and smoke.",
+   "owner": "graphics_preset",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Off"
+    ],
+    [
+     "1",
+     "On"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "LightShafts",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Light shafts",
+   "help": "Visible beams of light from bright sources.",
+   "owner": "graphics_preset",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Off"
+    ],
+    [
+     "1",
+     "On"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "MaxWholeSceneDominantShadowResolution",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "World shadow detail",
+   "help": "Detail of shadows from the main light. Higher is slower.",
+   "owner": "graphics_preset",
+   "kind": "choice",
+   "applies": "live",
+   "aliases": [
+    "Scene shadow resolution"
+   ],
+   "choices": [
+    [
+     "1204",
+     "Low"
+    ],
+    [
+     "1280",
+     "Medium"
+    ],
+    [
+     "2048",
+     "High"
+    ],
+    [
+     "4096",
+     "Ultra"
+    ]
+   ],
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "MaxShadowResolution",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Object shadow detail",
+   "help": "Detail of shadows from characters and props. Higher is slower.",
+   "owner": "graphics_preset",
+   "kind": "choice",
+   "applies": "live",
+   "aliases": [
+    "Object shadow resolution"
+   ],
+   "choices": [
+    [
+     "512",
+     "Low"
+    ],
+    [
+     "1024",
+     "Medium"
+    ],
+    [
+     "1536",
+     "High"
+    ],
+    [
+     "2048",
+     "Ultra"
+    ]
+   ],
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "ShadowTexelsPerPixel",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Shadow sharpness",
+   "help": "How crisp shadow edges are. Higher is slower.",
+   "owner": "graphics_preset",
+   "kind": "choice",
+   "applies": "live",
+   "aliases": [
+    "Shadow texels per pixel"
+   ],
+   "choices": [
+    [
+     "0.5",
+     "Low"
+    ],
+    [
+     "1",
+     "Medium"
+    ],
+    [
+     "1.3",
+     "High"
+    ],
+    [
+     "2",
+     "Ultra"
+    ]
+   ],
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "GlobalShadowDistanceScale",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Shadow distance",
+   "help": "How far away shadows are drawn. Farther is slower.",
+   "owner": "graphics_preset",
+   "kind": "choice",
+   "applies": "live",
+   "choices": [
+    [
+     "0.75",
+     "Near"
+    ],
+    [
+     "1",
+     "Medium"
+    ],
+    [
+     "1.5",
+     "Far"
+    ],
+    [
+     "2",
+     "Very far"
+    ]
+   ],
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "GoreIntensity",
+   "store": "stock",
+   "category": "Graphics & HUD",
+   "group": "Bodies",
+   "depth": "customize",
+   "label": "Gore intensity",
+   "help": "How much gore and dismemberment you see.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "High"
+    ],
+    [
+     "1",
+     "Medium"
+    ],
+    [
+     "2",
+     "Low"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "MaxDeadBodies",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Bodies",
+   "depth": "customize",
+   "label": "Body limit",
+   "help": "More bodies look better in big waves and cost frame rate.",
+   "owner": "player",
+   "kind": "choice",
+   "applies": "live",
+   "choices": [
+    [
+     "6",
+     "Low"
+    ],
+    [
+     "12",
+     "Normal"
+    ],
+    [
+     "24",
+     "High"
+    ],
+    [
+     "48",
+     "Very high"
+    ]
+   ],
+   "aliases": [
+    "gore"
+   ]
+  },
+  {
+   "key": "bAllowRagdollAndGoreOnDeadBodies",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Bodies",
+   "depth": "customize",
+   "label": "Bodies react to hits",
+   "help": "Dead bodies still react to shots and can lose limbs.",
+   "owner": "player",
+   "applies": "live",
+   "aliases": [
+    "Corpse reactions",
+    "gore"
+   ]
+  },
+  {
+   "key": "bAllowAlwaysOnPhysics",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Bodies",
+   "depth": "customize",
+   "label": "Ragdoll physics",
+   "help": "Bodies tumble and fall with real physics.",
+   "owner": "player",
+   "applies": "live",
+   "aliases": [
+    "Animated body physics"
+   ],
+   "headset_only": true,
+   "menu": "Graphics & HUD/Corpse physics"
+  },
+  {
+   "key": "ShouldCorpseCollideWithDead",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Bodies",
+   "depth": "customize",
+   "label": "Bodies collide with bodies",
+   "help": "Bodies bump into other bodies.",
+   "owner": "player",
+   "applies": "live",
+   "aliases": [
+    "Corpse-to-corpse collision"
+   ],
+   "headset_only": true,
+   "menu": "Graphics & HUD/Corpse physics"
+  },
+  {
+   "key": "ShouldCorpseCollideWithLiving",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Bodies",
+   "depth": "customize",
+   "label": "Bodies collide with Zeds",
+   "help": "Bodies bump into living Zeds and players.",
+   "owner": "player",
+   "applies": "live",
+   "aliases": [
+    "Corpse-to-living collision"
+   ],
+   "headset_only": true,
+   "menu": "Graphics & HUD/Corpse physics"
+  },
+  {
+   "key": "ShouldCorpseCollideWithDeadAfterSleep",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Bodies",
+   "depth": "customize",
+   "label": "Resting bodies collide",
+   "help": "Bodies that have settled still block other bodies.",
+   "owner": "player",
+   "applies": "live",
+   "aliases": [
+    "Sleeping corpse collision"
+   ],
+   "headset_only": true,
+   "menu": "Graphics & HUD/Corpse physics"
+  },
+  {
+   "key": "MaxBloodEffects",
+   "headset_only": true,
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Gore limits",
+   "depth": "customize",
+   "label": "Blood effect limit",
+   "help": "Higher shows more and costs frame rate.",
+   "owner": "player",
+   "kind": "choice",
+   "applies": "live",
+   "choices": [
+    [
+     "12",
+     "Low"
+    ],
+    [
+     "25",
+     "Normal"
+    ],
+    [
+     "50",
+     "High"
+    ],
+    [
+     "100",
+     "Very high"
+    ]
+   ]
+  },
+  {
+   "key": "MaxGoreEffects",
+   "headset_only": true,
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Gore limits",
+   "depth": "customize",
+   "label": "Gore effect limit",
+   "help": "Higher shows more and costs frame rate.",
+   "owner": "player",
+   "kind": "choice",
+   "applies": "live",
+   "choices": [
+    [
+     "5",
+     "Low"
+    ],
+    [
+     "10",
+     "Normal"
+    ],
+    [
+     "20",
+     "High"
+    ],
+    [
+     "40",
+     "Very high"
+    ]
+   ]
+  },
+  {
+   "key": "MaxPersistentSplatsPerFrame",
+   "headset_only": true,
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Gore limits",
+   "depth": "customize",
+   "label": "Splats per frame",
+   "help": "Higher shows more and costs frame rate.",
+   "owner": "player",
+   "kind": "choice",
+   "applies": "live",
+   "aliases": [
+    "Persistent splats"
+   ],
+   "choices": [
+    [
+     "35",
+     "Low"
+    ],
+    [
+     "75",
+     "Normal"
+    ],
+    [
+     "150",
+     "High"
+    ],
+    [
+     "300",
+     "Very high"
+    ]
+   ]
+  },
+  {
+   "key": "MaxBodyWoundDecals",
+   "headset_only": true,
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Gore limits",
+   "depth": "customize",
+   "label": "Wounds per body",
+   "help": "Higher shows more and costs frame rate.",
+   "owner": "player",
+   "kind": "choice",
+   "applies": "live",
+   "choices": [
+    [
+     "2",
+     "Low"
+    ],
+    [
+     "5",
+     "Normal"
+    ],
+    [
+     "10",
+     "High"
+    ],
+    [
+     "20",
+     "Very high"
+    ]
+   ]
+  },
+  {
+   "key": "MaxBloodSplatterDecals",
+   "headset_only": true,
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Gore limits",
+   "depth": "customize",
+   "label": "Blood splats",
+   "help": "Higher shows more and costs frame rate.",
+   "owner": "player",
+   "kind": "choice",
+   "applies": "live",
+   "aliases": [
+    "Blood splatter decals"
+   ],
+   "choices": [
+    [
+     "10",
+     "Low"
+    ],
+    [
+     "20",
+     "Normal"
+    ],
+    [
+     "40",
+     "High"
+    ],
+    [
+     "80",
+     "Very high"
+    ]
+   ]
+  },
+  {
+   "key": "MaxBloodPoolDecals",
+   "headset_only": true,
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Gore limits",
+   "depth": "customize",
+   "label": "Blood pools",
+   "help": "Higher shows more and costs frame rate.",
+   "owner": "player",
+   "kind": "choice",
+   "applies": "live",
+   "aliases": [
+    "Blood pool decals"
+   ],
+   "choices": [
+    [
+     "10",
+     "Low"
+    ],
+    [
+     "20",
+     "Normal"
+    ],
+    [
+     "40",
+     "High"
+    ],
+    [
+     "80",
+     "Very high"
+    ]
+   ]
+  },
+  {
+   "key": "GoreFXLifetimeMultiplier",
+   "headset_only": true,
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Gore lifetimes",
+   "depth": "customize",
+   "label": "Gore lasts",
+   "help": "Longer looks messier and costs frame rate.",
+   "owner": "player",
+   "kind": "choice",
+   "applies": "live",
+   "aliases": [
+    "Gore lifetime"
+   ],
+   "choices": [
+    [
+     "0.5",
+     "Short"
+    ],
+    [
+     "1",
+     "Normal"
+    ],
+    [
+     "2",
+     "Long"
+    ],
+    [
+     "4",
+     "Very long"
+    ]
+   ]
+  },
+  {
+   "key": "BodyWoundDecalLifetime",
+   "headset_only": true,
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Gore lifetimes",
+   "depth": "customize",
+   "label": "Wounds last",
+   "help": "Longer looks messier and costs frame rate.",
+   "owner": "player",
+   "kind": "choice",
+   "applies": "live",
+   "aliases": [
+    "Wound lifetime"
+   ],
+   "choices": [
+    [
+     "15",
+     "Short"
+    ],
+    [
+     "30",
+     "Normal"
+    ],
+    [
+     "60",
+     "Long"
+    ],
+    [
+     "120",
+     "Very long"
+    ]
+   ]
+  },
+  {
+   "key": "BloodSplatterLifetime",
+   "headset_only": true,
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Gore lifetimes",
+   "depth": "customize",
+   "label": "Splats last",
+   "help": "Longer looks messier and costs frame rate.",
+   "owner": "player",
+   "kind": "choice",
+   "applies": "live",
+   "aliases": [
+    "Splatter lifetime"
+   ],
+   "choices": [
+    [
+     "5",
+     "Short"
+    ],
+    [
+     "10",
+     "Normal"
+    ],
+    [
+     "30",
+     "Long"
+    ],
+    [
+     "60",
+     "Very long"
+    ]
+   ]
+  },
+  {
+   "key": "BloodPoolLifetime",
+   "headset_only": true,
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Gore lifetimes",
+   "depth": "customize",
+   "label": "Pools last",
+   "help": "Longer looks messier and costs frame rate.",
+   "owner": "player",
+   "kind": "choice",
+   "applies": "live",
+   "aliases": [
+    "Blood pool lifetime"
+   ],
+   "choices": [
+    [
+     "10",
+     "Short"
+    ],
+    [
+     "20",
+     "Normal"
+    ],
+    [
+     "60",
+     "Long"
+    ],
+    [
+     "120",
+     "Very long"
+    ]
+   ]
+  },
+  {
+   "key": "GibletLifetime",
+   "headset_only": true,
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Gore lifetimes",
+   "depth": "customize",
+   "label": "Body parts last",
+   "help": "Longer looks messier and costs frame rate.",
+   "owner": "player",
+   "kind": "choice",
+   "applies": "live",
+   "aliases": [
+    "Gib lifetime"
+   ],
+   "choices": [
+    [
+     "5",
+     "Short"
+    ],
+    [
+     "10",
+     "Normal"
+    ],
+    [
+     "30",
+     "Long"
+    ],
+    [
+     "60",
+     "Very long"
+    ]
+   ]
+  },
+  {
+   "key": "hide_bile_lens",
+   "store": "launcher",
+   "category": "Graphics & HUD",
+   "group": "Screen effects",
+   "depth": "customize",
+   "label": "Bile splatter",
+   "aliases": [
+    "Hide Bloat bile on screen",
+    "gore"
+   ],
+   "help": "Bloat bile over your view. It costs frame rate and is heavy on the CPU.",
+   "owner": "player",
+   "invert": true,
+   "applies": "next_launch"
+  },
+  {
+   "key": "hide_blood_lens",
+   "store": "launcher",
+   "category": "Graphics & HUD",
+   "group": "Screen effects",
+   "depth": "customize",
+   "label": "Blood splatter",
+   "aliases": [
+    "Hide hit blood on screen",
+    "gore"
+   ],
+   "help": "Blood over your view when you're hit; the red damage tint stays either way.",
+   "owner": "player",
+   "invert": true,
+   "applies": "next_launch"
+  },
+  {
+   "key": "HeadshotEffects",
+   "store": "stock",
+   "category": "Graphics & HUD",
+   "group": "Screen effects",
+   "depth": "customize",
+   "label": "Other players' headshot effects",
+   "help": "Cosmetic headshot visuals and sounds from other players. Normal headshot gore stays.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "Gamma",
+   "store": "graphics",
+   "category": "Graphics & HUD",
+   "group": "Screen effects",
+   "depth": "customize",
+   "label": "Brightness",
+   "help": "The game's brightness (gamma). Shared with its brightness screen.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0.5,
+   "max": 3.5,
+   "step": 0.05,
+   "applies": "live",
+   "aliases": [
+    "Brightness (gamma)"
+   ],
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "bCinematicMotionBlur",
+   "store": "session",
+   "category": "Graphics & HUD",
+   "group": "Screen effects",
+   "depth": "customize",
+   "label": "Motion blur",
+   "help": "Smears the image as you move and turn.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "bCinematicRadialBlur",
+   "store": "session",
+   "category": "Graphics & HUD",
+   "group": "Screen effects",
+   "depth": "customize",
+   "label": "Radial blur",
+   "help": "Blurs the edges of your view during intense moments.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "bCinematicDepthOfField",
+   "store": "session",
+   "category": "Graphics & HUD",
+   "group": "Screen effects",
+   "depth": "customize",
+   "label": "Depth of field",
+   "help": "Blurs scenery outside the focus distance.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "bCinematicFilmGrain",
+   "store": "session",
+   "category": "Graphics & HUD",
+   "group": "Screen effects",
+   "depth": "customize",
+   "label": "Film grain",
+   "help": "A grainy film texture over the image.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "bCinematicLensFlares",
+   "store": "session",
+   "category": "Graphics & HUD",
+   "group": "Screen effects",
+   "depth": "customize",
+   "label": "Lens flares",
+   "help": "Streaks and glare around bright lights.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "bWristwatchHUD",
+   "headset_only": true,
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "HUD",
+   "depth": "customize",
+   "label": "Watch",
+   "aliases": [
+    "Wristwatch HUD",
+    "Wristwatch"
+   ],
+   "help": "Health, armor and dosh on your wrist.",
+   "owner": "hud_preset",
+   "applies": "live"
+  },
+  {
+   "key": "bWeaponAmmoReadouts",
+   "headset_only": true,
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "HUD",
+   "depth": "customize",
+   "label": "Ammo counter on gun",
+   "aliases": [
+    "Ammo on the Gun",
+    "Weapon readout"
+   ],
+   "help": "Ammo count shown on the gun.",
+   "owner": "hud_preset",
+   "applies": "live"
+  },
+  {
+   "key": "bDamagePopups",
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "HUD",
+   "depth": "customize",
+   "label": "Damage numbers",
+   "aliases": [
+    "Damage popups"
+   ],
+   "help": "Shows the damage you deal as numbers over Zeds' heads.",
+   "owner": "player",
+   "applies": "live",
+   "kind": "choice",
+   "choices": [
+    [
+     "False",
+     "Off"
+    ],
+    [
+     "True",
+     "On"
+    ]
+   ]
+  },
+  {
+   "key": "ClassicColors",
+   "store": "stock",
+   "category": "Graphics & HUD",
+   "group": "HUD",
+   "depth": "customize",
+   "label": "HUD colors",
+   "aliases": [
+    "HUD Colors",
+    "HUD colours"
+   ],
+   "help": "Standard or Classic health and armor colors.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "False",
+     "Standard"
+    ],
+    [
+     "True",
+     "Classic"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "KillTicker",
+   "store": "stock",
+   "category": "Graphics & HUD",
+   "group": "HUD",
+   "depth": "customize",
+   "label": "Kill ticker",
+   "help": "Recent kills at the edge of your view.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "BossHealthBar",
+   "store": "stock",
+   "category": "Graphics & HUD",
+   "group": "HUD",
+   "depth": "customize",
+   "label": "Boss health bar",
+   "help": "The boss's health bar.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "FriendlyIndicatorScale",
+   "store": "stock",
+   "category": "Graphics & HUD",
+   "group": "HUD",
+   "depth": "customize",
+   "label": "Teammate marker size",
+   "aliases": [
+    "Friendly Indicator Scale",
+    "Friendly indicator size"
+   ],
+   "help": "Size of the markers over teammates.",
+   "owner": "player",
+   "kind": "number",
+   "min": 25,
+   "max": 100,
+   "step": 5,
+   "scale": 100,
+   "unit": "%",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "MenuHand",
+   "store": "session",
+   "category": "Graphics & HUD",
+   "group": "Menus",
+   "depth": "customize",
+   "label": "Menu hand",
+   "aliases": [
+    "Pointer Hand"
+   ],
+   "help": "The hand that points at menus.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "Left"
+    ],
+    [
+     "1",
+     "Right"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true
+  },
+  {
+   "key": "MenuBackdropMode",
+   "store": "session",
+   "category": "Graphics & HUD",
+   "group": "Menus",
+   "depth": "customize",
+   "label": "Menu backdrop",
+   "aliases": [
+    "Game-menu backdrop"
+   ],
+   "help": "What's behind the VR menu and the game's own menus.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "0",
+     "VR studio"
+    ],
+    [
+     "1",
+     "Live world"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true
+  },
+  {
+   "key": "Master",
+   "store": "audio",
+   "category": "Audio",
+   "depth": "everyday",
+   "label": "Master volume",
+   "help": "Overall game volume.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 100,
+   "step": 5,
+   "unit": "%",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "Effects",
+   "store": "audio",
+   "category": "Audio",
+   "depth": "everyday",
+   "label": "Effects volume",
+   "help": "Weapons, Zeds and the world around you.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 100,
+   "step": 5,
+   "unit": "%",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "Dialogue",
+   "store": "audio",
+   "category": "Audio",
+   "depth": "everyday",
+   "label": "Dialogue volume",
+   "help": "The Trader and character voices.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 100,
+   "step": 5,
+   "unit": "%",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "Music",
+   "store": "audio",
+   "category": "Audio",
+   "depth": "everyday",
+   "label": "Music volume",
+   "help": "The soundtrack.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 100,
+   "step": 5,
+   "unit": "%",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "VoiceChat",
+   "store": "audio",
+   "category": "Audio",
+   "depth": "everyday",
+   "label": "Voice chat volume",
+   "help": "Other players' voices.",
+   "owner": "player",
+   "kind": "number",
+   "min": 0,
+   "max": 100,
+   "step": 5,
+   "unit": "%",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "LastMicMode",
+   "store": "audio",
+   "category": "Audio",
+   "depth": "everyday",
+   "label": "Microphone",
+   "help": "When your voice goes out to friends.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "1",
+     "Open mic"
+    ],
+    [
+     "2",
+     "Push to talk"
+    ]
+   ],
+   "applies": "live",
+   "aliases": [
+    "Unmute mode"
+   ],
+   "choice_help": {
+    "1": "Whenever you're unmuted.",
+    "2": "Only while you hold Caps Lock, or a controller button you bind in your headset app."
+   }
+  },
+  {
+   "key": "MusicVocals",
+   "store": "audio",
+   "category": "Audio",
+   "group": "Music & dialogue",
+   "depth": "customize",
+   "label": "Music vocals",
+   "help": "Sung vocals in the music.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  },
+  {
+   "key": "ReducedChatter",
+   "store": "audio",
+   "category": "Audio",
+   "group": "Music & dialogue",
+   "depth": "customize",
+   "label": "Battle chatter",
+   "help": "How often characters talk in battle.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "False",
+     "Normal"
+    ],
+    [
+     "True",
+     "Reduced"
+    ]
+   ],
+   "applies": "live",
+   "headset_only": true,
+   "where": "game"
+  }
+ ]
+}

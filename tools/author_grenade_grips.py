@@ -4,9 +4,10 @@ Run inside the existing Blender MCP (runpy, then inspect()) or Blender CPU.
 Reads original PSK and cooked surfaces; saves reviews to an isolated ignored
 build folder. --editable-profile saves the original rig, weights and keyed
 pose; --emit-runtime exports its fixed bone-local quaternions to script.
+Reviewed fixed deltas and held-body placement come from grenade-grip-poses.json.
 No runtime contact solver, asset mutation, gameplay or installation.
 """
-import json, math, runpy
+import hashlib, json, math, runpy
 from pathlib import Path
 from mathutils import Vector, Quaternion, Matrix
 from mathutils.bvhtree import BVHTree
@@ -14,25 +15,51 @@ from mathutils.bvhtree import BVHTree
 DIGITS = ('Thumb', 'Index', 'Middle', 'Ring', 'Pinky')
 # Fifteen authored flexion angles followed by thumb opposition, in degrees.
 PROFILES = {
-    # HE/frag: spread closure over the joints rather than a sharp middle-joint
-    # hook; retain the stock relaxed bind pose and existing held-body placement.
+    # Preserve the editable Compact recipe. Export keeps the current live Frag
+    # deltas from the tracked pose source; HE has its own reviewed profile.
     'Compact': [[20,-20,-10],[-5,45,15],[-5,40,15],[-10,35,10],[-20,30,5],20],
     'Canister': [[35,-30,-20],[-10,75,0],[-10,55,0],[-20,50,0],[-30,50,-5],35],
     'Wide': [[75,-30,-20],[-5,5,-5],[-5,5,-5],[-20,15,-10],[-35,20,-15],20],
     'Stick': [[15,-30,-20],[0,70,0],[0,65,0],[-5,65,0],[-15,65,0],45],
     'Bottle': [[50,-30,-20],[-20,50,-5],[-25,45,-5],[-30,35,-5],[-40,30,-15],35],
 }
+# Runtime family indices are append-only; retain Wide's original reserved slot.
+PROFILE_ORDER = tuple(PROFILES) + ('HEFingers20', 'FlashBang', 'Freeze', 'Medic', 'NailBomb')
+POSE_SOURCE = Path(__file__).with_name('grenade-grip-poses.json')
+
+
+def load_fixed_poses(path):
+    """Reviewed deltas stay independent of the editable angle recipes."""
+    source = json.loads(Path(path).read_text(encoding='utf-8'))
+    if source['quaternion_order'] != 'XYZW' or source['space'] != 'Additive reference-local rotations: posed_local = reference_local * delta':
+        raise ValueError('Expected additive reference-local XYZW grenade deltas')
+    for profile in source['profiles']:
+        for side in ('Left', 'Right'):
+            rotations = source['profiles'][profile][side]
+            if len(rotations) != 15:
+                raise ValueError(profile + ' needs fifteen joints per hand')
+            for q in rotations:
+                if len(q) != 4 or not all(math.isfinite(v) for v in q) or abs(sum(v*v for v in q)-1) > .00001:
+                    raise ValueError(profile + ' has an invalid unit quaternion')
+    return source
+
+
+FIXED_POSES = load_fixed_poses(POSE_SOURCE)
 SHAPES = {
-    'Frag': ('Compact', (8.5,0,3.8)), 'HE': ('Compact',(8.5,0,4.0)),
-    'EMP': ('Canister',(8.5,0,3.7)), 'FlashBang': ('Canister',(8.5,0,3.7)),
-    'Freeze': ('Wide',(9,0,7.5)), 'Medic': ('Wide',(9,0,7)),
+    'Frag': ('Compact', (8.5,0,3.8)), 'HE': ('HEFingers20',(8.5,0,4.0)),
+    'EMP': ('Canister',(8.5,0,3.7)), 'FlashBang': ('FlashBang',(8.5,0,3.7)),
+    'Freeze': ('Freeze',(9,0,7.5)), 'Medic': ('Medic',(9,0,7)),
     'Dynamite': ('Stick',(9.5,0,3.5)), 'Molotov': ('Bottle',(8.5,0,5.2)),
-    'NailBomb': ('Bottle',(8.5,-7,5.2)),
+    'NailBomb': ('NailBomb',(8.5,-7,5.2)),
 }
+for shape, body in FIXED_POSES.get('held_bodies', {}).items():
+    SHAPES[shape] = (SHAPES[shape][0], tuple(body['held_offset']))
 BASELINE = [[55,-45,-15],[40,45,25],[44,45,25],[48,45,25],[52,45,25],45]
 CENTERS = {'NailBomb':(0,0,17.34),'Dynamite':(0,0,2.39),'EMP':(.54,.64,1.90),'Molotov':(0,0,1.78)}
 
 def context(root, hand_path):
+    if hashlib.sha256(Path(hand_path).read_bytes()).hexdigest() != FIXED_POSES['hand_psk_sha256']:
+        raise ValueError('Reviewed grenade deltas require their original floating-hand reference skeleton')
     g=runpy.run_path(str(root/'tools/generate_floating_hands.py'),run_name='grenade_hand_reader')
     c=g['read_psk'](hand_path);bones,names=g['bone_data'](c)
     points,wedges,faces,weights=g['decode_geometry'](c);p0=[];q0=[]
@@ -42,7 +69,7 @@ def context(root, hand_path):
         p0.append(p);q0.append(q)
     return dict(g=g,bones=bones,names=names,points=points,wedges=wedges,faces=faces,weights=weights,p0=p0,q0=q0)
 
-def hand(ctx, side, values):
+def hand(ctx, side, values, fixed_deltas=None):
     g,bones,names,points,wedges,faces,weights,p0,q0=(ctx[k] for k in ('g','bones','names','points','wedges','faces','weights','p0','q0'))
     wrist=names.index(side+'Hand_1stP');members=g['descendants'](bones,wrist)
     finger=lambda f,j:names.index(side+'Hand'+f+str(j)+'_1stP')
@@ -59,6 +86,9 @@ def hand(ctx, side, values):
                 axis=P.copy()
                 if direction.cross(p0[finger('Index',1)]-p0[i]).dot(P)<0:axis=-axis
                 delta=Quaternion(q0[i].inverted()@axis,math.radians(values[5]))@delta
+            if fixed_deltas is not None:
+                x,y,z,w=fixed_deltas[fi*3+j-1]
+                delta=Quaternion((w,x,y,z))
             deltas[i]=delta
     pp=[];pq=[]
     for i,b in enumerate(bones):
@@ -78,6 +108,14 @@ def hand(ctx, side, values):
     tips={f:[i for i in groups[f] if weights[i].get(finger(f,3),0)>.8] for f in DIGITS}
     return dict(vertices=skin,triangles=tris,groups=groups,tips=tips,Y=frame@(T.cross(F)),frame=frame,deltas=[deltas[finger(f,j)] for f in DIGITS for j in range(1,4)],joints={names[i]:list(frame@(pp[i]-p0[wrist])) for i in deltas})
 
+
+def profile_hand(ctx, side, profile):
+    """Use the same reviewed deltas for preview, editable scenes and export."""
+    if profile not in PROFILE_ORDER:
+        raise ValueError('Unknown grenade grip profile: ' + profile)
+    fixed = FIXED_POSES['profiles'].get(profile)
+    return hand(ctx, side, PROFILES.get(profile, BASELINE), fixed[side] if fixed else None)
+
 def grenade(mesh, h, offset):
     scale=5.699153/13.671265 if mesh['label']=='EMP' else 1
     center=CENTERS.get(mesh['label'],(0,0,0));Y=h['Y']
@@ -85,6 +123,21 @@ def grenade(mesh, h, offset):
     t=mesh['triangles'];volume=sum(v[a].dot(v[b].cross(v[c])) for a,b,c in t)/6
     if volume<0:t=[x[::-1] for x in t]
     return v,t
+
+
+def held_body_rotation(shape):
+    body = FIXED_POSES.get('held_bodies', {}).get(shape)
+    if body is None:
+        return Matrix.Identity(3)
+    return (Matrix.Rotation(math.radians(body['tilt_degrees']), 3, 'Z')
+            @ Matrix.Rotation(math.radians(body['outward_degrees']), 3, 'X')
+            @ Matrix.Rotation(math.radians(body['roll_degrees']), 3, 'Y'))
+
+
+def placed_grenade(mesh, h, offset):
+    vertices, triangles = grenade(mesh, h, offset)
+    rotation, center = held_body_rotation(mesh['label']), Vector(offset)
+    return [center + rotation @ (p - center) for p in vertices], triangles
 
 def contacts(h,v,t):
     # Stock grenades contain open seams and overlapping hardware. The nearest
@@ -112,7 +165,7 @@ def inspect(root, hand_path, output, *, build_scene=False, emit_runtime=False):
     for side in ('Left','Right'):
         old=hand(ctx,side,BASELINE)
         for k,m in enumerate(meshes):
-            profile,offset=SHAPES[m['label']];h=hand(ctx,side,PROFILES[profile]);v,t=grenade(m,h,offset);bv,bt=grenade(m,old,(8.5,0,3))
+            profile,offset=SHAPES[m['label']];h=profile_hand(ctx,side,profile);v,t=placed_grenade(m,h,offset);bv,bt=grenade(m,old,(8.5,0,3))
             report.append(dict(side=side,shape=m['label'],profile=profile,offset=offset,before=contacts(old,bv,bt),after=contacts(h,v,t),joints=h['joints']))
             if build_scene:
                 shift=Vector((k%3*40+(125 if side=='Left' else 0),k//3*42,0))
@@ -121,9 +174,8 @@ def inspect(root, hand_path, output, *, build_scene=False, emit_runtime=False):
                     mat=bpy.data.materials.new(o.name+'mat');mat.diffuse_color=(*color,1);mat.use_nodes=True;mat.node_tree.nodes['Principled BSDF'].inputs['Base Color'].default_value=(*color,1);mesh.materials.append(mat)
                     for p in mesh.polygons:p.use_smooth=True
     (output/'comparison.json').write_text(json.dumps(report,indent=2))
-    import hashlib
     metadata=dict(hand_psk=str(hand_path),hand_psk_sha256=hashlib.sha256(Path(hand_path).read_bytes()).hexdigest(),
-                  authored_profiles=PROFILES,shape_placement=SHAPES,
+                  authored_profiles=PROFILES,fixed_local_profiles=FIXED_POSES['profiles'],shape_placement=SHAPES,
                   checks='18 actual mesh/hand combinations; fixed unit quaternions; CPU linear skinning/BVH',
                   limits='Nonzero triangle-pair intersections include contact and residual clipping; nearest-normal-side values do not establish solid penetration depth. Engine render and headset untested.')
     (output/'authoring.json').write_text(json.dumps(metadata,indent=2))
@@ -145,13 +197,14 @@ def editable_scene(ctx, output, profile='Compact'):
     bones,names,points,wedges,faces,weights,p0,q0=(ctx[k] for k in ('bones','names','points','wedges','faces','weights','p0','q0'))
     output=Path(output)
     meshes=json.loads((output/'meshes.json').read_text())
+    first_shape=next(shape for shape,(family,_) in SHAPES.items() if family==profile)
     scene=bpy.data.scenes.new('Editable '+profile+' grenade grip')
     previous=bpy.context.window.scene
     bpy.context.window.scene=scene
     exported={}
     try:
         for side in ('Left','Right'):
-            h=hand(ctx,side,PROFILES[profile])
+            h=profile_hand(ctx,side,profile)
             wrist=names.index(side+'Hand_1stP')
             members=ctx['g']['descendants'](bones,wrist)
             rig=bpy.data.objects.new(side+' original hand rig',bpy.data.armatures.new(side+' original bind skeleton'))
@@ -206,18 +259,18 @@ def editable_scene(ctx, output, profile='Compact'):
             scene[side+'_skinning_error_uu']=error
             for mesh in meshes:
                 if SHAPES[mesh['label']][0]!=profile:continue
-                # Keep both stock compact bodies available; HE is shown first.
-                v,t=grenade(mesh,h,SHAPES[mesh['label']][1])
+                # Each profile previews its own stock bodies; HE has a dedicated fit.
+                v,t=placed_grenade(mesh,h,SHAPES[mesh['label']][1])
                 gm=bpy.data.meshes.new(side+' '+mesh['label']+' stock body');gm.from_pydata(v,[],t);gm.update()
                 go=bpy.data.objects.new(gm.name,gm);scene.collection.objects.link(go)
                 go.location=(0,25 if side=='Right' else 0,0)
-                go.hide_render=mesh['label']!='HE';go.hide_set(mesh['label']!='HE')
+                go.hide_render=mesh['label']!=first_shape;go.hide_set(mesh['label']!=first_shape)
                 mat=bpy.data.materials.new(go.name);mat.diffuse_color=(.12,.32,.14,1);gm.materials.append(mat)
             rig.select_set(False)
         scene.frame_set(1)
         scene['runtime_rotation_space']='Additive bone-local, BCS_BoneSpace'
-        scene['held_offsets_changed']=False
-        scene['profile_recipe']=json.dumps(PROFILES[profile])
+        scene['held_body_placement']=json.dumps({shape:body for shape,body in FIXED_POSES.get('held_bodies', {}).items() if SHAPES[shape][0]==profile})
+        scene['profile_recipe']=json.dumps(dict(angles=PROFILES.get(profile),fixed_local=FIXED_POSES['profiles'].get(profile)))
         bpy.ops.wm.save_as_mainfile(filepath=str(output/(profile+'-editable.blend')))
     finally:
         bpy.context.window.scene=previous
@@ -226,10 +279,10 @@ def editable_scene(ctx, output, profile='Compact'):
 
 def emit_runtime(root, ctx, authored=None):
     """Export the reviewed local rotations; no geometry-dependent runtime code."""
-    names=list(PROFILES)
-    # Keep one table per actual grip family, including both anatomical hands.
-    names=[n for n in names if n in {s[0] for s in SHAPES.values()}]
+    names=list(PROFILE_ORDER)
+    # Keep every family slot, including unused Wide, so prior indices stay fixed.
     text=['// Authored grenade presentation only. Generated by tools/author_grenade_grips.py.',
+          '// Reviewed fixed deltas and held-body placement are tracked in tools/grenade-grip-poses.json.',
           '// Fixed local rotations on the existing floating-hand rig; no contact solver.',
           '// Order: profile, Left/Right, Thumb/Index/Middle/Ring/Pinky, joints 1..3.',
           'class VRGrenadeGripPose extends Object;', '', 'var array<quat> Rotations;', '',
@@ -243,6 +296,16 @@ def emit_runtime(root, ctx, authored=None):
     for shape,(_,offset) in SHAPES.items():
         text.append("        case 'KFProj_%sGrenade': return vect(%s);"%(shape,','.join(str(x) for x in offset)))
     text+=['    }','    return vect(8.5,0,3);','}','',
+           '// Columns of the visual rotation in the anatomical hand frame.',
+           'static function bool HeldAxes(name ProjectileClass, out vector Forward, out vector Thumb)',
+           '{', '    switch (ProjectileClass)', '    {']
+    for shape in FIXED_POSES.get('held_bodies', {}):
+        rotation=held_body_rotation(shape)
+        text.append("        case 'KFProj_%sGrenade':"%shape)
+        text.append('            Forward = vect(%s);'%','.join('%.9f'%v for v in rotation.col[0]))
+        text.append('            Thumb = vect(%s);'%','.join('%.9f'%v for v in rotation.col[1]))
+        text.append('            return true;')
+    text+=['    }','    return false;','}','',
            'static function bool Read(int Profile, int Hand, int Joint, out quat Rotation)', '{',
            '    local int Index;',
            '    if (Profile < 0 || Hand < 0 || Hand > 1 || Joint < 0 || Joint >= 15) return false;',
@@ -254,7 +317,7 @@ def emit_runtime(root, ctx, authored=None):
     for profile in names:
         text.append('    // '+profile)
         for side in ('Left','Right'):
-            h=hand(ctx,side,PROFILES[profile])
+            h=profile_hand(ctx,side,profile)
             for q in (authored or {}).get((profile,side),h['deltas']):
                 assert abs(q.magnitude-1)<.00001
                 text.append('    Rotations(%d)=(X=%.9f,Y=%.9f,Z=%.9f,W=%.9f)'%(index,q.x,q.y,q.z,q.w));index+=1
@@ -294,7 +357,7 @@ if __name__=='__main__':
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--scene',action='store_true')
     p.add_argument('--emit-runtime',action='store_true')
-    p.add_argument('--editable-profile',choices=tuple(PROFILES))
+    p.add_argument('--editable-profile',choices=PROFILE_ORDER)
     argv=sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else sys.argv[1:]
     args=p.parse_args(argv);root=Path(__file__).resolve().parents[1]
     ctx,_=inspect(root,args.hand,args.output,build_scene=args.scene)

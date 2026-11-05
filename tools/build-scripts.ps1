@@ -28,7 +28,7 @@ $recordPath = $null
 try {
     try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
     if (-not $locked) { throw 'Another KF2-VR development fixture is active.' }
-    if (Get-Process KFGame,KFEditor -ErrorAction SilentlyContinue) { throw 'KF2 or its editor is running. Close it before compiling scripts.' }
+    if ((Get-KF2VRSharedProcesses KFGame,KFEditor).Count) { throw 'KF2 or its editor is running. Close it before compiling scripts.' }
     $stable = Join-Path $projectRoot 'build/script'
     $stablePackage = Join-Path $stable 'KF2VR.u'
     if (-not $Force -and (Test-PackageBuildCache -RecordPath (Join-Path $stable 'build.json') -PackagePath $stablePackage -SourceRoot $sourceRoot -SdkHash $manifest.binaries.editor.sha256 -HandAssets $handAssets) -and

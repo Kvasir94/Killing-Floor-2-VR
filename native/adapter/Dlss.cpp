@@ -20,6 +20,9 @@ using Microsoft::WRL::ComPtr;
 constexpr char kProjectId[]="6d3c0f52-8a1e-4b7d-9f2e-4b2f6c1a9e30";
 
 // Depth -> R32F depth and previous-minus-current UV motion, render size.
+// Camera motion comes from depth and the eye's own matrices. Moving meshes
+// (tracked hands, held guns, Zeds) add their own motion from KF2's velocity
+// pass (ObjectMotion.h): NDC displacement over clip z, packed x*0.5+0.5.
 constexpr char kMotionShader[]=R"(
 cbuffer Reprojection : register(b0) {
     row_major float4x4 PrevFromCur;
@@ -27,9 +30,10 @@ cbuffer Reprojection : register(b0) {
     float2 InvSize;
     float Valid;
     float2 Offset;    // The eye's origin in the scene depth target.
-    float Padding;
+    float HasObject;  // ObjectMotion holds this frame's velocity pass.
 };
 Texture2D<float> SceneDepth : register(t0);
+Texture2D<float2> ObjectMotion : register(t1);
 RWTexture2D<float2> Motion : register(u0);
 RWTexture2D<float> DepthOut : register(u1);
 [numthreads(8,8,1)]
@@ -46,6 +50,11 @@ void CS(uint3 id : SV_DispatchThreadID) {
             const float2 ndc = previous.xy / previous.w;
             const float2 previousUv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
             motion = previousUv - uv;
+            if (HasObject > 0.5) {
+                // Divided by clip z, not w: times depth (z/w) gives NDC.
+                const float2 object = (ObjectMotion.Load(int3(id.xy + uint2(Offset), 0)) * 2.0 - 1.0) * depth;
+                motion += float2(-object.x, object.y) * 0.5;
+            }
             if (any(!(abs(motion) < 4.0))) motion = 0;
         }
     }
@@ -97,7 +106,7 @@ static_assert(sizeof(SharpenConstants)==32);
 struct alignas(16) MotionConstants {
     float prevFromCur[4][4];
     float size[2], invSize[2];
-    float valid, offset[2], padding;
+    float valid, offset[2], hasObject;
 };
 static_assert(sizeof(MotionConstants)==96);
 
@@ -129,6 +138,8 @@ struct DlssUpscaler::Impl {
     ComPtr<ID3DDeviceContextState> privateState;
     ComPtr<ID3D11ComputeShader> motionShader, sharpenShader;
     ComPtr<ID3D11Buffer> constants, sharpenConstants;
+    ComPtr<ID3D11Texture2D> objectSource;      // KF2 velocity pass output.
+    ComPtr<ID3D11ShaderResourceView> objectView;
     NVSDK_NGX_Parameter* params=nullptr;
     bool ngxReady=false, ngxInitialized=false, attempted=false;
     struct Eye {
@@ -282,6 +293,7 @@ struct DlssUpscaler::Impl {
         if (params) { NVSDK_NGX_D3D11_DestroyParameters(params); params=nullptr; }
         if (ngxInitialized && device) NVSDK_NGX_D3D11_Shutdown1(device);
         ngxReady=false;ngxInitialized=false;attempted=false;
+        objectView.Reset();objectSource.Reset();
         constants.Reset();motionShader.Reset();sharpenConstants.Reset();sharpenShader.Reset();
         privateState.Reset();context.Reset();
         device=nullptr;
@@ -312,7 +324,7 @@ void DlssUpscaler::Shutdown() noexcept {
 
 bool DlssUpscaler::Evaluate(ID3D11Device* device, ID3D11DeviceContext* context, unsigned eye,
                             ID3D11Texture2D* color, ID3D11Texture2D* depth, ID3D11Texture2D* output,
-                            const DlssEyeInput& input, std::string& error) {
+                            ID3D11Texture2D* objectMotion, const DlssEyeInput& input, std::string& error) {
     error.clear();
     if (!Active()) { error="DLSS inactive"; Fail(error); return false; }
     if (eye>1 || !device || !context || !color || !depth || !output || !input.valid) { error="DLSS input missing"; Fail(error); return false; }
@@ -362,6 +374,18 @@ bool DlssUpscaler::Evaluate(ID3D11Device* device, ID3D11DeviceContext* context, 
             reset=true;
     }
     constants.valid=reset ? 0.0f : 1.0f;
+    ID3D11ShaderResourceView* object=nullptr;
+    if (objectMotion) {
+        D3D11_TEXTURE2D_DESC md{}; objectMotion->GetDesc(&md);
+        if (md.Format==DXGI_FORMAT_R32G32_FLOAT && md.Width>=rx+rw && md.Height>=ry+rh) {
+            if (p.objectSource.Get()!=objectMotion) {
+                p.objectView.Reset(); p.objectSource=objectMotion;
+                if (FAILED(device->CreateShaderResourceView(objectMotion,nullptr,&p.objectView))) p.objectView.Reset();
+            }
+            object=p.objectView.Get();
+        }
+    }
+    constants.hasObject=object ? 1.0f : 0.0f;
     constants.offset[0]=static_cast<float>(rx);constants.offset[1]=static_cast<float>(ry);
     constants.size[0]=static_cast<float>(rw);constants.size[1]=static_cast<float>(rh);
     constants.invSize[0]=1.0f/static_cast<float>(rw);constants.invSize[1]=1.0f/static_cast<float>(rh);
@@ -371,17 +395,18 @@ bool DlssUpscaler::Evaluate(ID3D11Device* device, ID3D11DeviceContext* context, 
     std::memcpy(mapped.pData,&constants,sizeof(constants));
     p.context->Unmap(p.constants.Get(),0);
 
-    ID3D11ShaderResourceView* srv=e.depthView.Get();
+    ID3D11ShaderResourceView* srvs[]{e.depthView.Get(),object};
     ID3D11UnorderedAccessView* uavs[]{e.motionUav.Get(),e.depthUav.Get()};
     ID3D11Buffer* cb=p.constants.Get();
     p.context->CSSetShader(p.motionShader.Get(),nullptr,0);
     p.context->CSSetConstantBuffers(0,1,&cb);
-    p.context->CSSetShaderResources(0,1,&srv);
+    p.context->CSSetShaderResources(0,2,srvs);
     p.context->CSSetUnorderedAccessViews(0,2,uavs,nullptr);
     p.context->Dispatch((rw+7)/8,(rh+7)/8,1);
     ID3D11ShaderResourceView* nullSrv=nullptr;
+    ID3D11ShaderResourceView* nullSrvs[2]{};
     ID3D11UnorderedAccessView* nullUavs[2]{};
-    p.context->CSSetShaderResources(0,1,&nullSrv);
+    p.context->CSSetShaderResources(0,2,nullSrvs);
     p.context->CSSetUnorderedAccessViews(0,2,nullUavs,nullptr);
     p.context->CSSetShader(nullptr,nullptr,0);
 
@@ -389,7 +414,8 @@ bool DlssUpscaler::Evaluate(ID3D11Device* device, ID3D11DeviceContext* context, 
     eval.Feature.pInColor=e.colorIn.Get();
     // With sharpening, DLSS writes an intermediate that CAS then filters into
     // the caller's output; without it, DLSS writes the output directly.
-    const bool sharpen=sharpness_>0.0f;
+    const float sharpness=Sharpness();
+    const bool sharpen=sharpness>0.0f;
     if (sharpen) {
         D3D11_TEXTURE2D_DESC ud{};
         if (e.upscaled) e.upscaled->GetDesc(&ud);
@@ -419,7 +445,7 @@ bool DlssUpscaler::Evaluate(ID3D11Device* device, ID3D11DeviceContext* context, 
         hr=device->CreateUnorderedAccessView(output,nullptr,&target);
         if (FAILED(hr)) { error=Hex("CreateUnorderedAccessView(DLSS sharpen output)",hr); Fail(error); return false; }
         SharpenConstants sc{};
-        sc.peak=-1.0f/(8.0f+(5.0f-8.0f)*sharpness_);
+        sc.peak=-1.0f/(8.0f+(5.0f-8.0f)*sharpness);
         sc.size[0]=od.Width; sc.size[1]=od.Height;
         hr=p.context->Map(p.sharpenConstants.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped);
         if (FAILED(hr)) { error=Hex("Map(DLSS sharpen constants)",hr); Fail(error); return false; }

@@ -48,3 +48,13 @@ Retain the supplied MinHook and bundled HDE copyright/license notices. The curat
 includes these pinned source files and their licence. Verify their hashes above;
 an upstream tag with a similar version label does not establish identical bytes.
 A mismatch requires a reviewed dependency update.
+
+## KF2 Ranked Patch
+
+Dedicated-server progression uses the two-function approach from
+[GenZmeY/KF2-Ranked-Patch](https://github.com/GenZmeY/KF2-Ranked-Patch): suppress
+`SetGameUnranked()` and allow `ValidateForXP()`. The integration lives in
+`native/adapter/ServerAdapter.cpp`, runs in memory on the adapter's hash-pinned
+Windows server, and is included in every server-adapter build. The upstream
+Windows 1150/1150v2 patterns identify its entry points. Preserve
+`KF2-Ranked-Patch-LICENSE.txt` in source and packaged notices.

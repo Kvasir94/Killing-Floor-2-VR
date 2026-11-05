@@ -14,7 +14,7 @@ import struct
 import sys
 
 STAGES = ['otherMs','controllerMs','simulationMs','vmDispatchMs','vmBodyMs','leftMs','rightMs',
-          'xrBeginMs','xrSubmitMs','presentMs','portalMs','worldMs','eyeCopyMs','viewSetupMs',
+          'xrBeginMs','xrSubmitMs','presentMs','worldMs','eyeCopyMs','viewSetupMs',
           'sceneSetupMs','viewportSetupMs','worldTickMs','leftSceneMs','rightSceneMs','diagnosticOutputMs']
 GAME_HASH = '77ab9c2cf43aeaa3038274fff3822064815a3ea02a1b3c81870cdc12a885c994'
 

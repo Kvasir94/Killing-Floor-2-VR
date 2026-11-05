@@ -92,7 +92,7 @@ function TouchActivity()
     for (I=0; I<Anchors.Length; ++I) Anchors[I].LastActivity=WorldInfo.TimeSeconds;
 }
 
-// Newest surviving WORLD placement wins, as chosen by Justin. Dynamic ties
+// Newest surviving WORLD placement wins, as chosen by Kvasir94. Dynamic ties
 // use first placement; resistance stays meaningful without immobilizing it.
 function BreacherArcAnchor ChooseDestination()
 {

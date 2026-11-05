@@ -17,10 +17,17 @@
 // with the wrist as if actually gripped.
 class VRBodyHold extends Object abstract;
 
+var float SeatNeck, SeatSkull, SeatShoulder, SeatLimb, SeatAlongFingers, SeatAcrossPalm;
+
 // Longest distance the body's centre may sit from the palm. A head or torso
 // held at the surface keeps its centre a little ahead of the hand; anything
 // farther snaps in to this.
 var float GripReach;
+// Weight of a held dead body (#25): a piece can follow the hand no faster than
+// HoldSpeed * HoldLiftMass / (HoldLiftMass + its mass) UU/s, trailing it by
+// at most MaxHoldLag UU, and leaves the hand at that same speed. A severed arm
+// keeps up with any swing, a Clot trails a hard one, a Fleshpound drags.
+var float HoldSpeed, HoldLiftMass, MaxHoldLag;
 // Seconds over which a newly gripped body is brought from where it lay into
 // the hand. Short enough to read as a snap, long enough that the ragdoll
 // hanging off it is dragged rather than yanked apart in a single tick.
@@ -86,6 +93,76 @@ static function bool Capture(RB_BodyInstance Body, vector HandLocation, rotator 
     OffsetLocal = QuatRotateVector(InverseHand, Offset);
     RelativeQuat = QuatProduct(InverseHand, QuatFromRotator(MatrixGetRotator(BodyTM)));
     return true;
+}
+
+// Melee item 15: settle a gripped Zed part into the palm so the authored
+// grapple pose (VRGrapplePose) closes on it. In the controller frame the
+// fingers run along X, the thumb along Z and the palm faces -Y (right hand)
+// or +Y (left). The grabbed bone is set the region's part radius off the
+// palm (the radii the grapple poses were solved against on the Clot) and
+// kept within the palm's extent along the fingers and across it; the grip's
+// rotation is unchanged. The local grab and the server's copy both call
+// this with the same inputs. VRHandsBridge.bLegacyMeleePalmSeat disables it.
+static function SeatInPalm(int Hand, name BoneName, out vector OffsetLocal)
+{
+    local float Radius, Side;
+    if (class'VRHandsBridge'.default.bLegacyMeleePalmSeat || Hand < 0 || Hand > 1) return;
+    switch (class'VRGrapplePose'.static.RegionForBone(BoneName))
+    {
+        case class'VRGrapplePose'.const.REGION_NECK: Radius = default.SeatNeck; break;
+        case class'VRGrapplePose'.const.REGION_SKULL: Radius = default.SeatSkull; break;
+        case class'VRGrapplePose'.const.REGION_SHOULDER: Radius = default.SeatShoulder; break;
+        case class'VRGrapplePose'.const.REGION_LIMB: Radius = default.SeatLimb; break;
+        default: return;
+    }
+    Side = Hand == 0 ? 1.0 : -1.0;
+    OffsetLocal.X = FClamp(OffsetLocal.X, -default.SeatAlongFingers, default.SeatAlongFingers);
+    OffsetLocal.Z = FClamp(OffsetLocal.Z, -default.SeatAcrossPalm, default.SeatAcrossPalm);
+    OffsetLocal.Y = Side * Radius;
+}
+
+// Fastest a held piece of this mass follows the hand; 0 mass is unlimited.
+static function float WeightSpeed(float Mass)
+{
+    if (Mass <= 0) return 0;
+    return default.HoldSpeed * default.HoldLiftMass / (default.HoldLiftMass + Mass);
+}
+
+// Where a held piece of this mass reaches this tick on its way from Previous
+// to Want. Shared by the local hold and the server's copy so both trail alike.
+static function vector Weigh(vector Previous, vector Want, float Mass, float DeltaTime)
+{
+    local vector Out;
+    local float Limit, Distance;
+    Limit = WeightSpeed(Mass) * DeltaTime;
+    Distance = VSize(Want - Previous);
+    if (Limit <= 0 || DeltaTime <= 0 || DeltaTime > 0.1 || Distance <= Limit) return Want;
+    Out = Previous + (Want - Previous) * (Limit / Distance);
+    if (VSize(Want - Out) > default.MaxHoldLag) Out = Want + Normal(Out - Want) * default.MaxHoldLag;
+    return Out;
+}
+
+// Stock mass of the piece of a Zed held at this bone: the pawn's mass shared
+// out by the physics bodies still joined to it.
+static function float PieceMass(Pawn P, SkeletalMeshComponent Mesh, name Bone)
+{
+    local RB_BodyInstance Body;
+    local name Other;
+    local float Piece, Total, BodyMass;
+    local int I;
+    if (P == None) return 0;
+    if (Mesh == None || Mesh.PhysicsAsset == None || Mesh.PhysicsAssetInstance == None || Bone == '') return P.Mass;
+    for (I = 0; I < Mesh.PhysicsAsset.BodySetup.Length; ++I)
+    {
+        Other = Mesh.PhysicsAsset.BodySetup[I].BoneName;
+        Body = Mesh.FindBodyInstanceNamed(Other);
+        if (Body == None || !Body.IsValidBodyInstance()) continue;
+        BodyMass = Body.GetBodyMass();
+        Total += BodyMass;
+        if (!Consumed(Mesh, Other) && SamePiece(Mesh, Bone, Other)) Piece += BodyMass;
+    }
+    if (Total <= 0 || Piece <= 0) return P.Mass;
+    return P.Mass * FMin(Piece / Total, 1.0);
 }
 
 static function matrix TargetFor(vector HandLocation, rotator HandRotation, vector OffsetLocal, Quat RelativeQuat)
@@ -182,11 +259,17 @@ static function bool Detached(SkeletalMeshComponent Mesh, name Bone)
 
 // Set velocity only on the connected piece that was released. Setting the
 // entire mesh's velocity also launches severed parts still held by a hand.
+// Each part keeps the swing it already has and gains whatever the hand was
+// moving faster than it along the throw (#25): overwriting every body with the
+// hand's velocity threw away the momentum of a body swung by its arm. The held
+// body itself was kinematic, so it starts from rest and leaves at the throw.
 static function ThrowPiece(PrimitiveComponent Component, name Bone, vector Velocity)
 {
     local SkeletalMeshComponent Mesh;
     local RB_BodyInstance Body;
     local name Candidate;
+    local vector Current, Along;
+    local float Speed;
     local int I;
     Mesh = SkeletalMeshComponent(Component);
     if (Mesh == None || Bone == '') { Component.SetRBLinearVelocity(Velocity, false); return; }
@@ -198,7 +281,10 @@ static function ThrowPiece(PrimitiveComponent Component, name Bone, vector Veloc
         if (!SamePiece(Mesh, Bone, Candidate)) continue;
         Body = Mesh.FindBodyInstanceNamed(Candidate);
         if (Body == None || !Body.IsValidBodyInstance() || Body.IsFixed()) continue;
-        Mesh.AddImpulse(Velocity - Body.GetUnrealWorldVelocity(), MatrixGetOrigin(Body.GetUnrealWorldTM()), Candidate, true);
+        Current = Body.GetUnrealWorldVelocity();
+        Along = Normal(Velocity);
+        Speed = VSize(Velocity);
+        Mesh.AddImpulse(Along * FMax(Speed - (Current dot Along), 0), MatrixGetOrigin(Body.GetUnrealWorldTM()), Candidate, true);
     }
 }
 
@@ -223,5 +309,14 @@ static function float AngleErrorDegrees(RB_BodyInstance Body, matrix Target)
 defaultproperties
 {
     GripReach=12.0
+    HoldSpeed=610.0
+    HoldLiftMass=55.0
+    MaxHoldLag=24.0
     CatchTime=0.15
+    SeatNeck=6.4
+    SeatSkull=8.5
+    SeatShoulder=5.0
+    SeatLimb=2.6
+    SeatAlongFingers=3.0
+    SeatAcrossPalm=6.0
 }

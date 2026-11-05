@@ -75,7 +75,7 @@ float4 PS(P p):SV_TARGET { return float4(p.c,1); }
     kf2vr::adapter::ForegroundDepth policy;
     const auto clear=[&](bool expected) {
         UINT flags=D3D11_CLEAR_DEPTH|D3D11_CLEAR_STENCIL;
-        Test(policy.Filter(context.Get(),dsv.Get(),flags,1,0)==expected,"clear selection");
+        Test(policy.FilterDeviceClear(context.Get(),dsv.Get(),flags,1,0)==expected,"clear selection");
         Test(flags==UINT(expected?D3D11_CLEAR_STENCIL:(D3D11_CLEAR_DEPTH|D3D11_CLEAR_STENCIL)),"clear flags");
         context->ClearDepthStencilView(dsv.Get(),flags,1,0);
     };
@@ -152,6 +152,49 @@ float4 PS(P p):SV_TARGET { return float4(p.c,1); }
     policy.Begin(true);
     at(left);clear(false);at(right);flags=3;
     Test(!policy.Filter(context.Get(),dsv.Get(),flags,1,0) && flags==3,"mono: other viewport still rejected");
+    // A full-target RHIClear reaches the device hook synchronously. Counting
+    // it twice suppresses the initial world clear and retains last-frame depth.
+    at(both); bind(rtv.Get()); policy.Begin(true);
+    context->ClearDepthStencilView(dsv.Get(),3,.25f,7);
+    const auto rhiClear=[&](bool preserve) {
+        kf2vr::adapter::ForegroundDepth::RhiClearScope scope;
+        UINT f=D3D11_CLEAR_DEPTH|D3D11_CLEAR_STENCIL;
+        Test(policy.Filter(context.Get(),dsv.Get(),f,1,0)==preserve,"RHI clear selection");
+        const UINT selected=f;
+        Test(!policy.FilterDeviceClear(context.Get(),dsv.Get(),f,1,0) && f==selected,
+             "nested device clear preserves the RHI decision");
+        context->ClearDepthStencilView(dsv.Get(),f,1,0);
+    };
+    rhiClear(false);
+    context->CopyResource(depthRead.Get(),depth.Get());
+    HR(context->Map(depthRead.Get(),0,D3D11_MAP_READ,0,&dp));
+    bool freshDepth=true;
+    for(unsigned y=0;y<4;++y) for(unsigned x=0;x<8;++x) {
+        const auto d=*reinterpret_cast<const unsigned*>(static_cast<const char*>(dp.pData)+y*dp.RowPitch+x*4);
+        freshDepth &= d==0x00ffffff;
+    }
+    context->Unmap(depthRead.Get(),0);
+    Test(freshDepth,"RHI world clear removes previous-frame depth and stencil");
+    rhiClear(true);
+    clear(true); // The scope exits: subsequent direct device clears are filtered.
+    policy.SetEyes(left,right); policy.Begin(true);
+    at(both); rhiClear(false);
+    at(left); clear(true); at(right); clear(true);
+    // Copies and nested calls must not re-enable interception mid-RHIClear.
+    policy.Begin(true); at(both);
+    {
+        kf2vr::adapter::ForegroundDepth::RhiClearScope outer;
+        {
+            kf2vr::adapter::ForegroundDepth::RhiClearScope inner;
+            auto copied=policy; flags=3;
+            Test(!copied.FilterDeviceClear(context.Get(),dsv.Get(),flags,1,0) && flags==3,
+                 "copied policy respects nested RHI scope");
+        }
+        flags=3;
+        Test(!policy.FilterDeviceClear(context.Get(),dsv.Get(),flags,1,0) && flags==3,
+             "outer RHI scope survives inner exit");
+    }
+    clear(false); clear(true);
     context->ClearState();
     std::printf("Foreground depth checks=%d failures=%d\n",checks,failures);
     return failures?1:0;

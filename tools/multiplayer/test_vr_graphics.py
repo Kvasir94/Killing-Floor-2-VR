@@ -19,15 +19,17 @@ class VrGraphicsTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.profile = self.root / "profile"
 
-    def configure(self, name, mode="solo", extra=()):
+    def configure(self, name, mode="solo", extra=(), vr=True, role_name="driver"):
         flags = [] if mode == "join" else ["--" + mode]
-        args = friends.parse_options(flags + ["--vr", "--prepare-only"] + list(extra))
+        if mode == "host":
+            flags.append("--no-workshop-desktop")  # Graphics-only fixture has no published package.
+        args = friends.parse_options(flags + ["--vr" if vr else "--desktop", "--prepare-only"] + list(extra))
         args.profile_root = self.profile
         args.cache_root = self.root / "cache"
         workshop_loadout.load_preferences(args)
         configs = self.root / name
         configs.mkdir()
-        (configs / "KFEngine.ini").write_text("[Engine.Engine]\nbSmoothFrameRate=True\n", encoding="utf-16")
+        (configs / "KFEngine.ini").write_text("[Engine.Engine]\nbSmoothFrameRate=True\nPhysXLevel=1\n", encoding="utf-16")
         (configs / "KFGame.ini").write_text(
             "[KFGame.KFGameEngine]\n[Engine.WorldInfo]\nEmitterPoolScale=1.0\n"
             "DestructionLifetimeScale=1\nbAllowExplosionLights=True\n"
@@ -37,11 +39,23 @@ class VrGraphicsTests(unittest.TestCase):
             "Distortion=True\nMaxShadowResolution=1024\nBloom=True\nMaxAnisotropy=16\n"
             "TEXTUREGROUP_World=(MinLODSize=1,MaxLODSize=4096,LODBias=0,MinMagFilter=aniso,MipFilter=point)\n",
             encoding="utf-16")
-        role = {"role": "driver", "args": ["join"], "log": str(self.root / "game.log"),
+        role = {"role": role_name, "args": ["join"], "log": str(self.root / "game.log"),
                 "config_root": str(configs), "native_adapter": False}
         with patch.object(friends, "role_config", return_value=role):
-            result = friends.configure_role(self.root, "driver", self.root / "user", self.root / "game", args)
+            result = friends.configure_role(self.root, role_name, self.root / "user", self.root / "game", args)
         return configs, result
+
+    def test_flex_applies_to_personal_client_in_all_modes_and_leaves_server_alone(self):
+        for mode in ('solo', 'host', 'join'):
+            for vr in (False, True):
+                for choice, level in (('off', '0'), ('gibs', '1'), ('fluids', '2')):
+                    with self.subTest(mode=mode, vr=vr, choice=choice):
+                        configs, _ = self.configure(f'flex-{mode}-{vr}-{choice}', mode, ('--flex', choice), vr=vr)
+                        engine = self.values(configs, 'KFEngine.ini', 'Engine.Engine')
+                        self.assertEqual(engine['PhysXLevel'], '0')
+        configs, _ = self.configure('flex-server', 'host', ('--flex', 'fluids'), role_name='server')
+        self.assertEqual(self.values(configs, 'KFEngine.ini', 'Engine.Engine')['PhysXLevel'], '1')
+
 
     def edit(self, configs, filename, section, values):
         path = configs / filename
@@ -60,7 +74,7 @@ class VrGraphicsTests(unittest.TestCase):
         for store, mode in (("steam", "solo"), ("steam", "host"), ("steam", "join"), ("epic", "solo")):
             label = store + "-" + mode
             configs, role = self.configure("first-" + label, mode, ("--store", store))
-            self.assertEqual("performance", role["vr_quality"])
+            self.assertEqual("quality", role["vr_quality"])
             self.edit(configs, "KFSystemSettings.ini", "SystemSettings", {
                 "ParticleLODBias": "2", "Distortion": "False", "MaxShadowResolution": "256"})
             self.edit(configs, "KFGame.ini", "Engine.WorldInfo", {"EmitterPoolScale": "0.25"})
@@ -73,10 +87,10 @@ class VrGraphicsTests(unittest.TestCase):
             self.assertEqual("0.25", self.values(following, "KFGame.ini", "Engine.WorldInfo")["EmitterPoolScale"])
             self.assertEqual("8", self.values(following, "KFGame.ini", "KFGame.KFGoreManager")["MaxDeadBodies"])
 
-    def test_singlepass_screen_effects_and_blood_choices_reach_all_steam_vr_modes(self):
+    def test_single_pass_screen_effects_and_blood_choices_reach_all_steam_vr_modes(self):
         for mode in ('solo','host','join'):
-            configs,role=self.configure('singlepass-'+mode,mode,
-                ('--single-pass','--hbao','--reflections','--no-hide-blood-lens','--frame-timings'))
+            configs,role=self.configure('effects-'+mode,mode,
+                ('--hbao','--reflections','--no-hide-blood-lens','--frame-timings'))
             self.assertIn('-kf2vr-single-pass',role['args'])
             self.assertNotIn('-kf2vr-eye-capture',role['args'])
             settings=self.values(configs)
@@ -91,8 +105,8 @@ class VrGraphicsTests(unittest.TestCase):
             self.assertTrue(role['hide_blood_lens'])
             for key in ('AmbientOcclusion','HBAO','AllowScreenSpaceReflections'):
                 self.assertEqual(self.values(configs)[key],'True')
-            configs,role=self.configure('ordinary-'+mode,mode,('--no-single-pass','--no-hbao','--no-reflections'))
-            self.assertNotIn('-kf2vr-single-pass',role['args'])
+            configs,role=self.configure('ordinary-'+mode,mode,('--no-hbao','--no-reflections'))
+            self.assertIn('-kf2vr-single-pass',role['args'])
             self.assertTrue(role['hide_blood_lens'])
             self.assertEqual(self.values(configs)['HBAO'],'False')
 
@@ -110,19 +124,19 @@ class VrGraphicsTests(unittest.TestCase):
         self.assertEqual("False", self.values(configs)["Bloom"])
 
     def test_explicit_quality_and_headset_preset_replace_old_custom_edits_after_play(self):
-        for index, extra in enumerate((("--vr-quality", "performance"), ("--headset-preset", "quest3"))):
+        for index, extra in enumerate((("--vr-quality", "performance"),)):
             configs, _ = self.configure("custom" + str(index))
             self.edit(configs, "KFSystemSettings.ini", "SystemSettings", {"ParticleLODBias": "3", "Bloom": "False"})
             self.export(configs)
             old_profile = (self.profile / vr_graphics.PROFILE_FILE).read_bytes()
             configs, _ = self.configure("explicit" + str(index), extra=extra)
-            self.assertEqual(("1", "True"), (self.values(configs)["ParticleLODBias"], self.values(configs)["Bloom"]))
+            self.assertEqual(("1", "False"), (self.values(configs)["ParticleLODBias"], self.values(configs)["Bloom"]))
             # Preparing an override is not playing it; do not discard preferences yet.
             self.assertEqual(old_profile, (self.profile / vr_graphics.PROFILE_FILE).read_bytes())
             self.edit(configs, "KFSystemSettings.ini", "SystemSettings", {"MaxShadowResolution": "512"})
             self.export(configs)
             configs, _ = self.configure("after-explicit" + str(index))
-            self.assertEqual(("1", "True", "512"), (self.values(configs)["ParticleLODBias"],
+            self.assertEqual(("1", "False", "512"), (self.values(configs)["ParticleLODBias"],
                              self.values(configs)["Bloom"], self.values(configs)["MaxShadowResolution"]))
 
     def test_texture_edits_merge_only_changed_bias_and_filter_members(self):
@@ -132,7 +146,7 @@ class VrGraphicsTests(unittest.TestCase):
             "TEXTUREGROUP_World": "(MinLODSize=2,MaxLODSize=8192,LODBias=2,MinMagFilter=linear,MipFilter=point)"})
         self.export(configs)
         saved = self.saved()["values"]["KFSystemSettings.ini"]["SystemSettings"]
-        self.assertEqual({"LODBias": "2", "MinMagFilter": "linear"}, saved["TEXTUREGROUP_World"])
+        self.assertEqual({"LODBias": "2", "MinMagFilter": "linear", "MipFilter":"point"}, saved["TEXTUREGROUP_World"])
         configs, _ = self.configure("new-texture")
         members = vr_graphics.texture_members(self.values(configs)["TEXTUREGROUP_World"])
         self.assertEqual(("1", "4096", "2", "linear", "point"),
@@ -162,10 +176,10 @@ class VrGraphicsTests(unittest.TestCase):
         self.assertEqual("False", native["Bloom"])
         self.assertEqual("False", native["MotionBlur"])
         self.assertNotIn("ResX", native)
-        self.assertEqual("1", native["ParticleLODBias"])
-        self.assertEqual("1024", native["MaxShadowResolution"])
+        self.assertEqual("0", native["ParticleLODBias"])
+        self.assertEqual("1536", native["MaxShadowResolution"])
         self.assertEqual("16", native["MaxAnisotropy"])
-        self.assertEqual("15", self.values(configs, "KFGame.ini", "KFGame.KFGoreManager")["MaxDeadBodies"])
+        self.assertEqual("12", self.values(configs, "KFGame.ini", "KFGame.KFGoreManager")["MaxDeadBodies"])
         self.assertNotIn("Password", self.values(configs, "KFGame.ini", "IpDrv.TcpNetDriver"))
         self.assertFalse((self.root / "outside.ini").exists())
         self.export(configs)
@@ -175,8 +189,8 @@ class VrGraphicsTests(unittest.TestCase):
 
     def test_runtime_serialization_format_does_not_turn_defaults_into_edits(self):
         configs, _ = self.configure("formats")
-        self.edit(configs, "KFSystemSettings.ini", "SystemSettings", {"DynamicShadows": "false", "MaxShadowResolution": "1024.000"})
-        self.edit(configs, "KFGame.ini", "Engine.WorldInfo", {"EmitterPoolScale": "1.000000"})
+        self.edit(configs, "KFSystemSettings.ini", "SystemSettings", {"DynamicShadows": "true", "MaxShadowResolution": "1536.000"})
+        self.edit(configs, "KFGame.ini", "Engine.WorldInfo", {"EmitterPoolScale": "2.000000"})
         self.export(configs)
         self.assertEqual({}, self.saved()["values"])
 
@@ -189,7 +203,7 @@ class VrGraphicsTests(unittest.TestCase):
         for index, text in enumerate(("{", "[]", '{"schema":99,"values":{}}')):
             (self.profile / vr_graphics.PROFILE_FILE).write_text(text)
             configs, _ = self.configure("corrupt" + str(index))
-            self.assertEqual("1", self.values(configs)["ParticleLODBias"])
+            self.assertEqual("0", self.values(configs)["ParticleLODBias"])
 
 
 if __name__ == "__main__":

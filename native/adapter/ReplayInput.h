@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <istream>
 #include <locale>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -16,6 +17,8 @@ public:
     struct Record { unsigned ticks=0, ageMs=0; xr::FrameState frame{}; };
     bool Load(std::istream& input, std::string& error) {
         records_.clear(); cursor_=0; remaining_=0; tick_=0; owner_=pawn_=0; epoch_=0; haveEpoch_=false; stopped_=false;
+        caseIndex_=0; caseResetBlocked_=false;
+        realtimeStarted_=false; nextSampleTime_=0; delivered_=0; realtimeFrame_={};
         std::string line, magic; unsigned version=0;
         if (!std::getline(input,line)) return Fail(error,"missing header");
         std::istringstream header(line); header.imbue(std::locale::classic());
@@ -53,9 +56,10 @@ public:
             // An old sample is unavailable, not an observed physical release.
             if (r.ageMs>250 || (haveEpoch_ && epoch_!=out.referenceSpaceEpoch)) {
                 out.actionsSynced=false; out.headPoseValid=false;
+                caseResetBlocked_=true;
             }
             epoch_=out.referenceSpaceEpoch; haveEpoch_=true;
-        }
+        } else if (cursor_>=records_.size()) caseResetBlocked_=true;
         out.poseSampleId=++tick_;
         out.predictedDisplayPeriod=double(stepUs_)/1000000.0;
         out.predictedDisplayTime=double(tick_)*out.predictedDisplayPeriod;
@@ -63,6 +67,51 @@ public:
     }
     bool Finished() const { return stopped_ || cursor_==records_.size(); }
     std::uint64_t Seed() const { return seed_; } // provenance, never an implicit RNG reseed
+    // Explicit offline suite only. A new case reuses the parsed input against
+    // the exact admitted bridge/pawn; it cannot rescue a failed input context.
+    bool BeginCase(std::uintptr_t owner, std::uintptr_t pawn, int index) {
+        if (stopped_ || caseResetBlocked_ || records_.empty() || !owner || !pawn || index<=0 ||
+            (owner_ && (owner_!=owner || pawn_!=pawn)) ||
+            (index!=caseIndex_ && (caseIndex_==std::numeric_limits<int>::max() || index!=caseIndex_+1))) {
+            stopped_=true; return false;
+        }
+        if (!owner_) { owner_=owner; pawn_=pawn; }
+        if (index==caseIndex_) return true;
+        caseIndex_=index; cursor_=0; remaining_=0; epoch_=0; haveEpoch_=false;
+        realtimeStarted_=false; nextSampleTime_=0; realtimeFrame_={};
+        // Sample identity and predicted time remain process monotonic: motion
+        // consumers must never mistake a new case for a reused/older sample.
+        return true;
+    }
+    // Opt-in real-time harness: wait for settled inventory without consuming the
+    // tape, then deliver at most one tape sample per bridge update. Never skip
+    // an input edge after a slow frame or compress its following hold duration.
+    xr::FrameState Realtime(std::uintptr_t owner, std::uintptr_t pawn, double now, bool ready) {
+        if (!owner || !pawn || !std::isfinite(now) || (owner_ && (owner_!=owner || pawn_!=pawn))) stopped_=true;
+        if (!owner_) { owner_=owner; pawn_=pawn; }
+        xr::FrameState out{};
+        if (stopped_ || records_.empty()) { out.poseSampleId=++delivered_; return out; }
+        if (!ready) {
+            if (realtimeStarted_) { stopped_=true; out.poseSampleId=++delivered_; return out; }
+            out=records_.front().frame;
+            const auto neutral=[](auto& hand) {
+                hand.triggerAxis=hand.gripAxis=hand.stickX=hand.stickY=0;
+                hand.primaryPressed=hand.secondaryPressed=hand.stickPressed=hand.menuPressed=hand.menuHoldPressed=false;
+            };
+            neutral(out.handLeft); neutral(out.handRight);
+            out.predictedDisplayPeriod=double(stepUs_)/1000000.0;
+            out.predictedDisplayTime=double(tick_)*out.predictedDisplayPeriod;
+        } else {
+            if (!realtimeStarted_ || now>=nextSampleTime_) {
+                realtimeFrame_=Next(owner,pawn);
+                nextSampleTime_=now+double(stepUs_)/1000000.0;
+                realtimeStarted_=true;
+            }
+            out=realtimeFrame_;
+        }
+        out.poseSampleId=++delivered_;
+        return out;
+    }
 private:
     bool Fail(std::string& error,const std::string& message) { records_.clear(); stopped_=true; error=message; return false; }
     static bool End(std::istream& s) { s>>std::ws; return s.eof(); }
@@ -94,5 +143,11 @@ private:
     std::uintptr_t owner_=0, pawn_=0;
     std::uint64_t epoch_=0;
     bool haveEpoch_=false, stopped_=false;
+    int caseIndex_=0;
+    bool caseResetBlocked_=false;
+    bool realtimeStarted_=false;
+    double nextSampleTime_=0;
+    std::uint64_t delivered_=0;
+    xr::FrameState realtimeFrame_{};
 };
 }

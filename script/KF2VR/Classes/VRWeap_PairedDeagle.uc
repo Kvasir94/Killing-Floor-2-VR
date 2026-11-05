@@ -31,6 +31,18 @@ function InitializeAmmo()
     SpareAmmoCount[0] = 0; SpareAmmoCount[1] = 0;
 }
 
+// Preserve canonical single-weapon perk exceptions through this wrapper.
+simulated function ModifyMagSizeAndNumber(out int InMagazineCapacity, optional int FireMode = DEFAULT_FIREMODE,
+    optional int UpgradeIndex = INDEX_NONE, optional KFPerk CurrentPerk)
+{
+    class'VRPairedWeaponPolicy'.static.ModifyMagazine(self, InMagazineCapacity, FireMode, UpgradeIndex, CurrentPerk);
+}
+
+simulated static event class<KFPerk> GetWeaponPerkClass(class<KFPerk> InstigatorPerkClass)
+{
+    return class'VRPairedWeaponPolicy'.static.PerkClassFor(default.Class, InstigatorPerkClass);
+}
+
 simulated function int GetModifiedWeightValue()
 {
     return Pair != None ? Pair.MemberWeight(self) : 0;
@@ -41,15 +53,21 @@ simulated function string GetHumanReadableName()
     return Pair != None ? Pair.MemberLabel(self) : Super.GetHumanReadableName();
 }
 
+function bool DenyPickupQuery(class<Inventory> ItemClass, Actor Pickup)
+{
+    if (class'VRPairedWeaponPolicy'.static.DenyExtraFamilyWeapon(Pair, self, ItemClass, Pickup)) return true;
+    return Super.DenyPickupQuery(ItemClass, Pickup);
+}
+
 simulated event bool HasSpareAmmo(optional byte FireModeNum)
 {
     return Pair != None && Pair.IsMember(self) && GetAmmoType(FireModeNum) == 0
-        && (bInfiniteSpareAmmo || Pair.SharedReserve() > 0);
+        && (bInfiniteSpareAmmo || Pair.SharedReserve(self) > 0);
 }
 
 simulated function int GetSpareAmmoForHUD()
 {
-    return (Pair != None && Pair.IsMember(self)) ? Pair.SharedReserve() : 0;
+    return (Pair != None && Pair.IsMember(self)) ? Pair.SharedReserve(self) : 0;
 }
 
 simulated event int GetTotalAmmoAmount(byte FiringMode)
@@ -60,7 +78,7 @@ simulated event int GetTotalAmmoAmount(byte FiringMode)
 simulated event int GetMissingSpareAmmoAmount(byte FiringMode)
 {
     if (Pair == None || !Pair.IsMember(self) || GetAmmoType(FiringMode) != 0) return 0;
-    return Max(0, Pair.SourceReserveCapacity - Pair.SharedReserve());
+    return Max(0, Pair.ReserveCapacity(self) - Pair.SharedReserve(self));
 }
 
 function int AddAmmo(int Amount)

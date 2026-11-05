@@ -9,6 +9,14 @@ var config string OutputPackage;
 // tools/generate_reload_props.py.
 var config array<string> PropMeshes;
 var config string TextureRoot;
+// Derived from every positively weighted vertex of the source PSK.
+struct HandBoundsSphere
+{
+    var name Bone;
+    var float Radius, ReferenceLength;
+};
+var config array<HandBoundsSphere> HandBounds;
+
 // RAVEN-7 sockets and takes from build/hand-meshes/VRTomahawk.json
 // (tools/raven7_rig.py), written into the import config by the builder.
 var config vector TomahawkRigGrip, TomahawkAttachmentGrip;
@@ -28,7 +36,132 @@ var config array<float> RipcordTakeSeconds;
 var config array<int> RipcordTakeFrames;
 var config int RipcordBones;
 
-function bool EditTexture(Texture2D T, string PropertyName, string Value, optional bool bNotify=true)
+function bool ImportHandBounds(WorldInfo WI, SkeletalMesh Mesh)
+{
+    local PhysicsAsset BoundsAsset;
+    local RB_BodySetup Body;
+    local KMeshProps.KSphereElem Sphere;
+    local Object Package;
+    local KFSkeletalMeshComponent Reference;
+    local name Parent;
+    local int I, BoneIndex;
+    local float ImportedLength;
+    local string Bodies, Indices;
+    if (HandBounds.Length == 0 || HandBounds.Length > 128) return false;
+    Package = Mesh.Outer;
+    BoundsAsset = new(Package, "VRFloatingHandsBounds") class'PhysicsAsset';
+    Reference = new(WI) class'KFSkeletalMeshComponent';
+    Reference.SetSkeletalMesh(Mesh);
+    Reference.SetForceRefPose(true);
+    Reference.bUpdateSkelWhenNotRendered = true;
+    Reference.SetHidden(true);
+    WI.AttachComponent(Reference);
+    Reference.ForceSkelUpdate(); Reference.ForceUpdate(false);
+    // Validate the imported FBX's scale against its source PSK before writing
+    // any bounds. World distances cancel Origin/RotOrigin and axis conversion.
+    for (I = 0; I < HandBounds.Length; ++I)
+    {
+        BoneIndex = Reference.MatchRefBone(HandBounds[I].Bone);
+        Parent = Reference.GetParentBone(HandBounds[I].Bone);
+        if (BoneIndex == INDEX_NONE || Parent == '' || !(HandBounds[I].Radius > 0))
+        { Reference.DetachFromAny(); return false; }
+        ImportedLength = VSize(Reference.GetBoneLocation(HandBounds[I].Bone) - Reference.GetBoneLocation(Parent));
+        if (Abs(ImportedLength - HandBounds[I].ReferenceLength) > FMax(0.001, ImportedLength * 0.001))
+        { Reference.DetachFromAny(); return false; }
+    }
+    Reference.DetachFromAny();
+    // KSphereElem also declares this default, but initialize the native matrix
+    // explicitly before saving the new shapes through the editor importer.
+    Sphere.TM = MakeRotationTranslationMatrix(vect(0,0,0), rot(0,0,0));
+    Bodies = "("; Indices = "(";
+    for (I = 0; I < HandBounds.Length; ++I)
+    {
+        Body = new(BoundsAsset) class'RB_BodySetup';
+        Body.BoneName = HandBounds[I].Bone;
+        Body.bConsiderForBounds = true;
+        Body.bNoCollision = true;
+        Body.bBlockZeroExtent = false;
+        Body.bBlockNonZeroExtent = false;
+        Body.bFixed = true;
+        Sphere.Radius = HandBounds[I].Radius;
+        Sphere.bNoRBCollision = true;
+        Sphere.bNoUECollision = true;
+        Body.AggGeom.SphereElems.AddItem(Sphere);
+        if (I > 0) { Bodies $= ","; Indices $= ","; }
+        Bodies $= "RB_BodySetup'" $ PathName(Body) $ "'";
+        Indices $= string(I);
+    }
+    if (FindObject("KF2VRHands.Edit." $ PathName(BoundsAsset) $ "|BodySetup|" $ Bodies $ ")|0", class'Object') != BoundsAsset
+        || FindObject("KF2VRHands.Edit." $ PathName(BoundsAsset) $ "|BoundsBodies|" $ Indices $ ")|0", class'Object') != BoundsAsset
+        || BoundsAsset.BodySetup.Length != HandBounds.Length || BoundsAsset.BoundsBodies.Length != HandBounds.Length) return false;
+    for (I = 0; I < HandBounds.Length; ++I)
+        if (BoundsAsset.BodySetup[I] == None || BoundsAsset.BodySetup[I].BoneName != HandBounds[I].Bone
+            || BoundsAsset.BoundsBodies[I] != I) return false;
+    if (FindObject("KF2VRHands.PublishHandBounds", class'Object') != BoundsAsset) return false;
+    return true;
+}
+
+function MaterialExpression.ExpressionInput Pin(MaterialExpression Expression)
+{
+    local MaterialExpression.ExpressionInput Input;
+    Input.Expression = Expression;
+    return Input;
+}
+
+function MaterialExpressionConstant Constant(Material M, float Value)
+{
+    local MaterialExpressionConstant C;
+    C = new(M) class'MaterialExpressionConstant'; C.R = Value;
+    M.Expressions.AddItem(C);
+    return C;
+}
+
+function MaterialExpressionMultiply Multiply(Material M, MaterialExpression A, MaterialExpression B)
+{
+    local MaterialExpressionMultiply Product;
+    Product = new(M) class'MaterialExpressionMultiply'; Product.A = Pin(A); Product.B = Pin(B);
+    M.Expressions.AddItem(Product);
+    return Product;
+}
+
+// Horzine hologram for item highlights (#173). The stock emissive decal
+// parent the rings and hints share is decal-only, so on a skeletal mesh the
+// engine swaps in its default checker. This one is unlit, translucent and
+// compiled for skeletal and static meshes, with the decal MIC's parameter
+// names so callers only change the parent. A soft fresnel rim keeps the
+// item's own shape readable through it.
+function bool ImportHologram(Object Package)
+{
+    local Material M;
+    local MaterialExpressionVectorParameter Colour;
+    local MaterialExpressionScalarParameter Intensity, Opacity;
+    local MaterialExpressionFresnel Rim;
+    local MaterialExpressionLinearInterpolate Shape;
+    if (Package == None) return false;
+    M = new(Package, "VRHologram") class'Material';
+    M.LightingModel = MLM_Unlit;
+    M.BlendMode = BLEND_Translucent;
+    Colour = new(M) class'MaterialExpressionVectorParameter';
+    Colour.ParameterName = 'Vector_Glow_Color'; Colour.DefaultValue = MakeLinearColor(0.353, 0.784, 1.0, 1.0);
+    Intensity = new(M) class'MaterialExpressionScalarParameter';
+    Intensity.ParameterName = 'Scalar_Glow_Intensity'; Intensity.DefaultValue = 1.5;
+    Opacity = new(M) class'MaterialExpressionScalarParameter';
+    Opacity.ParameterName = 'Scalar_Opacity'; Opacity.DefaultValue = 1.0;
+    Rim = new(M) class'MaterialExpressionFresnel'; Rim.Exponent = 2.5;
+    Shape = new(M) class'MaterialExpressionLinearInterpolate';
+    Shape.A = Pin(Constant(M, 0.45)); Shape.B = Pin(Constant(M, 1.0)); Shape.Alpha = Pin(Rim);
+    M.Expressions.AddItem(Colour); M.Expressions.AddItem(Intensity); M.Expressions.AddItem(Opacity);
+    M.Expressions.AddItem(Rim); M.Expressions.AddItem(Shape);
+    M.EmissiveColor.Expression = Multiply(M, Multiply(M, Colour, Intensity), Shape);
+    M.Opacity.Expression = Multiply(M, Opacity, Shape);
+    if (!EditAsset(M, "bUsedWithSkeletalMesh", "True", false)
+        || !EditAsset(M, "bUsedWithStaticLighting", "True")) return false;
+    if (!M.bUsedWithSkeletalMesh || FindObject("KF2VRHands.PublishHologram", class'Object') != M) return false;
+    `log("VR_HAND_ASSET hologram_imported=" $ M);
+    return true;
+}
+
+function bool EditAsset(Object T, string PropertyName, string Value, optional bool bNotify=true)
 {
     return T != None && FindObject("KF2VRHands.Edit." $ PathName(T) $ "|" $ PropertyName
         $ "|" $ Value $ "|" $ (bNotify ? "1" : "0"), class'Object') == T;
@@ -49,13 +182,13 @@ function bool ImportBakedTextures(WorldInfo WI, string AssetName, optional strin
         T = Texture2D(FindObject("KF2VRHands." $ AssetName $ Suffix, class'Texture2D'));
         if (T == None && I == 3) break;
         if (T == None) return false;
-        if (I > 0 && !EditTexture(T, "SRGB", "False", false)) return false;
-        if (I == 1 && !EditTexture(T, "CompressionSettings", "TC_Normalmap", false)) return false;
+        if (I > 0 && !EditAsset(T, "SRGB", "False", false)) return false;
+        if (I == 1 && !EditAsset(T, "CompressionSettings", "TC_Normalmap", false)) return false;
         // These surfaces are viewed at first-person weapon distance. Keep
         // ordinary mipmaps and quality-scalable filtering in KF2's FP groups.
         GroupName = I == 0 ? "TEXTUREGROUP_Weapon"
             : (I == 1 ? "TEXTUREGROUP_WeaponNormalMap" : "TEXTUREGROUP_WeaponSpecular");
-        if (!EditTexture(T, "LODGroup", GroupName) || string(T.LODGroup) != GroupName) return false;
+        if (!EditAsset(T, "LODGroup", GroupName) || string(T.LODGroup) != GroupName) return false;
         `log("VR_HAND_ASSET texture_imported=" $ AssetName $ Suffix @ "size=" $ T.SizeX $ "x" $ T.SizeY
             @ "lod_group=" $ T.LODGroup @ "compression=" $ T.CompressionSettings @ "srgb=" $ T.SRGB);
     }
@@ -133,7 +266,7 @@ function bool ImportTomahawkRig(WorldInfo WI, FbxImportUI ImportOptions, string 
     }
     WI.ConsoleCommand("NEW Texture2D NAME=VRTomahawkIcon PACKAGE=KF2VRHands FILE=\"" $ Root $ "/VRTomahawkIcon.tga\"");
     Icon = Texture2D(FindObject("KF2VRHands.VRTomahawkIcon", class'Texture2D'));
-    if (Icon == None || !EditTexture(Icon, "LODGroup", "TEXTUREGROUP_UI")) return false;
+    if (Icon == None || !EditAsset(Icon, "LODGroup", "TEXTUREGROUP_UI")) return false;
     `log("VR_HAND_ASSET rig_imported=VRTomahawkRig bones=" $ Rig.RefSkeleton.Length @ "materials=" $ Rig.Materials.Length
         @ "takes=" $ Set.Sequences.Length @ "idle_seconds=" $ FindTake(Set, 'Idle').SequenceLength
         @ "attachment_materials=" $ Attachment.Materials.Length @ "sockets=" $ Rig.Sockets.Length $ "/" $ Attachment.Sockets.Length
@@ -192,7 +325,7 @@ function bool ImportDeadboltRig(WorldInfo WI, FbxImportUI ImportOptions, string 
     // Trader and weapon-select icon (tools/deadbolt/make_icon.py), a UI-group texture like VRTomahawkIcon.
     WI.ConsoleCommand("NEW Texture2D NAME=VRDeadboltIcon PACKAGE=KF2VRHands FILE=\"" $ Root $ "/VRDeadboltIcon.tga\"");
     Icon = Texture2D(FindObject("KF2VRHands.VRDeadboltIcon", class'Texture2D'));
-    if (Icon == None || !EditTexture(Icon, "LODGroup", "TEXTUREGROUP_UI"))
+    if (Icon == None || !EditAsset(Icon, "LODGroup", "TEXTUREGROUP_UI"))
     { `log("VR_HAND_ASSET deadbolt_icon_failed=" $ Icon); return false; }
     `log("VR_HAND_ASSET deadbolt_icon=" $ Icon.SizeX $ "x" $ Icon.SizeY);
     // Bounds let the build confirm the rig landed in the static props' frame
@@ -259,8 +392,8 @@ event int Main(string Params)
     local FbxImportUI ImportOptions;
     local SkeletalMesh ImportedMesh;
     local StaticMesh WatchMesh, PropMesh;
-    local Texture2D WatchFont, WatchGlass, WatchGlow, WheelSpray;
-    local bool PreviousExplicitNormals;
+    local Texture2D WatchFont, WatchGlass, WatchGlow, WheelSpray, GameLogo;
+    local bool PreviousExplicitNormals, PreviousCombine, PreviousConvex;
     local string PropName;
     local int I, Slash;
 
@@ -275,6 +408,8 @@ event int Main(string Params)
     WI.ConsoleCommand("NEW SkeletalMesh NAME=VRFloatingHands PACKAGE=KF2VRHands FILE=\"" $ InputMesh $ "\"");
     ImportedMesh = SkeletalMesh(DynamicLoadObject("KF2VRHands.VRFloatingHands", class'SkeletalMesh', true));
     if (ImportedMesh == None) return 5;
+    if (!ImportHandBounds(WI, ImportedMesh)) return 17;
+    if (!ImportHologram(ImportedMesh.Outer)) return 18;
     `log("VR_HAND_ASSET imported=" $ ImportedMesh @ "bones=" $ ImportedMesh.RefSkeleton.Length @ "materials=" $ ImportedMesh.Materials.Length @ "bounds=" $ ImportedMesh.Bounds.BoxExtent);
 
     // Import the tactical wristwatch static mesh if available beside floating hands
@@ -294,6 +429,11 @@ event int Main(string Params)
         || !ImportBakedTextures(WI, "VRHorzineWatch"))) return 8;
     if (TextureRoot != "")
     {
+        WI.ConsoleCommand("NEW Texture2D NAME=VRHorzineKF2Logo PACKAGE=KF2VRHands FILE=\""
+            $ TextureRoot $ "/VRHorzineKF2Logo.tga\"");
+        GameLogo = Texture2D(FindObject("KF2VRHands.VRHorzineKF2Logo", class'Texture2D'));
+        if (GameLogo == None || !EditAsset(GameLogo, "LODGroup", "TEXTUREGROUP_UI")
+            || GameLogo.SizeX != 1024 || GameLogo.SizeY != 512) return 16;
         WI.ConsoleCommand("NEW Texture2D NAME=VRHorzineWatchFont PACKAGE=KF2VRHands FILE=\""
             $ TextureRoot $ "/VRHorzineWatchFont.tga\"");
         WatchFont = Texture2D(FindObject("KF2VRHands.VRHorzineWatchFont", class'Texture2D'));
@@ -313,7 +453,7 @@ event int Main(string Params)
         WI.ConsoleCommand("NEW Texture2D NAME=VRHorzineWheelSpray PACKAGE=KF2VRHands FILE=\""
             $ TextureRoot $ "/VRHorzineWheelSpray.tga\"");
         WheelSpray = Texture2D(FindObject("KF2VRHands.VRHorzineWheelSpray", class'Texture2D'));
-        if (WheelSpray == None || !EditTexture(WheelSpray, "LODGroup", "TEXTUREGROUP_UI")) return 15;
+        if (WheelSpray == None || !EditAsset(WheelSpray, "LODGroup", "TEXTUREGROUP_UI")) return 15;
         `log("VR_HAND_ASSET wheel_spray_imported=" $ WheelSpray @ "size=" $ WheelSpray.SizeX $ "x" $ WheelSpray.SizeY);
     }
     for (I = 0; I < PropMeshes.Length; ++I)
@@ -322,9 +462,24 @@ event int Main(string Params)
         Slash = InStr(PropName, "/", true);
         if (Slash >= 0) PropName = Mid(PropName, Slash + 1);
         PropName = Left(PropName, Len(PropName) - 4);
+        PreviousCombine = ImportOptions.bCombineMeshes;
+        PreviousConvex = ImportOptions.bOneConvexHullPerUCX;
+        if (Left(PropName,12) == "VRWorldKnife")
+        {
+            ImportOptions.bCombineMeshes = false;
+            ImportOptions.bOneConvexHullPerUCX = true;
+        }
         WI.ConsoleCommand("NEW StaticMesh NAME=" $ PropName $ " PACKAGE=KF2VRHands FILE=\"" $ PropMeshes[I] $ "\"");
+        ImportOptions.bCombineMeshes = PreviousCombine;
+        ImportOptions.bOneConvexHullPerUCX = PreviousConvex;
         PropMesh = StaticMesh(DynamicLoadObject("KF2VRHands." $ PropName, class'StaticMesh', true));
         if (PropMesh == None) return 7;
+        if (Left(PropName,12) == "VRWorldKnife"
+            && (PropMesh.BodySetup == None || PropMesh.BodySetup.AggGeom.ConvexElems.Length == 0))
+        {
+            `log("VR_HAND_ASSET missing_knife_collision=" $ PropName);
+            return 16;
+        }
         // Prop textures sit beside the prop mesh, not beside a candidate hand mesh.
         if (PropName == "VRTomahawk" && (!ImportBakedTextures(WI, "VRTomahawkSteel", Left(PropMeshes[I], Slash))
             || !ImportBakedTextures(WI, "VRTomahawkGrip", Left(PropMeshes[I], Slash))

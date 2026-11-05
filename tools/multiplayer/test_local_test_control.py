@@ -10,6 +10,16 @@ import local_test_control as control
 
 
 class LocalTestLaunchTests(unittest.TestCase):
+    def test_console_transport_preserves_text_and_rejects_framing(self):
+        for command in ('god', 'set Engine.GameInfo GameSpeed 0.5', 'exec "../test commands.txt"', 'x' * 384):
+            wire = control.request_wire('a'*32, 'b'*32, 'console', 7, command)
+            self.assertEqual(command, wire.split('\t')[4])
+        for command in ('', '   ', 'x'*385, 'god\nquit', 'god\tquit', 'god\rquit', 'god\x00', '\u00e9'):
+            with self.subTest(command=command), self.assertRaises(ValueError):
+                control.request_wire('a'*32, 'b'*32, 'console', 7, command)
+        with self.assertRaises(ValueError):
+            control.request_wire('a'*32, 'b'*32, 'console', 7, 'god', 1)
+
     def options(self, enabled=False, **values):
         return Namespace(local_test_control=enabled, solo=True, vr=True,
                          replay_teammate=False, avatar_preview=False, **values)
@@ -76,90 +86,31 @@ class LocalTestLaunchTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             control.configure_role({"args": ["KF-Outpost"]}, args, "driver")
 
-    def test_combined_breacher_and_control_keep_both_explicit_mutators(self):
-        import breacher
+    def test_portable_launcher_optin_defaults_off_and_reaches_existing_backend(self):
         import friends
-        args = friends.parse_options(["--solo", "--vr", "--breacher", "--local-test-control"])
-        args.breacher_content = {"protocol": 1, "sha256": "A" * 64}
-        role = {"args": ["KF-Outpost?Mutator=KF2VR.VRBootstrap,KF2VR.VRDemo"]}
-        role["args"][0] = breacher.add_mutator(role["args"][0], args)
-        control.configure_role(role, args, "driver")
-        mutators = role["args"][0].split("?Mutator=", 1)[1].split("?", 1)[0].split(",")
-        self.assertEqual(mutators, ["KF2VR.VRBootstrap", "KF2VR.VRDemo",
-                                   "KF2Breacher.BreacherMutator", "KF2VR.VRLocalTestControl"])
-        self.assertEqual(role["args"].count("-kf2vr-local-test-control"), 1)
-        default = friends.parse_options(["--solo", "--vr"])
-        self.assertFalse(default.local_test_control)
-        self.assertFalse(bool(default.breacher))
+        import launcher_app as app
+        # Testing tools show only in developer mode (a checkout or --developer).
+        with patch.object(app, "developer_tools_present", return_value=True):
+            state = app.LauncherState(app.parse_context(["--developer"]))
+        self.assertTrue(state.developer)
+        game = Path("C:/KF2VR-fixture-game")
+        state.vr, state.store = True, "steam"
+        form = state.match_defaults("solo", ["KF-Outpost"])
+        self.assertFalse(form["local_test_control"])
+        args = friends.parse_options(state.match_arguments("solo", game, dict(form, local_test_control=True)))
+        self.assertTrue(args.solo and args.vr and args.local_test_control)
+        self.assertNotIn("--local-test-control", state.match_arguments("solo", game, form))
 
-    @unittest.skipUnless(os.name == "nt", "Portable player GUI is Windows")
-    def test_portable_gui_optin_defaults_off_and_reaches_existing_backend(self):
-        import friends
-        import launcher_gui as gui
-        from tkinter import ttk
-        window = gui.Launcher(art=False)
-        window.withdraw()
-        def checkbox():
-            def children(widget):
-                for child in widget.winfo_children():
-                    yield child
-                    yield from children(child)
-            return next(w for w in children(window.body) if isinstance(w, ttk.Checkbutton)
-                        and w.cget("text").startswith("Local agent test control"))
-        try:
-            with patch.object(window, "need_game", return_value=Path("C:/KF2VR-fixture-game")), \
-                    patch("launch_menu.installed_solo_maps", return_value=["KF-Outpost"]), \
-                    patch.object(window, "footer") as footer, patch.object(window, "run") as run:
-                window.vr.set(True)
-                window.options("solo")
-                choice = checkbox()
-                self.assertNotIn("disabled", choice.state())
-                self.assertFalse(bool(window.getvar(choice.cget("variable"))))
-                choice.invoke()
-                footer.call_args.kwargs["start"]()
-                args = friends.parse_options(run.call_args.args[0])
-                self.assertTrue(args.solo and args.vr and args.local_test_control)
-                self.assertEqual(bool(window.saved.breacher), args.breacher)
-                window.options("solo")
-                self.assertFalse(bool(window.getvar(checkbox().cget("variable"))))
-                footer.call_args.kwargs["start"]()
-                self.assertNotIn("--local-test-control", run.call_args.args[0])
-        finally:
-            window.destroy()
-
-    @unittest.skipUnless(os.name == "nt", "Portable player GUI is Windows")
-    def test_portable_gui_disables_and_rejects_host_and_desktop_control(self):
-        import launcher_gui as gui
-        from tkinter import ttk
-        window = gui.Launcher(art=False)
-        window.withdraw()
-        def checkbox():
-            def children(widget):
-                for child in widget.winfo_children():
-                    yield child
-                    yield from children(child)
-            return next(w for w in children(window.body) if isinstance(w, ttk.Checkbutton)
-                        and w.cget("text").startswith("Local agent test control"))
-        try:
-            with patch.object(window, "need_game", return_value=Path("C:/KF2VR-fixture-game")), \
-                    patch("launch_menu.installed_solo_maps", return_value=["KF-Outpost"]), \
-                    patch("launch_menu.installed_maps", return_value=["KF-Outpost"]), \
-                    patch.object(window, "footer") as footer, patch.object(window, "run") as run, \
-                    patch.object(gui.messagebox, "showerror") as error:
-                for kind, vr in (("host", True), ("solo", False)):
-                    with self.subTest(kind=kind, vr=vr):
-                        window.vr.set(vr)
-                        window.options(kind)
-                        choice = checkbox()
-                        self.assertIn("disabled", choice.state())
-                        choice.invoke()
-                        self.assertFalse(bool(window.getvar(choice.cget("variable"))))
-                        window.setvar(choice.cget("variable"), True)
-                        footer.call_args.kwargs["start"]()
-                        run.assert_not_called()
-                        error.assert_called_with("Solo VR required", "Local agent test control is available in Solo VR only.")
-        finally:
-            window.destroy()
+    def test_portable_launcher_rejects_host_and_desktop_control(self):
+        import launcher_app as app
+        state = app.LauncherState(app.parse_context(["--developer"]))
+        state.store = "steam"
+        for kind, vr in (("host", True), ("solo", False)):
+            with self.subTest(kind=kind, vr=vr):
+                state.vr = vr
+                form = dict(state.match_defaults(kind, ["KF-Outpost"]), local_test_control=True)
+                with self.assertRaisesRegex(PermissionError, "Solo VR only"):
+                    state.match_arguments(kind, Path("C:/KF2VR-fixture-game"), form)
 
     def test_protocol_rejects_exec_class_injection_player_overflow_and_spawn_limits(self):
         session, action = "a" * 32, "b" * 32

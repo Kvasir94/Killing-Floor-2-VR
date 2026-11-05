@@ -25,7 +25,9 @@ struct EmptyMagazineState {
             return true;
         }
         if (event==Event::Seat) {
-            if (!(flags&Removed) || stockAmmo==0) return false;
+            // Presence is independent of contents: a real empty replacement
+            // seats too, preserving any action still needed by this weapon.
+            if (!(flags&Removed)) return false;
             flags&=~Removed;
             if (actionKind==2 || (actionKind==1 && (flags&Cocked))) flags=0;
             return true;

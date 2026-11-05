@@ -1,5 +1,5 @@
-<# Compile one frozen KF2VR package containing stock/dual, Source, Engineer and
-   Portal work. Preserve selected audited art by receipt and hash, independently
+<# Compile one frozen KF2VR package containing stock/dual, Source and Engineer
+   work. Preserve selected audited art by receipt and hash, independently
    of later importer edits. No game launch or test execution occurs here. #>
 [CmdletBinding()]
 param(
@@ -7,7 +7,6 @@ param(
     [string]$NativeBuildRoot,
     [ValidateRange(10,600)][int]$TimeoutSeconds = 120,
     [string[]]$VisualLimitations = @(),
-    [switch]$EnablePortals,
     [switch]$PrepareOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -17,7 +16,7 @@ $editor = Join-Path $GameRoot 'Binaries/Win64/KFEditor.exe'
 $manifest = Get-Content (Join-Path $projectRoot 'docs/intake/install_manifest.json') -Raw | ConvertFrom-Json
 $sdkHash = (Get-FileHash -LiteralPath $editor -Algorithm SHA256).Hash
 if ($sdkHash -ne $manifest.binaries.editor.sha256) { throw 'SDK hash differs from the recorded target.' }
-if (-not $NativeBuildRoot) { $NativeBuildRoot = Join-Path $projectRoot 'build/portal-native' }
+if (-not $NativeBuildRoot) { $NativeBuildRoot = Join-Path $projectRoot 'build/multiplayer/native' }
 $NativeBuildRoot = [IO.Path]::GetFullPath($NativeBuildRoot)
 $nativeAdapter = Join-Path $NativeBuildRoot 'native/adapter/Release/dinput8.dll'
 $nativeLoader = Join-Path $NativeBuildRoot 'native/adapter/Release/openxr_loader.dll'
@@ -45,16 +44,13 @@ try {
     $recordPath = Join-Path $runRoot 'run.json'
     $inputHashes = [ordered]@{}
     $record = [ordered]@{
-        schema='kf2vr/combined-script-build/1'; started_utc=[DateTime]::UtcNow.ToString('o')
+        schema='kf2vr/combined-script-build/2'; started_utc=[DateTime]::UtcNow.ToString('o')
         success=$false; verification_ready=$false; prepared_only=[bool]$PrepareOnly; sdk_sha256=$sdkHash
-        portals_enabled=[bool]$EnablePortals
         input_sources_sha256=$inputHashes; snapshot_root=$snapshotRoot; output_root=$outputRoot
         hand_assets=$handState; visual_limitations=@($VisualLimitations)
         art_selection='Audited package receipts and exact SHA256; later importer changes do not rebuild selected art.'
     }
     $names = @{}
-    # The Portal Gun now lives in script/KF2VR; the older project/portal-gun
-    # classes are built against the prototype and no longer compile with it.
     foreach ($folder in @('script/KF2VR/Classes','script/EngineerStaging/Classes',
             'project/source-weapons/Classes')) {
         foreach ($file in Get-ChildItem -LiteralPath (Join-Path $projectRoot $folder) -Filter '*.uc' -File | Sort-Object Name) {
@@ -71,15 +67,13 @@ try {
         }
     }
     foreach ($relative in @('tools/build-combined-scripts.ps1','tools/prepare_combined_runtime.py',
-            'tools/prepare_source_runtime.py','tools/prepare_portal_runtime.py',
+            'tools/prepare_source_runtime.py',
             'project/source-weapons/parked-integration.json',
             'project/source-weapons/Localization/INT/KF2VR.int',
-            'script/EngineerStaging/Localization/INT/KF2VR.int','project/portal-gun/Localization/INT/KF2VR.int')) {
+            'script/EngineerStaging/Localization/INT/KF2VR.int')) {
         $inputHashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $projectRoot $relative)).Hash
     }
-    $registrationArguments = @($snapshotRoot)
-    if ($EnablePortals) { $registrationArguments += '--enable-portals' }
-    & python -B (Join-Path $PSScriptRoot 'prepare_combined_runtime.py') @registrationArguments
+    & python -B (Join-Path $PSScriptRoot 'prepare_combined_runtime.py') $snapshotRoot
     if ($LASTEXITCODE -ne 0) { throw 'Could not compose the combined snapshot.' }
     foreach ($entry in $inputHashes.GetEnumerator()) {
         if ((Get-FileHash -LiteralPath (Join-Path $projectRoot $entry.Key)).Hash -ne $entry.Value) { throw "Input changed during snapshot: $($entry.Key)" }
@@ -89,7 +83,7 @@ try {
     $record['localization_sha256'] = (Get-FileHash -LiteralPath (Join-Path $localizationRoot 'INT/KF2VR.int')).Hash
     Copy-Item -LiteralPath $localizationRoot -Destination $outputRoot -Recurse
     $artifacts = @()
-    foreach ($kind in @('source','engineer','portal')) {
+    foreach ($kind in @('source','engineer')) {
         $assetRoot = Join-Path $projectRoot ('build/' + $kind + '-assets')
         $receiptPath = Join-Path $assetRoot 'build.json'
         $receiptHash = (Get-FileHash -LiteralPath $receiptPath).Hash
@@ -125,7 +119,7 @@ try {
     $record['native_loader'] = [ordered]@{source=$nativeLoader;path=$loaderPath;sha256=$loaderHash}
     $nativeSources = [ordered]@{}
     foreach ($relative in @('CMakeLists.txt','third_party/xr-sdks.cmake') +
-            @(rg --files native/adapter native/vrcore native/xr native/portal -g '*.h' -g '*.hpp' -g '*.cpp' -g '*.asm' -g 'CMakeLists.txt' | Sort-Object)) {
+            @(rg --files native/adapter native/vrcore native/xr -g '*.h' -g '*.hpp' -g '*.cpp' -g '*.asm' -g 'CMakeLists.txt' | Sort-Object)) {
         $nativeSources[$relative.Replace('\','/')] = (Get-FileHash -LiteralPath (Join-Path $projectRoot $relative)).Hash
     }
     $record['native_sources_sha256'] = $nativeSources

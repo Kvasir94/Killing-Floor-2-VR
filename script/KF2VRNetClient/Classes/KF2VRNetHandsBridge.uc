@@ -1,5 +1,5 @@
 // Local VR presentation with predicted hand selection and stock weapon RPCs.
-class KF2VRNetHandsBridge extends VRHandsBridge;
+class KF2VRNetHandsBridge extends VRHandsBridge dependsOn(VRWeaponDropState, KF2VRNetMagazineChannel, KF2VRNetTypes);
 
 // Opt-in local motion export/import; values belong only to Human/PC.
 var int MotionEnabled, MotionPlayback, MotionHasPose, MotionPumpPhase, MotionLastRequest;
@@ -68,8 +68,18 @@ var private float RoomResidualUntil, RoomResidualMoved, RoomResidualQueued;
 var private vector RoomResidualOrigin;
 var private KF2VRNetDualWeaponProbe DualWeaponProbe;
 var private KF2VRNetPairedProbe PairedProbe;
+var config bool bDiagnostic9mmReload;
+var private KF2VRNet9mmReloadInput ReloadCaseInput;
 var private KFPawn_Human DiagnosticDualPawn;
 var int DiagnosticDualTriggers, DiagnosticDualButtons;
+var private KF2VRNetWorldDropChannel DropChannel;
+var private vector CatchControllerPosition[2];
+var private quat CatchControllerRotation[2];
+
+var private KF2VRNetChannel ReplacementChannel;
+var private KFWeapon PendingReplacement;
+var private VRWeaponDropState.HandlingState PendingReplacementHandling;
+var private float PendingReplacementFireDelay;
 var float DiagnosticDualMotionStart;
 
 simulated function TickMotionFixture()
@@ -354,6 +364,7 @@ simulated function ExportMotionWeapon(int Hand)
         MotionPreviousWeapon[Hand] = W; MotionLastAmmo[Hand] = W.AmmoCount[0];
         Visual.ItemId = MotionItemId[Hand]; Visual.ShotSequence = MotionShot[Hand];
         Visual.Ammo = W.AmmoCount[0];
+        Visual.SkinId = class'VRWeaponPair'.static.VisibleSkin(W);
         Visual.WeaponState = W.GetWeaponStateId();
         Visual.ReloadStage = W.ReloadStatus;
         Visual.FireMode = W.CurrentFireMode;
@@ -384,12 +395,12 @@ simulated function bool MultiplayerGrabHostAllowed()
         && NetPC.NetChannel.bMultiplayerZedGrabAllowed;
 }
 
-// Multiplayer grabbing is the host's session setting (VRMultiplayerGrabs);
-// every client follows it with no per-player opt-in. bGrabOptIn is only the
-// server's lease on this client's tracked, eligible intent.
+// The local Zed preference and host permission are independent of the parked
+// experimental interaction group. bGrabOptIn acknowledges eligible tracked input.
 simulated function bool ZedGrabAllowed()
 {
-    return MultiplayerGrabHostAllowed() && KF2VRNetPlayerController(PC).NetChannel.bGrabOptIn;
+    return class'VRExperimentalPolicy'.static.ZedGrabbingEnabled() && bZedGrabEnabled
+        && MultiplayerGrabHostAllowed() && KF2VRNetPlayerController(PC).NetChannel.bGrabOptIn;
 }
 
 simulated function bool RequestNetworkGrabDamage(Pawn Victim, float Amount, vector HitLocation, vector Momentum, name BoneName)
@@ -417,14 +428,222 @@ simulated function bool UsesNetworkDualWeapons()
         && NetPC.NetChannel.HeldState.bIndependentWeapons;
 }
 
-simulated function bool RequestNetworkHands(KFWeapon Left, KFWeapon Right)
+simulated function bool RequestNetworkHands(KFWeapon Left, KFWeapon Right, optional int CarryMask, optional int ShieldHandToken)
 {
-    return UsesNetworkDualWeapons() && KF2VRNetPlayerController(PC).NetChannel.RequestHeldWeapons(Left, Right);
+    return UsesNetworkDualWeapons() && KF2VRNetPlayerController(PC).NetChannel.RequestHeldWeapons(Left, Right, CarryMask, ShieldHandToken);
 }
 
-simulated function bool ReadNetworkHands(out KFWeapon Left, out KFWeapon Right)
+simulated function bool NetworkHandsPending()
 {
-    return UsesNetworkDualWeapons() && KF2VRNetPlayerController(PC).NetChannel.GetDesiredHeldWeapons(Left, Right);
+    return UsesNetworkDualWeapons() && KF2VRNetPlayerController(PC).NetChannel.HeldRequestPending();
+}
+
+simulated function bool ReadNetworkHands(out KFWeapon Left, out KFWeapon Right, out int CarryMask, optional out int ShieldHandToken)
+{
+    UpdateTransferredReplacement();
+    if (PendingReplacement != None || (KF2VRNetPlayerController(PC) != None
+        && KF2VRNetPlayerController(PC).NetChannel != None
+        && KF2VRNetPlayerController(PC).NetChannel.WorldReplacementPending())) return false;
+    return UsesNetworkDualWeapons() && KF2VRNetPlayerController(PC).NetChannel.GetDesiredHeldWeapons(Left, Right, CarryMask, ShieldHandToken);
+}
+
+// A pair extraction can replace the donor's retained wrapper too. Import its
+// receipt before held reconciliation exposes the newly owned stock single.
+simulated function UpdateTransferredReplacement()
+{
+    local KF2VRNetPlayerController C;
+    local KF2VRNetChannel Channel;
+    local VRWeaponRuntime R;
+    C = KF2VRNetPlayerController(PC);
+    if (C != None) Channel = C.NetChannel;
+    if (ReplacementChannel != Channel || Human == None || Human.bDeleteMe || Human.Health <= 0)
+    {
+        PendingReplacement = None;
+        ReplacementChannel = Channel;
+    }
+    if (Channel == None || HeldInventory == None || HeldInventory.Human != Human) return;
+    if (PendingReplacement == None)
+        if (!Channel.ReadWorldReplacement(HeldInventory, PendingReplacement, PendingReplacementHandling, PendingReplacementFireDelay)) return;
+    if (PendingReplacement == None || PendingReplacement.bDeleteMe || PendingReplacement.Owner != Human)
+    { PendingReplacement = None; return; }
+    R = HeldInventory.RegisterItem(PendingReplacement);
+    if (R == None || !class'VRWeaponDropState'.static.ApplyToRuntime(R, PendingReplacementHandling,
+        bInteractiveReloads, bInteractiveReloads || bFreeWeaponCycling)) return;
+    R.WorldDropFireReadyAt = FMax(R.WorldDropFireReadyAt, WorldInfo.TimeSeconds + FMax(PendingReplacementFireDelay, 0.0));
+    PendingReplacement = None;
+}
+
+simulated function bool WorldDropNetworkAvailable()
+{
+    local KF2VRNetPlayerController C;
+    UpdateTransferredReplacement();
+    C = KF2VRNetPlayerController(PC);
+    if (DropChannel != None && (DropChannel.bDeleteMe || C == None || C.NetChannel == None
+        || DropChannel != C.NetChannel.WorldDrops)) RetireDropLifetime(DropChannel);
+    if (C == None || C.NetChannel == None || !UsesNetworkDualWeapons()) return false;
+    if (C.NetChannel.WorldDrops == None || C.NetChannel.WorldDrops.bDeleteMe) return false;
+    DropChannel = C.NetChannel.WorldDrops;
+    DropChannel.Returned = WorldWeaponReturned;
+    return NativeWorldDropVersion == 9 && DropChannel.Ready();
+}
+
+simulated function bool WorldDropNetworkBusy()
+{
+    return DropChannel != None && !DropChannel.bDeleteMe && DropChannel.Busy();
+}
+
+simulated function RetireDropLifetime(Object Lifetime)
+{
+    local int I;
+    local VRWeaponRuntime R;
+    if (Lifetime == None || HeldInventory == None) return;
+    for (I = 0; I < HeldInventory.Items.Length; ++I)
+    {
+        R = HeldInventory.Items[I];
+        if (R != None && R.WorldDropLifetime == Lifetime)
+        { R.WorldDropped = 0; R.WorldDropLifetime = None; }
+    }
+}
+
+simulated function WorldWeaponReturned(KFWeapon W, Object Lifetime)
+{
+    local VRWeaponRuntime R;
+    if (HeldInventory != None)
+    {
+        R = HeldInventory.FindItem(W);
+        if (R != None && R.WorldDropLifetime == Lifetime)
+        { R.WorldDropped = 0; R.WorldDropLifetime = None; }
+    }
+}
+
+simulated function bool IsWorldDropRegistered(KFWeapon W)
+{
+    return DropChannel != None && !DropChannel.bDeleteMe && DropChannel.IsDropped(W);
+}
+
+simulated function int SendWorldDropRelease(KFWeapon W, int Hand, vector At, rotator Facing, vector Linear, vector Angular)
+{
+    local int Request;
+    local bool RootPose;
+    local VRWeaponRuntime R;
+    local VRWeaponDropState.HandlingState Snapshot;
+    if (!WorldDropNetworkAvailable() || HeldInventory == None) return 0;
+    R = HeldInventory.FindItem(W);
+    if (R == None || R.WorldDropped != 0) return 0;
+    if (!class'VRWeaponDropState'.static.Capture(R, Snapshot)) return 0;
+    RootPose = class'VRWorldDropGun'.static.HasRigFrame(W.Class);
+    if (!RootPose)
+    {
+        At = PalmPosition(Hand); Facing = W.Rotation;
+        if (HandInventory != None && HandInventory.WorldDrops != None && HandInventory.WorldDrops.Input.Actions[Hand].QueuedWeapon == W)
+            At = HandInventory.WorldDrops.Input.Actions[Hand].QueuedPalm;
+    }
+    R.WorldDropFireReadyAt = FMax(R.WorldDropFireReadyAt,
+        WorldInfo.TimeSeconds + class'VRWorldDropGun'.static.RemainingFireDelay(W));
+    Request = DropChannel.RequestRelease(W, Hand, At, Facing, Linear, Angular, RootPose, Snapshot);
+    // The marker was sent before this local fence; earlier server handlers
+    // remain admitted until authority observes that marker and stock readiness.
+    if (Request > 0)
+    {
+        R.WorldDropped = 1; R.WorldDropLifetime = DropChannel;
+        DropChannel.TrickClient().RegisterIntent(self, W, Request, Hand, 0);
+    }
+    return Request;
+}
+
+simulated function int SendWorldDropCatch(Actor Prop, int Hand)
+{
+    local int Request;
+    local VRWorldDropGun Gun;
+    if (!WorldDropNetworkAvailable() || Hand < 0 || Hand > 1) return 0;
+    CatchControllerPosition[Hand] = Hand == 0 ? LeftPosition : RightPosition;
+    CatchControllerRotation[Hand] = QuatFromRotator(Hand == 0 ? LeftRotation : RightRotation);
+    Request = DropChannel.RequestCatch(Prop, Hand, HeldInventory);
+    Gun = VRWorldDropGun(Prop);
+    if (Request > 0 && Gun != None && Gun.DropOwner == Human)
+        DropChannel.TrickClient().RegisterIntent(self, Gun.OwnedWeapon, Request, Hand, 1);
+    return Request;
+}
+
+simulated function int ReserveWorldDropContact(VRWorldDropPrediction Prediction, int Hand)
+{
+    if (!WorldDropNetworkAvailable() || Hand < 0 || Hand > 1) return 0;
+    return DropChannel.TrickClient().Send(Prediction, 1);
+}
+
+simulated function RegisterWorldTrick(VRWorldDropPrediction Prediction, byte EntryAction)
+{
+    if (WorldDropNetworkAvailable()) DropChannel.TrickClient().Register(Prediction, EntryAction);
+}
+
+simulated function bool ResolveWorldTrickEntry(KFWeapon W, int Request, bool bAccepted)
+{
+    return DropChannel != None && !DropChannel.bDeleteMe
+        && DropChannel.TrickClient().EntryResolved(W, Request, bAccepted);
+}
+
+simulated function int RecordWorldDropRethrow(VRWorldDropPrediction Prediction)
+{
+    return WorldDropNetworkAvailable() ? DropChannel.TrickClient().Send(Prediction, 0) : 0;
+}
+
+simulated function UpdateWorldTricks()
+{
+    if (DropChannel != None && !DropChannel.bDeleteMe && DropChannel.LocalTricks != None)
+        DropChannel.LocalTricks.Update();
+}
+
+simulated function byte ReadWorldDropResult(int Request, out byte Action, out byte Accepted,
+    out KFWeapon W, out byte GripRole, out vector RootPosition, out quat RootRotation)
+{
+    local VRWeaponRuntime R;
+    local int Hand;
+    local byte Status;
+    local vector Offset;
+    local quat RelativeQ, ControllerQ;
+    if (DropChannel == None || DropChannel.bDeleteMe)
+    { RetireDropLifetime(DropChannel); return 2; }
+    Hand = DropChannel.PendingHand(Request);
+    if (Hand < 0) return 2;
+    if (HeldInventory != None) R = HeldInventory.FindItem(DropChannel.PendingItem(Request));
+    Status = DropChannel.ReadResult(Request, R, Action, Accepted, W, GripRole, RootPosition, RootRotation,
+        bInteractiveReloads, bInteractiveReloads || bFreeWeaponCycling);
+    if (Status == 1 && Action == 1 && Accepted != 0 && GripRole == 1)
+    {
+        // Keep the verified catch frame relative to the controller at contact,
+        // rather than freezing it at a stale server-world position during RTT.
+        Offset = QuatRotateVector(QuatInvert(CatchControllerRotation[Hand]), RootPosition - CatchControllerPosition[Hand]);
+        RelativeQ = QuatProduct(QuatInvert(CatchControllerRotation[Hand]), RootRotation);
+        ControllerQ = QuatFromRotator(Hand == 0 ? LeftRotation : RightRotation);
+        RootPosition = (Hand == 0 ? LeftPosition : RightPosition) + QuatRotateVector(ControllerQ, Offset);
+        RootRotation = QuatProduct(ControllerQ, RelativeQ);
+    }
+    if (Status != 0 && R != None)
+    {
+        R.WorldDropped = int(IsWorldDropRegistered(R.Item));
+        if (R.WorldDropped == 0) R.WorldDropLifetime = None;
+    }
+    return Status;
+}
+
+simulated function bool ConfigureWorldDrops(bool Enabled, float Delay, bool Support, bool Others, bool Recall)
+{
+    return WorldDropNetworkAvailable() && DropChannel.RequestConfigure(Enabled, Delay, Support, Others, Recall) > 0;
+}
+
+simulated function bool RecallWorldDrop(KFWeapon W)
+{
+    return WorldDropNetworkAvailable() && DropChannel.RequestRecall(W) > 0;
+}
+
+simulated function AbandonWorldDrops()
+{
+    if (DropChannel != None && !DropChannel.bDeleteMe) DropChannel.Abandon();
+}
+
+simulated function bool SupportCarryAvailable()
+{
+    return UsesNetworkDualWeapons() && KF2VRNetPlayerController(PC).NetChannel.HeldState.NativeCarryVersion == 1;
 }
 
 simulated function bool PairedReloadAvailable()
@@ -434,25 +653,227 @@ simulated function bool PairedReloadAvailable()
     return C != None && C.NetChannel != None && C.NetChannel.PairedReloadAvailable();
 }
 
-simulated function int PairedReloadBegin(KFWeapon W, int Hand, optional bool bStock)
+simulated function int PairedReloadBegin(KFWeapon W, int Hand, optional bool bStock, optional bool bRealistic,
+    optional bool bSwingOut, optional bool bLoseAmmo)
 {
-    if (!PairedReloadAvailable()) return 0;
-    return KF2VRNetPlayerController(PC).NetChannel.PairedReloadBegin(W, Hand, bStock);
+    if (!PairedReloadAvailable() || PairedReloadMailboxBusy(Hand) || CylinderEjectionPending(Hand)) return 0;
+    return KF2VRNetPlayerController(PC).NetChannel.PairedReloadBegin(W, Hand, bStock, bRealistic, bSwingOut, bLoseAmmo);
+}
+
+simulated function Object PairedReloadLifetime()
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    return C != None ? C.NetChannel : None;
+}
+
+simulated function int PairedReloadEpoch(int Kind)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    if (C == None || C.NetChannel == None) return -1;
+    if (Kind == 0) return C.NetChannel.WorldEpoch;
+    if (Kind == 1) return C.NetChannel.ConnectionEpoch;
+    return C.NetChannel.PawnEpoch;
 }
 
 simulated function bool PairedReloadRead(KFWeapon W, int BeginRequest, out int Session,
-    out byte Status, out int Ammo, out int Reserve)
+    out byte Status, out int Ammo, out int Reserve, optional out byte Ejected)
 {
     local KF2VRNetPlayerController C;
     C = KF2VRNetPlayerController(PC);
     return C != None && C.NetChannel != None
-        && C.NetChannel.PairedReloadRead(W, BeginRequest, Session, Status, Ammo, Reserve);
+        && C.NetChannel.PairedReloadRead(W, BeginRequest, Session, Status, Ammo, Reserve, Ejected);
 }
 
-simulated function bool PairedReloadCommit(KFWeapon W, int BeginRequest, int Session)
+simulated function bool PairedReloadEject(KFWeapon W, int BeginRequest, int Session)
 {
     return PairedReloadAvailable()
-        && KF2VRNetPlayerController(PC).NetChannel.PairedReloadCommit(W, BeginRequest, Session);
+        && KF2VRNetPlayerController(PC).NetChannel.PairedReloadEject(W, BeginRequest, Session);
+}
+
+simulated function bool PairedReloadCommit(KFWeapon W, int BeginRequest, int Session, optional bool bNoLoad, optional int Maximum)
+{
+    return PairedReloadAvailable()
+        && KF2VRNetPlayerController(PC).NetChannel.PairedReloadCommit(W, BeginRequest, Session, bNoLoad, Maximum);
+}
+
+simulated function int SendCycleEject(KFWeapon W, int Hand, int Count)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    if (C == None || C.NetChannel == None || NativeWorldDropVersion != 9) return 0;
+    return C.NetChannel.BeginCycleEject(W, Hand, Count);
+}
+
+simulated function int PouchDosh(KFWeapon W)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    if (C == None || C.NetChannel == None) return 0;
+    return C.NetChannel.GetPouchAmmo().Dosh();
+}
+
+simulated function bool DiscardPouchAmmo(KFWeapon W, int Count, optional byte Slot,
+    optional vector At, optional rotator Facing, optional vector Velocity, optional float Scale=1)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    if (C != None && C.NetChannel != None && C.NetChannel.DiscardPouchAmmo(W, Count, Slot, At, Facing, Velocity, Scale)) return true;
+    return false;
+}
+
+simulated function bool PouchAmmoPending()
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    return C != None && C.NetChannel != None && C.NetChannel.PouchAmmoPending();
+}
+
+simulated function int PendingPouchRounds(KFWeapon W, optional byte Slot)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    if (C == None || C.NetChannel == None || C.NetChannel.PouchAmmo == None) return 0;
+    return C.NetChannel.PouchAmmo.Reserved(W, Slot);
+}
+
+simulated function byte ReadCycleEject(KFWeapon W, int Serial, out int Ammo, out int Reserve)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    Ammo = -1; Reserve = 0;
+    if (C == None || C.NetChannel == None) return 3;
+    return C.NetChannel.ReadCycleEject(W, Serial, Ammo, Reserve);
+}
+
+simulated function AbandonCycleEject(int Serial)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    if (C != None && C.NetChannel != None) C.NetChannel.AbandonCycleEject(Serial);
+}
+
+simulated function AcknowledgeCycleEject(int Serial)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    if (C != None && C.NetChannel != None) C.NetChannel.AcknowledgeCycleEject(Serial);
+}
+
+simulated function KF2VRNetMagazineChannel MagazineTransport()
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    return (C != None && C.NetChannel != None) ? C.NetChannel.MagazineActions : None;
+}
+
+simulated function bool MagazineActionBusy()
+{
+    local KF2VRNetMagazineChannel C;
+    C = MagazineTransport();
+    return C != None && C.Ready() && C.Busy();
+}
+
+// Mirrors every local refusal of the channel's Start. Without a transport the
+// request itself fails terminally, so there is nothing to wait for.
+simulated function bool MagazineActionAdmissible(byte Action, KFWeapon W, optional int PairSession)
+{
+    local KF2VRNetMagazineChannel C;
+    C = MagazineTransport();
+    return C == None || C.CanStart(Action, W, PairSession);
+}
+
+simulated function int BeginMagazineRemoval(KFWeapon W, int Kept, bool bLose, optional int PairSession)
+{
+    local KF2VRNetMagazineChannel C;
+    C = MagazineTransport();
+    return C != None ? C.BeginRemoval(W, Kept, bLose, PairSession) : 0;
+}
+
+simulated function int SecondaryMagazineAction(byte Action, KFWeapon W, int Kept, bool Lose)
+{
+    local KF2VRNetMagazineChannel C;
+    C = MagazineTransport();
+    return C != None ? C.BeginSecondary(Action, W, Kept, Lose) : 0;
+}
+
+simulated function int RequestMagazineAction(byte Action, int Hand, KFWeapon SourceW,
+    int Token, KFWeapon TargetW, byte Side, int ExpectedRemaining, optional VRWorldDropMagazine WorldProp)
+{
+    local KF2VRNetMagazineChannel C;
+    C = MagazineTransport();
+    if (C == None) return 0;
+    if (Action == 1) return C.BeginClaim(Token, SourceW, Hand, WorldProp);
+    if (Action == 2) return C.BeginPouch(Token, TargetW, Hand, Side, SourceW, WorldProp);
+    if (Action == 3) return C.BeginInsert(Token, TargetW, Hand, SourceW, WorldProp);
+    if (Action == 4) return C.BeginRelease(Token, SourceW, Hand, WorldProp);
+    return 0;
+}
+
+simulated function byte ReadMagazineAction(int Request, out byte Action, out byte Accepted,
+    out KFWeapon TargetW, out int Actual, out int Remaining, out byte Retired)
+{
+    local KF2VRNetMagazineChannel C;
+    local KF2VRNetMagazineChannel.MagazineResult Reply;
+    local byte Status;
+    local VRWeaponRuntime R;
+    C = MagazineTransport();
+    if (C == None) return 2;
+    Status = C.ReadResult(Request, None, Reply);
+    if (Status != 1) return Status;
+    // Both ammo pools were corrected on the weapon channel before the marker.
+    // Only mechanism flags belong to this reply; replaying its counts would
+    // erase a newer pickup that arrived while the owner receipt was in flight.
+    if (Reply.bHaveAmmo && Reply.AmmoSlot == 1 && Reply.MarkerSerial > 0 && Reply.Weapon != None
+        && !Reply.Weapon.bDeleteMe && Reply.Weapon.Owner == Human)
+    {
+        if (Reply.AmmoSlot == 1 && HeldInventory != None)
+        {
+            R = HeldInventory.FindItem(Reply.Weapon);
+            if (R != None) R.SecondaryMagazineFlags = Reply.SecondaryFlags;
+        }
+    }
+    Action = Reply.Action; Accepted = byte(Reply.bAccepted); TargetW = Reply.Weapon;
+    Actual = Reply.Actual; Remaining = Reply.Remaining; Retired = byte(Reply.bRetired);
+    return 1;
+}
+
+simulated function PublishMagazinePresentation(int Token, vector At, rotator Facing,
+    vector Velocity, float Scale, optional VRWorldDropMagazine WorldProp,
+    optional vector ExitAxis, optional float ExitDistance, optional int ExitHand=-1)
+{
+    local KF2VRNetMagazineChannel C;
+    C = MagazineTransport();
+    if (C != None) C.PublishPresentation(Token, At, Facing, Velocity, Scale, WorldProp, ExitAxis, ExitDistance, ExitHand);
+}
+
+simulated function AbandonMagazineActions()
+{
+    local KF2VRNetMagazineChannel C;
+    C = MagazineTransport();
+    if (C != None) C.Abandon();
+}
+
+simulated function ReportMagazineRemoved(KFWeapon W, int Kept, int Lost)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    if (C == None || C.NetChannel == None)
+    {
+        // No VR channel: stock client ammo tracking still states the count.
+        if (W != None && W.Role < ROLE_Authority) W.SyncCurrentAmmoCount(0, Kept);
+        else Super.ReportMagazineRemoved(W, Kept, Lost);
+        return;
+    }
+    C.NetChannel.MagazineRemoved(W, Kept, Lost);
+}
+
+simulated function NotifyPhysicalReloadEnded(KFWeapon W)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    if (C != None && C.NetChannel != None) C.NetChannel.NotifyPhysicalReloadEnded(W);
 }
 
 simulated function PairedReloadCancel(KFWeapon W, int BeginRequest, int Session)
@@ -469,6 +890,38 @@ simulated function bool VampireAvailable()
     return C != None && C.NetChannel != None && C.NetChannel.VampireAvailable();
 }
 
+simulated function bool BowReleaseAvailable(KFWeapon W)
+{
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    return C != None && C.NetChannel != None && BowClientAvailable()
+        && C.NetChannel.BowReleaseAvailable(W);
+}
+
+simulated function bool BowCaptureRelease(KFWeapon W, int Hand, out VRCompoundBowAuthority.VRBowReleaseIdentity Identity)
+{
+    if (RootBridge != None) return RootBridge.BowCaptureRelease(W, Hand, Identity);
+    return BowReleaseAvailable(W) && BowLocalContext(W, Hand)
+        && KF2VRNetPlayerController(PC).NetChannel.BowCaptureRelease(W, Hand, NativeCalibrationEpoch, Identity);
+}
+
+simulated function int BowRelease(KFWeapon W, int Hand, byte Mode, VRCompoundBowAuthority.VRBowReleaseIdentity Identity,
+    vector Origin, rotator Aim, float Tension)
+{
+    if (RootBridge != None) return RootBridge.BowRelease(W, Hand, Mode, Identity, Origin, Aim, Tension);
+    if (!BowReleaseAvailable(W) || !BowLocalContext(W, Hand)
+        || Identity.ReferenceEpoch != NativeCalibrationEpoch) return 0;
+    return KF2VRNetPlayerController(PC).NetChannel.BowRelease(W, Hand, Mode, Identity, Origin, Aim, Tension);
+}
+
+simulated function bool BowReleaseRead(KFWeapon W, int Request, out byte Status, out int Ammo)
+{
+    local KF2VRNetPlayerController C;
+    if (RootBridge != None) return RootBridge.BowReleaseRead(W, Request, Status, Ammo);
+    C = KF2VRNetPlayerController(PC);
+    return C != None && C.NetChannel != None && C.NetChannel.BowReleaseRead(W, Request, Status, Ammo);
+}
+
 simulated function bool VampireManaged()
 {
     local KF2VRNetPlayerController C;
@@ -476,10 +929,10 @@ simulated function bool VampireManaged()
     return C != None && C.NetChannel != None && C.NetChannel.VampireManaged();
 }
 
-simulated function int VampireBegin(KFWeapon W, int Hand, bool bStock)
+simulated function int VampireBegin(KFWeapon W, int Hand, bool bStock, optional bool bLoseAmmo)
 {
     if (!VampireAvailable()) return 0;
-    return KF2VRNetPlayerController(PC).NetChannel.VampireBegin(W, Hand, bStock);
+    return KF2VRNetPlayerController(PC).NetChannel.VampireBegin(W, Hand, bStock, bLoseAmmo);
 }
 
 simulated function bool VampireRead(KFWeapon W, int BeginRequest, out int Session,
@@ -489,9 +942,14 @@ simulated function bool VampireRead(KFWeapon W, int BeginRequest, out int Sessio
     return KF2VRNetPlayerController(PC).NetChannel.VampireRead(W, BeginRequest, Session, Status, Ammo, Reserve);
 }
 
-simulated function bool VampireCommit(KFWeapon W, int BeginRequest, int Session)
+simulated function bool VampireRemoveMagazine(KFWeapon W, int BeginRequest, int Session)
 {
-    return VampireAvailable() && KF2VRNetPlayerController(PC).NetChannel.VampireCommit(W, BeginRequest, Session);
+    return VampireAvailable() && KF2VRNetPlayerController(PC).NetChannel.VampireRemoveMagazine(W, BeginRequest, Session);
+}
+
+simulated function bool VampireCommit(KFWeapon W, int BeginRequest, int Session, optional int Maximum)
+{
+    return VampireAvailable() && KF2VRNetPlayerController(PC).NetChannel.VampireCommit(W, BeginRequest, Session, Maximum);
 }
 
 simulated function VampireCancel(KFWeapon W, int BeginRequest, int Session)
@@ -499,11 +957,18 @@ simulated function VampireCancel(KFWeapon W, int BeginRequest, int Session)
     if (VampireAvailable()) KF2VRNetPlayerController(PC).NetChannel.VampireCancel(W, BeginRequest, Session);
 }
 
-simulated function bool RequestNetworkGrenade(KFWeapon ProjectileOwner, class<KFProj_Grenade> GrenadeClass,
+simulated function int RequestNetworkGrenade(KFWeapon ProjectileOwner, class<KFProj_Grenade> GrenadeClass,
     int Hand, vector Position, vector ReleaseVelocity)
 {
-    return UsesNetworkDualWeapons() && KF2VRNetPlayerController(PC).NetChannel.RequestGrenade(
+    if (!UsesNetworkDualWeapons()) return 0;
+    return KF2VRNetPlayerController(PC).NetChannel.RequestGrenade(
         ProjectileOwner, GrenadeClass, Hand, Position, ReleaseVelocity, NativeCalibrationEpoch);
+}
+
+simulated function byte ReadNetworkGrenadeResult(int Request, KFPawn_Human Pawn)
+{
+    if (!UsesNetworkDualWeapons()) return 3;
+    return KF2VRNetPlayerController(PC).NetChannel.ReadGrenadeResult(Request, Pawn);
 }
 
 // A listen host or solo game tosses directly; only a remote client asks.
@@ -546,28 +1011,91 @@ simulated function int NetworkGrenadeCount()
     return KF2VRNetPlayerController(PC).NetChannel.AvailableGrenades();
 }
 
-simulated function bool RequestNetworkMeleeHit(byte FiringMode, Actor Victim, vector HitLocation, vector RayDir, name BoneName, KFWeapon SourceWeapon, optional float DamageScale = 1.0, optional bool bShieldContact)
+simulated function bool RequestNetworkThrownContact(KFWeapon W, int Hand, int Token,
+    vector Position, vector ReleaseVelocity, optional bool bStop)
+{
+    local KF2VRNetPlayerController NetPC;
+    NetPC = KF2VRNetPlayerController(PC);
+    if (NetPC == None || NetPC.NetChannel == None) return false;
+    NetPC.NetChannel.ServerThrownWeaponContact(W, byte(Hand), Token, Position, ReleaseVelocity, bStop);
+    return true;
+}
+
+simulated function RequestThrownFlinch(vector Position, vector ReleaseVelocity)
+{
+    local KF2VRNetPlayerController NetPC;
+    NetPC = KF2VRNetPlayerController(PC);
+    if (NetPC == None || NetPC.NetChannel == None) { Super.RequestThrownFlinch(Position, ReleaseVelocity); return; }
+    NetPC.NetChannel.ServerThrownItemFlinch(Position, ReleaseVelocity);
+}
+
+simulated function KF2VRNetTypes.NetPhysicalStrike PhysicalStrike(int Hand, int Serial, optional KFWeapon W)
+{
+    local KF2VRNetTypes.NetPhysicalStrike Strike;
+    local KF2VRNetPlayerController C;
+    C = KF2VRNetPlayerController(PC);
+    if (C != None && C.NetChannel != None)
+    {
+        Strike.WorldEpoch = C.NetChannel.WorldEpoch;
+        Strike.ConnectionEpoch = C.NetChannel.ConnectionEpoch;
+        Strike.PawnEpoch = C.NetChannel.PawnEpoch;
+        Strike.HandGeneration = Hand == 0 ? C.NetChannel.HeldState.LeftGeneration : C.NetChannel.HeldState.RightGeneration;
+        if (W != None) Strike.WeaponGeneration = C.NetChannel.HeldState.LeftWeapon == W
+            ? C.NetChannel.HeldState.LeftGeneration : C.NetChannel.HeldState.RightGeneration;
+    }
+    Strike.Hand = Hand; Strike.Serial = Serial;
+    return Strike;
+}
+
+simulated function bool RequestNetworkMeleeHit(byte FiringMode, Actor Victim, vector HitLocation, vector RayDir, name BoneName, KFWeapon SourceWeapon, int Hand, int SwingSerial, optional float DamageScale = 1.0, optional bool bShieldContact, optional bool bNoDismember, optional bool bExplosiveContact, optional bool bBluntContact)
 {
     local KF2VRNetPlayerController NetPC;
     NetPC = KF2VRNetPlayerController(PC);
     if (NetPC != None)
     {
-        NetPC.ServerMeleeHit(Victim, FiringMode, HitLocation, RayDir, BoneName, SourceWeapon, DamageScale, bShieldContact);
+        NetPC.ServerMeleeHit(Victim, FiringMode, HitLocation, RayDir, BoneName, SourceWeapon, PhysicalStrike(Hand, SwingSerial, SourceWeapon), DamageScale, bShieldContact, bNoDismember, bExplosiveContact, bBluntContact);
         return true;
     }
     return false;
 }
 
-simulated function bool RequestNetworkPhysicalDamage(Pawn Victim, float DamageAmount, vector HitLocation, vector Momentum, class<DamageType> DamageType, name BoneName, int Hand)
+simulated function bool RequestNetworkBrawlerBlast(KFWeapon W, int Hand, vector Origin, vector Dir)
+{
+    local KF2VRNetPlayerController NetPC;
+    NetPC = KF2VRNetPlayerController(PC);
+    if (NetPC == None) return false;
+    NetPC.ServerVRBrawlerBlast(W, byte(Hand), Origin, Dir);
+    return true;
+}
+
+simulated function bool RequestNetworkPhysicalDamage(Actor Victim, float DamageAmount, vector HitLocation, vector Momentum, class<DamageType> DamageType, name BoneName, int Hand, int SwingSerial)
 {
     local KF2VRNetPlayerController NetPC;
     NetPC = KF2VRNetPlayerController(PC);
     if (NetPC != None)
     {
-        NetPC.ServerPhysicalDamage(Victim, DamageAmount, HitLocation, Momentum, DamageType, BoneName, byte(Hand));
+        NetPC.ServerPhysicalDamage(Victim, DamageAmount, HitLocation, Momentum, DamageType, BoneName, PhysicalStrike(Hand, SwingSerial));
         return true;
     }
     return false;
+}
+
+simulated function bool RequestNetworkMeleeParry(Pawn Victim, KFWeapon SourceWeapon)
+{
+    local KF2VRNetPlayerController NetPC;
+    NetPC = KF2VRNetPlayerController(PC);
+    if (NetPC == None || SourceWeapon == None) return false;
+    NetPC.ServerMeleeParry(Victim, SourceWeapon);
+    return true;
+}
+
+simulated function bool RequestNetworkMeleePommel(Pawn Victim, float DamageAmount, vector HitLocation, vector Momentum, name BoneName, KFWeapon SourceWeapon, int Hand, int SwingSerial)
+{
+    local KF2VRNetPlayerController NetPC;
+    NetPC = KF2VRNetPlayerController(PC);
+    if (NetPC == None || SourceWeapon == None) return false;
+    NetPC.ServerMeleePommel(Victim, DamageAmount, HitLocation, Momentum, BoneName, SourceWeapon, PhysicalStrike(Hand, SwingSerial, SourceWeapon));
+    return true;
 }
 
 simulated function bool RequestNetworkFistParry(Pawn Victim, int Hand)
@@ -642,27 +1170,18 @@ simulated function bool RequestNetworkReleaseGrab(KFPawn_Monster M, int Hand, op
     return false;
 }
 
-simulated function bool RequestNetworkGrabHold(KFPawn_Monster M, name BoneName, int Hand, vector Palm, rotator HandRotation)
+simulated function bool RequestNetworkGrabHold(KFPawn_Monster M, name BoneName, int Hand, vector Palm, rotator HandRotation, optional bool bStanding)
 {
     local KF2VRNetPlayerController NetPC;
     NetPC = KF2VRNetPlayerController(PC);
     if (NetPC != None)
     {
-        if (!ZedGrabAllowed()) return false;
-        NetPC.ServerGrabHold(M, BoneName, byte(Hand), Palm, HandRotation, NetPC.NetChannel.PawnEpoch, NetPC.NetChannel.GrabPolicyEpoch);
-        return true;
-    }
-    return false;
-}
-
-simulated function bool RequestNetworkGrabMove(int Hand, vector Palm, rotator HandRotation)
-{
-    local KF2VRNetPlayerController NetPC;
-    NetPC = KF2VRNetPlayerController(PC);
-    if (NetPC != None)
-    {
-        if (!ZedGrabAllowed()) return false;
-        NetPC.ServerGrabMove(byte(Hand), Palm, HandRotation, NetPC.NetChannel.PawnEpoch, NetPC.NetChannel.GrabPolicyEpoch);
+        if (!ZedGrabAllowed() || (bStanding && !ExperimentalInteractionsEnabled())) return false;
+        // Capture the calibrated wrist-to-palm offset once. Subsequent frames
+        // use the existing accepted tracked hand stream, including both hands.
+        NetPC.ServerGrabHold(M, BoneName, byte(Hand), Palm, HandRotation, NetPC.NetChannel.PawnEpoch,
+            NetPC.NetChannel.GrabPolicyEpoch, bStanding,
+            (Palm - (Hand == 0 ? LeftPosition : RightPosition)) << HandRotation);
         return true;
     }
     return false;
@@ -703,7 +1222,8 @@ simulated function NativeHandsUpdate()
     }
     if (KF2VRNetPlayerController(PC) != None && KF2VRNetPlayerController(PC).NetChannel != None)
         KF2VRNetPlayerController(PC).NetChannel.UpdateGrabIntent(Human != None && Human.Health > 0 && NativeConnection > 0 && NativeControlsEnabled != 0
-            && NativeValidMask == 3 && NativeMenuActive == 0);
+            && NativeValidMask == 3 && NativeMenuActive == 0, ExperimentalInteractionsEnabled(),
+            class'VRExperimentalPolicy'.static.ZedGrabbingEnabled() && bZedGrabEnabled);
     bNativeEnabled = NativeConnection > 0;
     // Controls parity is not a user preference here: the legacy single-weapon
     // path has no selector, body grip, utilities or independent locomotion.
@@ -713,12 +1233,17 @@ simulated function NativeHandsUpdate()
     // The recorded fixture stays on the legacy path so its existing firing,
     // damage and movement evidence keeps measuring the same thing -- unless it
     // is explicitly asked to exercise the modern stack instead.
-    bIndependentHands = NativeConnection != 2
+    // Scripted replays on a dedicated server (control version 3, set by
+    // KF2VRReplay.NetScriptRunner) drive the modern stack like a headset.
+    bIndependentHands = NativeConnection != 2 || bDiagnostic9mmReload || ReloadCaseControlVersion == 3
         || (KF2VRNetPlayerController(PC) != None
             && (KF2VRNetPlayerController(PC).bDiagnosticVRControls
                 || KF2VRNetPlayerController(PC).bDiagnosticLocomotionReplay
                 || KF2VRNetPlayerController(PC).bDiagnosticDualWeapons
-                || KF2VRNetPlayerController(PC).bDiagnosticMotionFixture));
+                || KF2VRNetPlayerController(PC).bDiagnosticMotionFixture
+                || (KF2VRNetPlayerController(PC).bDiagnosticSharingReplay
+                    && KF2VRNetPlayerController(PC).NetChannel != None
+                    && KF2VRNetPlayerController(PC).NetChannel.bSyntheticAllowed)));
     NetPC = KF2VRNetPlayerController(PC);
     if (NativeConnection == 2 && NetPC != None && NetPC.bDiagnosticMotionFixture)
     {
@@ -1144,7 +1669,7 @@ simulated function UpdateInventoryFocusIntent()
 
 simulated event Tick(float DeltaTime)
 {
-    local int Tracking;
+    local int Tracking, GrenadeWristMask;
     local VRWeaponRuntime HeldRuntime;
     local vector OpticalMuzzle, LeftOpticalMuzzle;
     local rotator OpticalRotation, LeftOpticalRotation;
@@ -1152,6 +1677,7 @@ simulated event Tick(float DeltaTime)
     local vector LeftWrist, RightWrist;
     local rotator LeftWristAim, RightWristAim;
     local bool bLeftWristValid, bRightWristValid;
+    local NetPoseSample WeaponRoots;
     Super.Tick(DeltaTime);
     MotionPumpPhase = 0;
     if (KF2VRNetPlayerController(PC) != None &&
@@ -1169,6 +1695,12 @@ simulated event Tick(float DeltaTime)
     UpdateRoomInjection(DeltaTime);
     UpdateRoomResidual();
     UpdateControlDiagnostic();
+    if (bDiagnostic9mmReload && NativeConnection == 2 && HandInventory != None)
+    {
+        if (ReloadCaseInput == None)
+        { ReloadCaseInput = new(self) class'KF2VRNet9mmReloadInput'; ReloadCaseInput.Bridge = self; }
+        ReloadCaseInput.Tick();
+    }
     if (KF2VRNetPlayerController(PC) != None && KF2VRNetPlayerController(PC).bDiagnosticPairedWeapons
         && UsesNetworkDualWeapons() && HandInventory != None)
     {
@@ -1227,15 +1759,23 @@ simulated event Tick(float DeltaTime)
     if (bIndependentHands && HandInventory != None && HandInventory.Registry != None)
     {
         HeldRuntime = HandInventory.GetHeldForHand(0);
+        PublishWeaponRoot(HeldRuntime,0,WeaponRoots);
         bLeftOpticalValid = ReadOpticalMuzzle(HeldRuntime, LeftOpticalMuzzle, LeftOpticalRotation)
             && (Tracking & 2) != 0;
+        if (ReadShieldRoot(0,LeftOpticalMuzzle,LeftOpticalRotation)) bLeftOpticalValid=true;
         if (HeldRuntime == None) HeldRuntime = HandInventory.Registry.GetSupport(0);
         bLeftWristValid = ReadVisualWrist(HeldRuntime, 0, LeftWrist, LeftWristAim) && (Tracking & 2) != 0;
         HeldRuntime = HandInventory.GetHeldForHand(1);
+        PublishWeaponRoot(HeldRuntime,1,WeaponRoots);
         bOpticalValid = ReadOpticalMuzzle(HeldRuntime, OpticalMuzzle, OpticalRotation)
             && (Tracking & 4) != 0;
+        if (ReadShieldRoot(1,OpticalMuzzle,OpticalRotation)) bOpticalValid=true;
         if (HeldRuntime == None) HeldRuntime = HandInventory.Registry.GetSupport(1);
         bRightWristValid = ReadVisualWrist(HeldRuntime, 1, RightWrist, RightWristAim) && (Tracking & 4) != 0;
+        GrenadeWristMask = PublishHeldGrenade(WeaponRoots, LeftWrist, LeftWristAim,
+            RightWrist, RightWristAim);
+        bLeftWristValid = bLeftWristValid || (GrenadeWristMask & 1) != 0;
+        bRightWristValid = bRightWristValid || (GrenadeWristMask & 2) != 0;
     }
     else if (bCalibrated && ActiveWeapon != None && ActiveWeapon == Human.Weapon
         && ActiveWeapon.MySkelMesh != None && ActiveProfile >= 0
@@ -1289,13 +1829,234 @@ simulated event Tick(float DeltaTime)
         ExportMotionWeapon(0); ExportMotionWeapon(1);
         NativeMotionUpdate();
     }
+    PublishReloadProps(WeaponRoots);
+    PublishMechanisms(WeaponRoots);
+    PublishPhysicalOwnership(WeaponRoots);
     KF2VRNetPlayerController(PC).PublishTrackedPose(HeadPosition, NativeHeadRotation,
         LeftPosition, LeftRotation, RightPosition, RightRotation, Tracking,
         NativeLeftGripRotation, NativeRightGripRotation, NativeCalibrationEpoch,
         OpticalMuzzle, OpticalRotation, bOpticalValid,
         LeftOpticalMuzzle, LeftOpticalRotation, bLeftOpticalValid,
         LeftWrist, LeftWristAim, bLeftWristValid, RightWrist, RightWristAim, bRightWristValid,
-        ChargedFists(), HandPose(0) | (HandPose(1) << 8));
+        ChargedFists(), HandPose(0) | (HandPose(1) << 8), CarryPumpCode(0), CarryPumpCode(1),WeaponRoots);
+}
+
+simulated function AddReloadProp(out NetPoseSample Sample, StaticMeshComponent Component, KFWeapon W,
+    int Hand, byte Slot, byte PropSlot, int CarrySerial, optional bool bSeated)
+{
+    local NetReloadProp Prop;
+    local KF2VRNetChannel Channel;
+    local rotator Basis;
+    if (Component == None || Component.HiddenGame || Component.StaticMesh == None || W == None
+        || Hand < 0 || Hand > 1 || Sample.ReloadProps.Length >= 5 || Human == None) return;
+    Channel = KF2VRNetPlayerController(PC).NetChannel;
+    if (Channel == None) return;
+    Prop.SourceHand = 1 - Hand;
+    if ((Prop.SourceHand == 0 ? Channel.HeldState.LeftWeapon : Channel.HeldState.RightWeapon) != W) return;
+    Prop.Generation = Prop.SourceHand == 0 ? Channel.HeldState.LeftGeneration : Channel.HeldState.RightGeneration;
+    Prop.bSeated = bSeated;
+    Prop.Hand = bSeated ? int(Prop.SourceHand) : Hand; Prop.AmmoSlot = Slot; Prop.PropSlot = PropSlot; Prop.CarrySerial = CarrySerial;
+    Prop.Family = class'VRReloadCatalog'.static.ProfileClass(W.Class);
+    Prop.SkinId = class'VRWeaponPair'.static.VisibleSkin(W);
+    Basis.Yaw = NormalizeRotAxis(Human.Rotation.Yaw);
+    Prop.Position = (Component.Translation - Human.Location) << Basis;
+    Prop.Rotation = Normalize(Component.Rotation - Basis);
+    Prop.Scale = Component.Scale3D * Component.Scale;
+    if (class'KF2VRNetTypes'.static.ValidReloadProp(Prop)) Sample.ReloadProps.AddItem(Prop);
+}
+
+simulated function PublishReloadProps(out NetPoseSample Sample)
+{
+    local VRInteractiveReload R;
+    local int I;
+    if (HandInventory == None || HandInventory.Input == None) return;
+    R = HandInventory.Input.Reloads;
+    if (R == None) return;
+    if (R.bActive && (R.HandMode == 1 || R.HandMode == 4) && !R.bRecoveredMagazineSession)
+    {
+        AddReloadProp(Sample, R.HandAmmo, R.Gun, R.OffHand(), 0, 0, R.CarriedAmmoSerial);
+        if (R.ShellBundle != None && R.ShellBundle.bPlaced)
+            for (I = 0; I < 3; ++I) AddReloadProp(Sample, R.ShellBundle.Props[I], R.Gun, R.OffHand(), 0, I + 1, R.CarriedAmmoSerial);
+    }
+    // The seated mesh replaces the hidden magazine until the physical session
+    // releases the gun. It must follow the gun, not the now-free loading hand.
+    if (R.bActive && (R.HandAmmo == None || R.HandAmmo.HiddenGame))
+        AddReloadProp(Sample, R.SeatedAmmo, R.Gun, R.OffHand(), 0, 0, R.CarriedAmmoSerial, true);
+    if (R.Secondary != None && R.Secondary.bActive && R.Secondary.bCarryingAmmo && !R.Secondary.bRecoveredMagazine)
+        AddReloadProp(Sample, R.Secondary.SecondaryAmmo, R.Secondary.Gun, R.Secondary.OffHand(), 1, 4, R.Secondary.CarriedAmmoSerial);
+}
+
+simulated function AddMechanism(out NetPoseSample Sample, KFWeapon W, int Hand, name Bone,
+    SkelControlSingleBone Control, vector RestPosition, quat RestRotation)
+{
+    local KF2VRNetChannel Channel;
+    local NetMechanismPart Part;
+    local int I;
+    if (W == None || Hand < 0 || Hand > 1 || Bone == '' || Control == None || Control.ControlStrength <= 0
+        || Control.BoneTranslationSpace != BCS_WorldSpace || Control.BoneRotationSpace != BCS_WorldSpace) return;
+    Channel = KF2VRNetPlayerController(PC).NetChannel;
+    if (Channel == None || (Hand == 0 ? Channel.HeldState.LeftWeapon : Channel.HeldState.RightWeapon) != W) return;
+    Part.Hand = Hand; Part.Bone = Bone;
+    Part.Flags = 1 | 4;
+    if (class'VRBoneVisibility'.static.IsHidden(W.MySkelMesh, Bone)) Part.Flags = Part.Flags | 2;
+    Part.Generation = Hand == 0 ? Channel.HeldState.LeftGeneration : Channel.HeldState.RightGeneration;
+    Part.Translation = QuatRotateVector(QuatInvert(RestRotation), Control.BoneTranslation - RestPosition);
+    Part.Rotation = Normalize(QuatToRotator(QuatProduct(QuatInvert(RestRotation), QuatFromRotator(Control.BoneRotation))));
+    if (!class'KF2VRNetTypes'.static.ValidMechanism(Part)) return;
+    for (I = 0; I < Sample.Mechanisms.Length; ++I)
+        if (Sample.Mechanisms[I].Hand == Hand && Sample.Mechanisms[I].Bone == Bone)
+        { Sample.Mechanisms[I] = Part; return; }
+    if (Sample.Mechanisms.Length < 32) Sample.Mechanisms.AddItem(Part);
+}
+
+simulated function ExportMechanism(out NetPoseSample Sample, VRManualPump Action)
+{
+    local int I;
+    local quat Root;
+    local vector RestOrigin;
+    if (Action == None || Action.Gun == None || Action.Gun.MySkelMesh == None || Action.Tree == None) return;
+    Root = Action.RootQ(); RestOrigin = Action.RootPos();
+    for (I = 0; I < Action.Parts.Length; ++I)
+        AddMechanism(Sample, Action.Gun, Action.GunHand, Action.Parts[I].Bone, Action.Parts[I].Control,
+            RestOrigin + QuatRotateVector(Root, Action.Parts[I].IdleLocal * Action.GunScale()),
+            QuatProduct(Root, Action.Parts[I].IdleLocalQ));
+}
+
+simulated function PublishMechanisms(out NetPoseSample Sample)
+{
+    local VRInteractiveReload R;
+    local int I, Hand, Profile;
+    local KFWeapon W;
+    local array<name> Bones;
+    local KF2VRNetChannel Channel;
+    if (HandInventory == None || HandInventory.Input == None) return;
+    R = HandInventory.Input.Reloads;
+    if (R == None) return;
+    ExportMechanism(Sample, R.Pump);
+    ExportMechanism(Sample, R.ManualAction);
+    ExportMechanism(Sample, R.BreakAction);
+    ExportMechanism(Sample, R.M32Action);
+    ExportMechanism(Sample, R.FinishAction);
+    ExportMechanism(Sample, R.DualCylinders[0]);
+    ExportMechanism(Sample, R.DualCylinders[1]);
+    ExportMechanism(Sample, R.Mechanism);
+    ExportMechanism(Sample, R.Vampire);
+    ExportMechanism(Sample, R.Secondary);
+    Channel = KF2VRNetPlayerController(PC).NetChannel;
+    if (Channel != None)
+        for (Hand = 0; Hand < 2; ++Hand)
+        {
+            W = Hand == 0 ? Channel.HeldState.LeftWeapon : Channel.HeldState.RightWeapon;
+            if (W == None || W.MySkelMesh == None) continue;
+            Profile = class'VRReloadCatalog'.static.FindClass(W.Class);
+            if (Profile >= 0)
+            {
+                PublishMechanismVisibility(Sample, W, Hand, class'VRReloadCatalog'.static.MagazineBone(Profile, false));
+                PublishMechanismVisibility(Sample, W, Hand, class'VRReloadCatalog'.static.MagazineBone(Profile, true));
+            }
+            Profile = class'VRBreakCatalog'.static.FindClass(W.Class);
+            if (Profile >= 0)
+            {
+                for (I = 0; I < 4; ++I) PublishMechanismVisibility(Sample, W, Hand, class'VRBreakCatalog'.default.Profiles[Profile].ShellBones[I]);
+                PublishMechanismVisibility(Sample, W, Hand, class'VRBreakCatalog'.default.Profiles[Profile].ClipBone);
+            }
+            if (class'VRSecondaryReloadCatalog'.static.Supported(W))
+            {
+                class'VRSecondaryReloadCatalog'.static.ControlBones(W, Bones);
+                for (I = 0; I < Bones.Length; ++I) PublishMechanismVisibility(Sample, W, Hand, Bones[I]);
+            }
+        }
+    if (R.Gun == None || R.Gun.MySkelMesh == None) return;
+    if (R.MagazineProfileIndex >= 0 && R.RigSample != None)
+    {
+        AddMechanism(Sample, R.Gun, R.GunHand, R.RackBone, R.RackControl,
+            R.RootLocation(R.RigSample.RackRestLocal), R.RootQuat(R.RigSample.RackRestLocalQ));
+        AddMechanism(Sample, R.Gun, R.GunHand, R.FollowBone, R.FollowControl,
+            R.RootLocation(R.RigSample.FollowRestLocal), R.RootQuat(R.RigSample.FollowRestLocalQ));
+    }
+    if (R.LeverPath != None && R.LeverPath.Path.Length > 0)
+        for (I = 0; I < R.LeverControls.Length && I < 3; ++I)
+            AddMechanism(Sample, R.Gun, R.GunHand, R.LeverPath.Bones[I], R.LeverControls[I],
+                R.RootLocation(R.LeverPath.Path[0].P[I]), R.RootQuat(R.LeverPath.Path[0].Q[I]));
+}
+
+// Playback ownership uses the same generation-checked 120 Hz part stream.
+// Visibility alone is not ownership: ordinary button reloads also publish it.
+simulated function PublishPhysicalOwnership(out NetPoseSample Sample)
+{
+    local VRInteractiveReload R;
+    local KF2VRNetChannel Channel;
+    local KFWeapon W;
+    local array<name> Bones;
+    local int Hand, I;
+    if (HandInventory == None || HandInventory.Input == None) return;
+    R = HandInventory.Input.Reloads;
+    Channel = KF2VRNetPlayerController(PC).NetChannel;
+    if (R == None || Channel == None) return;
+    for (Hand = 0; Hand < 2; ++Hand)
+    {
+        W = Hand == 0 ? Channel.HeldState.LeftWeapon : Channel.HeldState.RightWeapon;
+        if (W == None || W.MySkelMesh == None) continue;
+        if (R.Automatic(HandInventory.Registry.FindItem(W)))
+        {
+            for (I = 0; I < Sample.Mechanisms.Length; ++I)
+                if (Sample.Mechanisms[I].Hand == Hand) Sample.Mechanisms[I].Flags = Sample.Mechanisms[I].Flags & 3;
+            continue;
+        }
+        if (!R.EnabledFor(W) || !R.SessionHolds(W)) continue;
+        class'KF2VRNetMechanismCatalog'.static.Collect(W.Class, Bones);
+        for (I = 0; I < Bones.Length; ++I) PublishMechanismVisibility(Sample, W, Hand, Bones[I]);
+        for (I = 0; I < Sample.Mechanisms.Length; ++I)
+            if (Sample.Mechanisms[I].Hand == Hand) Sample.Mechanisms[I].Flags = Sample.Mechanisms[I].Flags | 4;
+    }
+}
+
+simulated function PublishMechanismVisibility(out NetPoseSample Sample, KFWeapon W, int Hand, name Bone)
+{
+    local int I;
+    local NetMechanismPart Part;
+    local KF2VRNetChannel Channel;
+    if (Bone == '' || Bone == 'RW_Weapon' || W.MySkelMesh.MatchRefBone(Bone) < 0) return;
+    for (I = 0; I < Sample.Mechanisms.Length; ++I)
+        if (Sample.Mechanisms[I].Hand == Hand && Sample.Mechanisms[I].Bone == Bone) return;
+    Channel = KF2VRNetPlayerController(PC).NetChannel;
+    Part.Hand = Hand; Part.Bone = Bone;
+    Part.Generation = Hand == 0 ? Channel.HeldState.LeftGeneration : Channel.HeldState.RightGeneration;
+    if (class'VRBoneVisibility'.static.IsHidden(W.MySkelMesh, Bone)) Part.Flags = 2;
+    if (Sample.Mechanisms.Length < 32) Sample.Mechanisms.AddItem(Part);
+}
+
+simulated function int CarryPumpCode(int Hand)
+{
+    if (HandInventory == None || HandInventory.Input == None || HandInventory.Input.Reloads == None
+        || HandInventory.Input.Reloads.Pump == None) return 0;
+    return HandInventory.Input.Reloads.Pump.CarryVisualCode(Hand);
+}
+
+// Copy the already placed local preview: authored offsets, EMP fit and both
+// hands use exactly the same presentation as solo. No second throw estimator.
+simulated function int PublishHeldGrenade(out NetPoseSample Sample,
+    out vector LeftWrist, out rotator LeftAim, out vector RightWrist, out rotator RightAim)
+{
+    local VRChestGrenade G;
+    local rotator Root, Aim;
+    local vector Wrist;
+    if (HandInventory.Input == None) return 0;
+    G = HandInventory.Input.Grenade;
+    if (G == None || G.HoldingHand < 0 || G.HoldingHand > 1
+        || !G.IsHeld(G.HoldingHand) || G.Preview == None || !G.HeldContextValid()) return 0;
+    Root.Yaw = NormalizeRotAxis(Human.Rotation.Yaw);
+    Sample.GrenadeHand = G.HoldingHand + 1;
+    Sample.GrenadePosition = (G.Preview.Translation - Human.Location) << Root;
+    Sample.GrenadeRotation = Normalize(G.Preview.Rotation - Root);
+    // Retarget the empty hand's rendered anatomy too, just as for held guns,
+    // so the prop and the observer's wrist agree on the authored hand frame.
+    if (FreeHandPose == None || !FreeHandPose.bReady) return 0;
+    Wrist = RenderedHandPosition(G.HoldingHand);
+    Aim = QuatToRotator(QuatProduct(RenderedHandRotation(G.HoldingHand),
+        QuatInvert(FreeHandPose.WristBasis[G.HoldingHand])));
+    if (G.HoldingHand == 0) { LeftWrist = Wrist; LeftAim = Aim; return 1; }
+    RightWrist = Wrist; RightAim = Aim; return 2;
 }
 
 // Teammates see the curl the local hand shows (KF2VRNetTypes.NetPoseSample
@@ -1336,10 +2097,52 @@ simulated function bool ReadVisualWrist(VRWeaponRuntime Runtime, int Hand, out v
 {
     if (Runtime == None || Runtime.Presenter == None || Runtime.Presenter.Arms == None
         || Runtime.Presenter.FreeHandPose == None || !Runtime.Presenter.FreeHandPose.bReady
-        || !Runtime.Presenter.bCalibrated || Runtime.NativePoseReady != 1) return false;
+        || !Runtime.Presenter.bCalibrated
+        || (Runtime.NativePoseReady != 1 && !Runtime.Presenter.FreshCarryVisual(Hand))) return false;
     Position = Runtime.Presenter.RenderedHandPosition(Hand);
     Aim = QuatToRotator(QuatProduct(Runtime.Presenter.RenderedHandRotation(Hand),
         QuatInvert(Runtime.Presenter.FreeHandPose.WristBasis[Hand])));
+    return true;
+}
+
+simulated function PublishWeaponRoot(VRWeaponRuntime Runtime,int Hand,out NetPoseSample Sample)
+{
+    local vector At;
+    local rotator Facing,Root;
+    local VRWeaponPresenter Presenter;
+    local KF2VRNetChannel Channel;
+    local int Generation;
+    if(Runtime==None || Runtime.Item==None || Runtime.Item.MySkelMesh==None || Runtime.NativePoseReady!=1
+        || (NativeValidMask & (1<<Hand))==0) return;
+    Presenter=Runtime.Presenter;
+    if(Presenter==None || !Presenter.bCalibrated || Presenter.ActiveProfile<0
+        || Presenter.ActiveProfile>=Presenter.WeaponProfiles.Length) return;
+    Channel=KF2VRNetPlayerController(PC).NetChannel;
+    if(Channel==None || !Channel.HeldState.bAvailable
+        || (Hand==0 ? Channel.HeldState.LeftWeapon : Channel.HeldState.RightWeapon)!=Runtime.Item) return;
+    Generation=Hand==0 ? Channel.HeldState.LeftGeneration : Channel.HeldState.RightGeneration;
+    if(Generation<=0) return;
+    if(VRWeap_Tomahawk(Runtime.Item)!=None && VRWeap_Tomahawk(Runtime.Item).bAxeAway) return;
+    Sample.WeaponRootFlags=Sample.WeaponRootFlags | (Hand==0 ? 2 : 1);
+    if(Hand==0) Sample.LeftWeaponRootGeneration=Generation;
+    else Sample.RightWeaponRootGeneration=Generation;
+    if(class'VRWeaponBlockShapes'.static.PublishesRoot(Presenter.ActiveProfile)) return;
+    At=Runtime.Item.MySkelMesh.GetBoneLocation(Presenter.WeaponProfiles[Presenter.ActiveProfile].RootBone);
+    Facing=QuatToRotator(Runtime.Item.MySkelMesh.GetBoneQuaternion(Presenter.WeaponProfiles[Presenter.ActiveProfile].RootBone));
+    Root.Yaw=NormalizeRotAxis(Human.Rotation.Yaw);
+    At=(At-Human.Location)<<Root; Facing=Normalize(Facing-Root);
+    if(Hand==0) { Sample.LeftWeaponRootPosition=At; Sample.LeftWeaponRootRotation=Facing; }
+    else { Sample.RightWeaponRootPosition=At; Sample.RightWeaponRootRotation=Facing; }
+}
+
+simulated function bool ReadShieldRoot(int Hand, out vector Position, out rotator Aim)
+{
+    local VRWeaponRuntime R;
+    R=HandInventory.Registry.GetSupport(Hand);
+    if (R==None || R.Item.Class!=class'KFWeap_SMG_G18' || R.NativeShieldReady!=1
+        || R.ShieldPoseSequence!=HandInventory.Registry.PoseSequence || R.Item.MySkelMesh==None) return false;
+    Position=R.Item.MySkelMesh.GetBoneLocation('LW_Weapon');
+    Aim=QuatToRotator(R.Item.MySkelMesh.GetBoneQuaternion('LW_Weapon'));
     return true;
 }
 
@@ -1347,9 +2150,29 @@ simulated function bool ReadOpticalMuzzle(VRWeaponRuntime Runtime, out vector Po
 {
     local VRWeaponPresenter Presenter;
     if (Runtime == None || Runtime.Item == None || Runtime.Item.MySkelMesh == None) return false;
+    if (Runtime.Item.Class==class'KFWeap_SMG_G18' && Runtime.PrimaryHand<0) return false;
     // A thrown RAVEN-7 is the projectile others see; its hand is empty.
     if (VRWeap_Tomahawk(Runtime.Item) != None && VRWeap_Tomahawk(Runtime.Item).bAxeAway) return false;
     Presenter = Runtime.Presenter;
+    // Pure melee has no optical socket. Its otherwise unused presentation
+    // slot carries the exact held root for contact authority and measured 3P
+    // alignment. Firearm and projectile/muzzle paths keep their stock frame.
+    if(Presenter!=None && Presenter.bCalibrated && Runtime.NativePoseReady==1
+        && class'VRWeaponBlockShapes'.static.PublishesRoot(Presenter.ActiveProfile))
+    {
+        Position=Runtime.Item.MySkelMesh.GetBoneLocation(Presenter.WeaponProfiles[Presenter.ActiveProfile].RootBone);
+        Aim=QuatToRotator(Runtime.Item.MySkelMesh.GetBoneQuaternion(Presenter.WeaponProfiles[Presenter.ActiveProfile].RootBone));
+        return true;
+    }
+    // Remote bow art keeps its fixed riser/rest anchor. Its direction is the
+    // final arrow bore, rather than the perpendicular raw 1P muzzle frame.
+    if (class'VRCompoundBowAuthority'.static.Supports(Runtime.Item))
+    {
+        if (Presenter == None || !Presenter.bCalibrated || Runtime.NativePoseReady != 1) return false;
+        if (!Runtime.Item.MySkelMesh.GetSocketWorldLocationAndRotation('MuzzleFlash', Position, Aim)) return false;
+        Aim = Presenter.LaserMuzzleRotation;
+        return true;
+    }
     return Presenter != None && Presenter.bCalibrated && Presenter.ActiveProfile >= 0
         && Presenter.ActiveProfile < Presenter.WeaponProfiles.Length
         && Runtime.Item.MySkelMesh.GetSocketWorldLocationAndRotation(

@@ -8,12 +8,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 . (Join-Path $PSScriptRoot 'script-sources.ps1')
-. (Join-Path $PSScriptRoot 'portal-combined.ps1')
+. (Join-Path $PSScriptRoot 'combined-state.ps1')
 
 function Get-CombinedNativeSourceHashes([string]$ProjectRoot) {
     $root = [IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\','/')
     $relativePaths = @('CMakeLists.txt','third_party/xr-sdks.cmake')
-    $files = foreach ($directory in @('native/adapter','native/vrcore','native/xr','native/portal')) {
+    $files = foreach ($directory in @('native/adapter','native/vrcore','native/xr')) {
         Get-ChildItem -LiteralPath (Join-Path $root $directory) -File -Recurse |
             Where-Object { $_.Extension -in @('.h','.hpp','.cpp','.asm') -or $_.Name -eq 'CMakeLists.txt' }
     }
@@ -48,7 +48,7 @@ function Invoke-CombinedNativeRefresh([string]$ProjectRoot, [string]$CombinedBui
     }
     $previousReceipt = Join-Path $previousRoot 'run.json'
     $previousHash = (Get-FileHash -LiteralPath $previousReceipt -Algorithm SHA256).Hash
-    $state = Get-CombinedPortalState $root $previousRoot
+    $state = Get-CombinedBuildState $root $previousRoot
     $previous = $state.Build
     $compileEvidence = if ($previous.script_reuse) { $previous.script_reuse } else { $previous }
     $nativeHashes = Get-CombinedNativeSourceHashes $root
@@ -63,12 +63,11 @@ function Invoke-CombinedNativeRefresh([string]$ProjectRoot, [string]$CombinedBui
     $provenanceRoot = Join-Path $runRoot 'Provenance'
     $recordPath = Join-Path $runRoot 'run.json'
     $record = [ordered]@{
-        schema='kf2vr/combined-script-build/1'; operation='native-refresh'
+        schema='kf2vr/combined-script-build/2'; operation='native-refresh'
         started_utc=[DateTime]::UtcNow.ToString('o'); success=$false; verification_ready=$false; prepared_only=$false
         sdk_sha256=$previous.sdk_sha256; snapshot_root=$snapshotRoot; output_root=$outputRoot
         input_sources_sha256=$previous.input_sources_sha256; sources_sha256=$previous.sources_sha256
         package_sha256=$previous.package_sha256; hand_assets=$previous.hand_assets
-        portals_enabled=(-not ($previous.PSObject.Properties.Name -contains 'portals_enabled') -or [bool]$previous.portals_enabled)
         localization_sha256=$previous.localization_sha256; art_selection=$previous.art_selection
         visual_limitations=@($previous.visual_limitations)
         runtime_evidence='Pending for this native refresh; previous runtime/headset acceptance does not apply.'
@@ -132,7 +131,7 @@ function Invoke-CombinedNativeRefresh([string]$ProjectRoot, [string]$CombinedBui
             $record.script_reuse['compiler_log_sha256'] = $logHash
         }
         # Recheck mutable inputs and the previous immutable run after all copies.
-        $null = Get-CombinedPortalState $root $previousRoot
+        $null = Get-CombinedBuildState $root $previousRoot
         if ((Get-FileHash -LiteralPath $previousReceipt -Algorithm SHA256).Hash -ne $previousHash -or
             (Get-FileHash -LiteralPath $adapterSource -Algorithm SHA256).Hash -ne $adapterHash -or
             (Get-FileHash -LiteralPath $loaderSource -Algorithm SHA256).Hash -ne $loaderHash -or
@@ -141,7 +140,7 @@ function Invoke-CombinedNativeRefresh([string]$ProjectRoot, [string]$CombinedBui
         }
         $record.success = $true; $record.verification_ready = $true
         $record | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $recordPath -Encoding UTF8
-        $null = Get-CombinedPortalState $root $runRoot
+        $null = Get-CombinedBuildState $root $runRoot
     } catch {
         $record.success = $false; $record.verification_ready = $false
         $record['error'] = $_.Exception.Message

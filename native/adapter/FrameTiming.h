@@ -7,11 +7,11 @@
 
 namespace kf2vr::adapter::timing {
 enum Stage { Other, Controller, Simulation, ScriptDispatch, ScriptBody,
-    LeftView, RightView, XrBegin, XrSubmit, DesktopPresent, PortalCapture, WorldScene, EyeCopy,
+    LeftView, RightView, XrBegin, XrSubmit, DesktopPresent, WorldScene, EyeCopy,
     ViewSetup, SceneSetup, ViewportSetup, WorldTick, LeftScene, RightScene, DiagnosticOutput, Count };
 inline bool drilldownEnabled=false;
 inline constexpr const char* StageNames[Count]={"otherMs","controllerMs","simulationMs","vmDispatchMs","vmBodyMs",
-    "leftMs","rightMs","xrBeginMs","xrSubmitMs","presentMs","portalMs","worldMs","eyeCopyMs",
+    "leftMs","rightMs","xrBeginMs","xrSubmitMs","presentMs","worldMs","eyeCopyMs",
     "viewSetupMs","sceneSetupMs","viewportSetupMs","worldTickMs","leftSceneMs","rightSceneMs","diagnosticOutputMs"};
 inline bool enabled=false; // Set once before hooks are enabled.
 inline bool scriptEnabled=false; // Expensive per-VM-call tracing is a separate opt-in.

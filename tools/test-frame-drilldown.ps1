@@ -5,10 +5,10 @@ param([Parameter(Mandatory)][string]$CombinedBuildRoot,
     [switch]$WithoutStacks,[switch]$FastVmIdentity,[switch]$MetadataCache,[switch]$PrepareOnly,
     [ValidateRange(50,100)][int]$EyeRenderPercent=100)
 $ErrorActionPreference='Stop'
-$output=@(& (Join-Path $PSScriptRoot 'test-portal.ps1') -PortalBuildRoot $CombinedBuildRoot `
+$output=@(& (Join-Path $PSScriptRoot 'test-combined.ps1') -CombinedBuildRoot $CombinedBuildRoot `
     -PerformanceBenchmark -FrameDrilldown -StackSampling:(-not $WithoutStacks) -FastVmIdentity:$FastVmIdentity -MetadataCache:$MetadataCache `
     -EyeRenderPercent $EyeRenderPercent -BenchmarkWarmupSeconds 10 -BenchmarkMeasureSeconds 30 -PrepareOnly:$PrepareOnly)
-$line=@($output | Where-Object { $_ -is [string] -and $_ -match '^(Prepared Portal session|Gameplay replay passed): ' })
+$line=@($output | Where-Object { $_ -is [string] -and $_ -match '^(Prepared session|Gameplay replay passed): ' })
 if ($line.Count -ne 1) { throw 'Expected one owned diagnostic run receipt.' }
 $recordPath=$line[0] -replace '^[^:]+: ',''
 if ($PrepareOnly) { Write-Output "Prepared frame drilldown: $recordPath"; return }

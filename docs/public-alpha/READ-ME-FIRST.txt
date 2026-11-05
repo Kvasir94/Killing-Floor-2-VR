@@ -1,149 +1,59 @@
 KF2-VR - READ ME FIRST
 ======================
+KF2-VR plays your own copy of Killing Floor 2 in a PC VR headset.
+Made by Kvasir94 and optimumbox. It is an early alpha fan project, not
+affiliated with Tripwire Interactive. Expect bugs, and please report them.
 
-To play: double-click "Start KF2-VR".
-That's the only file you need. Leave the "app" folder alone.
+YOU NEED
+- Windows 10 or 11.
+- Killing Floor 2 on Steam. (Epic works for Solo VR only, and is experimental.)
+- Your headset's PC app running: SteamVR, Quest Link / Air Link, Virtual
+  Desktop or similar. Desktop play works without a headset.
 
-BEFORE THE FIRST TIME
----------------------
-1. Unzip the whole ZIP somewhere easy, like your Desktop or Documents.
-   (Right-click the ZIP > Extract All.) Don't run it from inside the ZIP.
-2. Open normal Killing Floor 2 from your Steam or Epic launcher once, then quit it.
-   Use Windows 10/11 and your own KF2 copy. Python is included in the ZIP;
-   you do not need to install it separately.
-3. Playing in VR? Turn on your headset and start its PC app
-   (Quest Link / Air Link, SteamVR, or Virtual Desktop) before you start.
-   Select that app as the active OpenXR runtime in its settings.
-4. Launcher players need the same full release; desktop companions must match
-   that release's compiled packages. Extract updates as new folders.
-5. KF2-VR is matched to the exact Steam and Epic builds in app\release.json. If your store
-   updates KF2, the launcher will say your copy doesn't match until a new
-   KF2-VR ZIP is out. Epic is experimental Solo VR only; see its steps below.
+START
+1. Right-click the ZIP > Extract All, into a new folder (Documents is fine).
+   Don't run it from inside the ZIP.
+2. Open Killing Floor 2 from Steam once, then quit it.
+3. Double-click "Start KF2-VR". Leave the "app" folder alone.
+4. The first time, it finds your game and asks a few setup questions (hand,
+   seated or standing, movement, reloads, graphics). The recommended choices
+   are fine to start with.
+5. Press Quick start for a solo match, or pick Solo match, Host a game or
+   Join a friend.
 
-WHAT TO EXPECT
---------------
-This is an early alpha, tested so far on one developer PC with a Quest
-headset over Link. Solo play is the most tested path. The developer has also
-used a remotely joined hosted server; wider internet and hardware coverage
-need feedback. Expect bugs, and please
-report them. The default graphics are Performance at 100% render scale;
-adjust scale/detail in Settings or the headset menu for your PC.
-Steam single-pass stereo, HBAO+ and reflections start ON; Epic single-pass
-stays OFF. Saved preferences override fresh defaults.
-The questions we most want answered are in app\docs\FEEDBACK-QUESTIONS.md.
+PLAYING WITH FRIENDS (Steam)
+- Everyone needs this same KF2-VR version.
+- Host: the first time, KF2-VR downloads the free KF2 game server (about 9 GB,
+  32 GB once installed). Copy the join code and send it privately; it contains
+  your password. Friends outside your home network need UDP 7777 and 27015
+  forwarded to your PC.
+- Join: copy your friend's whole code, press Paste, then Join.
 
-PLAY SOLO FIRST
----------------
-1. Start KF2-VR. Auto uses a sole installation or the last valid folder
-   in this extracted release. With both stores installed, choose Steam for
-   these steps (or Epic for its steps below). Pick "VR headset" or "Desktop - no headset", then "Play solo".
-2. Pick a map and difficulty, click "Start", then choose your perk and Ready.
-   Solo needs no server download or port forwarding. Start with the defaults.
-
-EPIC GAMES - EXPERIMENTAL SOLO VR
--------------------------------
-Epic is experimental and has not passed overall headset acceptance.
-The reconciled stock-menu startup in this ZIP still needs a headset retest.
-Earlier testing confirmed partial controller/gameplay functionality,
-including Outpost, 1858/Deagle tracking and trader access. Overall usability
-remains incomplete; this ZIP is not established as a runtime pass.
-
-1. Connect your headset and OpenXR runtime. In Start KF2-VR select Epic Games,
-   then Play solo and Start. Keep the KF2-VR window open throughout the session.
-2. Click Copy Epic Launch Options. In Epic Library > Killing Floor 2 > Manage,
-   save any previous Launch Options text locally, replace it with the session
-   line, switch ON and click Launch in Epic within five minutes.
-   Your official Epic launcher handles authentication; don't copy account tokens.
-3. At the stock game menu choose Play Solo Offline, map, difficulty and length,
-   then your perk and Ready. Launcher selections also populate the headset's
-   LOCAL MATCH > START LOCAL MATCH > START SOLO MATCH route; no automatic map launch.
-4. Quit KF2 normally. The launcher restores its temporary native files.
-   Remove the session line from Epic Launch Options and restore your previous
-   text/switch setting before ordinary play. After an interruption, close KF2
-   and select Epic > Fix a stuck session. Unknown DLLs stay preserved for review.
-
-Epic Host/Join/Desktop, cross-store online play, local test control, motion
-recording and highlight logging are unavailable. Optional content is unaccepted.
-Primary-hand lever cycling with the other hand supporting the rifle is implemented,
-alongside off-hand cycling. Both routes still need headset acceptance. Keep Button
-reload mode if physical cycling blocks play. The VR Use/hold prompt correction
-also needs retesting.
-
-JOIN A FRIEND
--------------
-Steam only in this alpha.
-1. Your friend sends you a code that starts with KF2VR1:
-2. Start KF2-VR, pick "VR headset" or "Desktop - no headset", click "Join a friend".
-3. Click "Paste code", then "Join".
-4. In the lobby, pick your perk and press Ready.
-
-HOST A GAME
------------
-Steam only in this alpha.
-1. Start KF2-VR, click "Host a game", pick a map and difficulty, click Start.
-   A blank Host password makes the server public: anyone who reaches it can join.
-2. The first time, KF2-VR downloads the free KF2 game server (about 32 GB).
-   That can take a long time. It only happens once.
-3. When it says your game is up, click "Copy code" and send it to your friends
-   in a private message. If you set a password, the code contains it.
-4. Friends on other internet connections need your router to forward
-   UDP ports 7777 and 27015 to your PC. Friends on your home network don't.
-   Allow KFServer through Windows Firewall when prompted. Joiners do not need
-   to forward ports or download the server.
-
-Use Solo or the launcher's VAC-off hosted games. Do not join VAC-secured servers.
-Custom multiplayer does not promise ordinary ranked XP or perk progression.
-
-WHILE YOU PLAY
---------------
-Keep the KF2-VR window open. When you quit the game, KF2-VR puts
-Killing Floor 2 back to normal. The window says when it's done.
-
-VR controls: aim with your hands, trigger fires, A/X reloads, grip grabs.
-One stick walks, the other turns. Quick card: app\docs\CONTROLS-CARD.txt.
-Full binds, equipment gestures, calibration and tips: app\docs\VR_CONTROLS.md.
-Syringe: choose it on the wheel, or double-tap Y/B on an already empty hand.
-There is no wrist syringe pouch. Wheel choices confirm on trigger release.
-Chest grenade: empty hand, hold grip at the grenade, swing and release grip.
-Physical reloads: VR SETTINGS > INTERACTION > RELOAD MODE (Button by default).
+GOOD TO KNOW
+- In the headset, press Menu on your left controller (or hold both sticks)
+  for settings, calibration and fit.
+- Reload styles: Button (press X / A, the default), Manual (reload by hand)
+  or Realistic. Change them in Settings.
+- VAC is off, so KF2-VR only plays on VAC-off servers. Matches earn XP.
+- Keep the KF2-VR window open while you play. When you quit the game, it puts
+  Killing Floor 2 back to normal.
 
 SOMETHING WENT WRONG?
----------------------
-Click "Save logs for a bug report" in the KF2-VR window. It makes a ZIP of
-your recent logs, opens its folder, and copies the file to the clipboard when
-available. Report copies
-replace personal paths, known usernames/player names, account IDs and network
-addresses; passwords, recognized tokens and join codes are removed before zipping.
-Original logs stay on your PC. Configs and crash dumps are not included.
-Review the ZIP before sharing: free-form messages can contain other personal
-details. Keep sensitive reports private.
-Post public bug reports at github.com/Kvasir94/Killing-Floor-2-VR/issues
-with your headset, graphics card and what you were
-doing when it went wrong. Keep credentials and raw logs/configs/dumps private.
-Nothing is uploaded automatically.
+- Help > Repair after a crash: quit KF2 first, then press it.
+- Help > Save logs for a bug report makes a ZIP to share. Check it before
+  sharing; nothing is uploaded automatically.
+- Help > Report a bug opens the KF2-VR thread on the Flat2VR Discord. Say
+  which headset and graphics card you use, the version shown in the window,
+  Solo/Host/Join, the map, the weapon and what you were doing.
+- If your store updates KF2, wait for a matching KF2-VR release. Never copy
+  files between KF2-VR versions.
 
-If KF2 crashed or your normal KF2 acts strange, quit KF2 first, then click
-"Fix a stuck session". Keep this extracted folder until recovery completes.
-After cleanup, start ordinary KF2 from your store to play without VR.
+UPDATING
+Extract each new version into its own new folder. Your settings carry over.
 
-If the launcher says the game build does not match, do not copy DLLs from an
-older ZIP or bypass the check. Save the error and wait for a matching release.
-If it says package files are missing or changed, extract the complete ZIP into
-a new folder. Keep the old folder until any stuck session has been restored.
-Do not combine files from different releases; friends must use the same ZIP.
-
-If VR cannot start, first check that your headset is connected in its PC app
-and that the app is selected as the OpenXR runtime. Save the error and logs
-before changing anything. A launcher error is not a reason to change headset
-refresh rate or reset an otherwise connected headset.
-
-For a useful report, include the build ID shown by the launcher, Solo/Host/Join,
-map, weapon, the last action before the problem, and whether it happens again.
-Keep join codes and passwords private. Do not attach raw session folders,
-configs or crash dumps publicly; they have not been anonymized.
-
-Each player needs their own Killing Floor 2 copy. Supported launcher multiplayer
-is Steam-only. Separate Linux/Proton and manual Epic desktop companions are
-experimental and await real online acceptance. Their downloads include setup guides.
-This is an early alpha test build. KF2-VR is a fan project and is not
-affiliated with Tripwire Interactive.
+MORE
+In the app\docs folder: CONTROLS-CARD.txt (quick controls), PLAYER-GUIDE.md
+(full guide), VR_CONTROLS.md (every control) and RELEASE-NOTES-DRAFT.md
+(what's new and known issues). The ZIP includes KF2-derived files, among them the
+hands package; their rights stay with their owners. Licences are in
+app\notices.
