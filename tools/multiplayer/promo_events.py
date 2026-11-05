@@ -8,16 +8,20 @@ import re
 import math
 
 SCHEMA = "kf2vr/promo-events/1"
-EVENTS = {"session_start", "sync_anchor", "sync", "local_player", "hit", "kill", "overflow", "log_limit"}
+EVENTS = {"session_start", "sync_anchor", "sync", "local_player", "hit", "kill", "action", "overflow", "log_limit"}
 CAUSES = {"other", "grab_slam", "fist", "charged_fist", "glove_fist", "charged_glove",
           "explosive_damage", "ballistic", "bludgeon", "slashing", "fire", "toxic", "emp"}
-ENEMIES = {"other", "cyst", "alpha_clot", "slasher", "crawler", "stalker", "gorefast",
+ENEMIES = {"none", "other", "cyst", "alpha_clot", "slasher", "crawler", "stalker", "gorefast",
            "bloat", "siren", "husk", "scrake", "quarterpound", "fleshpound"}
+ACTIONS = {"reload", "gravity_pull", "gun_release", "gun_catch", "zed_grab", "zed_throw", "parry",
+           "grenade_throw", "tomahawk_recall", "welder_taken"}
+WEAPONS = {"none", "other", "9mm", "dual_9mm", "pump_shotgun", "mosin", "belt_fed", "ak12", "break_action",
+           "lever", "bow", "crossbow", "m32", "1858", "grenade", "thrown_weapon", "tomahawk", "welder", "melee"}
 HEADS = {"unknown", "same_game_tick_inferred", "stock_timestamp_advanced"}
 PHYSICAL = {"unknown", "vr_scaled_hit_scope", "vr_grab_damage_type", "vr_fist_damage_type"}
 NUMBERS = {"event_id", "qpc_ticks", "t_us", "utc_unix_us", "qpc_frequency", "anchor_read_span_us",
            "hit_id", "world_epoch", "player_id", "victim_id", "damage", "wave", "zeds_remaining",
-           "session_kills", "marker_id", "width", "height", "frame_sample", "dropped", "limit_bytes"}
+           "session_kills", "marker_id", "width", "height", "frame_sample", "dropped", "limit_bytes", "value"}
 
 
 def sanitize(row):
@@ -33,14 +37,18 @@ def sanitize(row):
     for key in NUMBERS:
         value = row.get(key)
         # JSON booleans are ints in Python. They are not measurements or IDs.
-        if type(value) is int and (-1 if key in {"wave", "zeds_remaining"} else 0) <= value <= 2**64-1:
+        if type(value) is int and (-1 if key in {"wave", "zeds_remaining", "value"} else 0) <= value <= 2**64-1:
             result[key] = value
     if not all(result.get(key, 0) > 0 for key in ("event_id", "qpc_ticks")) or "t_us" not in result:
         return None
     for key, values in (("cause", CAUSES), ("enemy", ENEMIES), ("headshot_evidence", HEADS),
-                        ("physical_melee_evidence", PHYSICAL)):
+                        ("physical_melee_evidence", PHYSICAL), ("action", ACTIONS), ("weapon", WEAPONS)):
         if isinstance(row.get(key), str) and row[key] in values:
             result[key] = row[key]
+    if type(row.get("zed_time")) is bool:
+        result["zed_time"] = row["zed_time"]
+    if result["event"] == "action" and "action" not in result:
+        return None
     if row.get("source") == "desktop_backbuffer":
         result["source"] = "desktop_backbuffer"
     if row.get("kill_evidence") == "lethal_health_transition":

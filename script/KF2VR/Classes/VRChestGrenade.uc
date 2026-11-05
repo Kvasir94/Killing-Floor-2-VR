@@ -425,7 +425,11 @@ function bool Throw()
         else Thrown = class'VRGrenadeThrow'.static.Launch(Bridge, Bridge.Human, HeldOwner,
             HeldClass, Hand, Position, ThrowVelocity, Bridge.HeadPosition);
     }
-    if (Thrown) ThrowCount++;
+    if (Thrown)
+    {
+        ThrowCount++;
+        if (Bridge.NativePromoEvents != 0) Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_GRENADE_THROW, None, int(VSize(ThrowVelocity)));
+    }
     CancelHand(Hand, Thrown);
     return Thrown;
 }

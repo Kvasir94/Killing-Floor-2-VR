@@ -320,7 +320,11 @@ def emit_runtime(root, ctx, authored=None):
             h=profile_hand(ctx,side,profile)
             for q in (authored or {}).get((profile,side),h['deltas']):
                 assert abs(q.magnitude-1)<.00001
-                text.append('    Rotations(%d)=(X=%.9f,Y=%.9f,Z=%.9f,W=%.9f)'%(index,q.x,q.y,q.z,q.w));index+=1
+                # The PSK reader keeps UE's left-handed coordinates in Blender's
+                # right-handed maths, so a delta here is the Y-mirror of the game's.
+                # Mirror back (-X, Y, -Z): the result turns about the game's own
+                # VRFreeHandPose curl axes. Writing it raw bent fingers sideways.
+                text.append('    Rotations(%d)=(X=%.9f,Y=%.9f,Z=%.9f,W=%.9f)'%(index,-q.x,q.y,-q.z,q.w));index+=1
     text+=['}','']
     (Path(root)/'script/KF2VR/Classes/VRGrenadeGripPose.uc').write_text('\n'.join(text))
     return index

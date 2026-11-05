@@ -88,6 +88,9 @@ def anchor(text, where, default_hand=None):
         # e.g. zed(KFPawn_ZedClot_Alpha, head) for a corpse beside the dummies),
         # placed for the moving hand's palm.
         return f'zed.{match[2]}.'+(default_hand or 'R')+(f'.{match[1]}' if match[1] else '')
+    if value == 'grenade':
+        # The chest grenade slot's grab point, placed for the moving hand's palm.
+        return 'grenade.'+(default_hand or 'R')
     if value == 'weld.hologram':
         # The door welder offer's hologram, placed for the moving hand's palm.
         return 'weld.hologram.'+(default_hand or 'R')

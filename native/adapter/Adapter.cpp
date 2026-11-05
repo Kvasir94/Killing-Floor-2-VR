@@ -613,6 +613,8 @@ std::uint64_t SupplyHands(void* bridge) {
     const int previousTriggers=script.Read<int>(bridge,L"NativeTriggerMask");
     demo->handsBridge=bridge;
     if (demo->session) script.Write(demo->session,L"Hands",bridge);
+    if (promoLog.Enabled() && script.Read<int>(bridge,L"NativePromoEvents")==0)
+        script.Write(bridge,L"NativePromoEvents",1);
     script.Invoke(bridge,script.FindFunction(bridge,L"RefreshEyeBase"),nullptr);
     const auto eyeBase=script.Read<kf2vr::Vec3>(bridge,L"NativeEyeBase");
     adapter::ScriptWriteBatch writes(script,bridge,batchHandWrites);
@@ -1152,6 +1154,11 @@ void HookProcessInternal(void* object,void* stack,void* result) {
         std::memcpy(result,&value,sizeof(value));
         return;
     }
+    // Highlight log actions from the local bridge (-PromoEvents only; script
+    // callers are gated on NativePromoEvents, which only an enabled log sets).
+    if (promoLog.Enabled() && name==script.Intern(L"NativePromoAction") && object==demo->handsBridge &&
+        script.FindFunction(object,L"NativePromoAction")==function)
+        promoLog.Action(script,object,function,adapter::GameScript::At<void*>(stack,0x2c));
     if (name==script.Intern(L"NativeWorldDropUpdate") && object==demo->handsBridge &&
         demo->controlledPawn && script.Read<void*>(demo->controlledController,L"Pawn")==demo->controlledPawn &&
         script.IsClass(object,L"VRHandsBridge") && script.Read<void*>(object,L"PC")==demo->controlledController &&

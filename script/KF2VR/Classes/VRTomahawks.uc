@@ -105,10 +105,17 @@ function Update(float Delta)
                 if (Gesture[Hand].bRecallOnRelease)
                 {
                     if (Trigger) W.ServerSuspend(Hand, At, Facing);
-                    else W.ServerRecall(Hand, At, Facing);
+                    else
+                    {
+                        W.ServerRecall(Hand, At, Facing);
+                        if (Bridge.NativePromoEvents != 0) Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_TOMAHAWK_RECALL, W, Hand);
+                    }
                 }
                 else if (Gesture[Hand].bGripRecallRequested)
+                {
                     W.ServerRecall(Hand, At, Facing);
+                    if (Bridge.NativePromoEvents != 0) Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_TOMAHAWK_RECALL, W, Hand);
+                }
                 W.ServerRecallPose(Hand, At, Facing);
                 NextRecallSample[Hand] = Now + 0.1;
             }

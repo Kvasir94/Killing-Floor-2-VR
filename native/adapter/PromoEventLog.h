@@ -2,6 +2,8 @@
 #include <windows.h>
 #include <share.h>
 #include <array>
+#include <iterator>
+#include <utility>
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
@@ -120,6 +122,8 @@ public:
             head=HeadshotEvidence(context?context->previous:0,headTime,gameTime,context && context->known);
         }
         int remaining=-1,wave=-1; void* gri=nullptr;
+        const bool zedTime=ZedTime(script,world);
+        const char* weapon=DamageWeapon(script,kind);
         if (Read(script,world,L"GRI",gri)) {
             Read(script,gri,L"AIRemaining",remaining); Read(script,gri,L"WaveNum",wave);
         }
@@ -144,13 +148,37 @@ public:
              cause==std::string_view("charged_fist") || cause==std::string_view("charged_glove") ? "vr_fist_damage_type" : "unknown"));
         Emit(now,"\"event\":\"hit\",\"hit_id\":%llu,\"world_epoch\":%u,\"player_id\":%d,"
             "\"victim_id\":%u,\"enemy\":\"%s\",\"cause\":\"%s\",\"damage\":%u,"
-            "\"headshot_evidence\":\"%s\",\"physical_melee_evidence\":\"%s\",\"wave\":%d,\"zeds_remaining\":%d",
+            "\"headshot_evidence\":\"%s\",\"physical_melee_evidence\":\"%s\",\"wave\":%d,\"zeds_remaining\":%d,"
+            "\"weapon\":\"%s\",\"zed_time\":%s",
             hitId,state_.Epoch(),player,hit.victim,Enemy(script,victim),cause,hit.damage,
-            Head(head),physical,wave,remaining);
+            Head(head),physical,wave,remaining,weapon,zedTime?"true":"false");
         if (hit.kill) Emit(now,"\"event\":\"kill\",\"hit_id\":%llu,\"world_epoch\":%u,\"player_id\":%d,"
             "\"victim_id\":%u,\"enemy\":\"%s\",\"cause\":\"%s\",\"headshot_evidence\":\"%s\","
-            "\"physical_melee_evidence\":\"%s\",\"kill_evidence\":\"lethal_health_transition\",\"session_kills\":%llu,\"wave\":%d,\"zeds_remaining\":%d",
-            hitId,state_.Epoch(),player,hit.victim,Enemy(script,victim),cause,Head(head),physical,state_.Kills(),wave,remaining);
+            "\"physical_melee_evidence\":\"%s\",\"kill_evidence\":\"lethal_health_transition\",\"session_kills\":%llu,\"wave\":%d,\"zeds_remaining\":%d,"
+            "\"weapon\":\"%s\",\"zed_time\":%s",
+            hitId,state_.Epoch(),player,hit.victim,Enemy(script,victim),cause,Head(head),physical,state_.Kills(),wave,remaining,
+            weapon,zedTime?"true":"false");
+    } catch (...) { failed_=true; }
+    // VRHandsBridge.NativePromoAction on the local player's bridge: a fixed
+    // action id, the weapon or Zed it involved and one bounded number.
+    void Action(GameScript& script,void* bridge,void* function,const void* locals) noexcept try {
+        if (!Enabled()) return;
+        unsigned char action=0; void* subject=nullptr; int value=0;
+        if (!ReadScriptLocal(function,locals,script.Intern(L"Action"),action) ||
+            !ReadScriptLocal(function,locals,script.Intern(L"Subject"),subject) ||
+            !ReadScriptLocal(function,locals,script.Intern(L"Value"),value)) return;
+        const auto* label=ActionName(action);
+        if (!label) return;
+        void* world=nullptr;
+        const bool zedTime=Read(script,bridge,L"WorldInfo",world) && ZedTime(script,world);
+        const char* weapon="none"; const char* enemy="none";
+        if (subject && script.IsClass(subject,L"KFPawn_Monster")) enemy=Enemy(script,subject);
+        else if (subject && script.IsClass(subject,L"Weapon")) weapon=WeaponObject(script,subject);
+        else if (subject) weapon="other";
+        if (value<0) value=-1; else if (value>1000000) value=1000000;
+        std::lock_guard guard(mutex_);
+        Emit(Clock(),"\"event\":\"action\",\"action\":\"%s\",\"weapon\":\"%s\",\"enemy\":\"%s\","
+            "\"value\":%d,\"zed_time\":%s",label,weapon,enemy,value,zedTime?"true":"false");
     } catch (...) { failed_=true; }
     void Marker(std::uint32_t marker,unsigned width,unsigned height,std::uint64_t frame) noexcept try {
         if (!Enabled()) return;
@@ -183,6 +211,57 @@ private:
             {L"KFDT_Explosive","explosive_damage"}, {L"KFDT_Ballistic","ballistic"},
             {L"KFDT_Bludgeon","bludgeon"}, {L"KFDT_Slashing","slashing"},
             {L"KFDT_Fire","fire"}, {L"KFDT_Toxic","toxic"}, {L"KFDT_EMP","emp"}};
+        for (const auto& entry:types) if (Derives(script,type,entry.first)) return entry.second;
+        return "other";
+    }
+    static const char* ActionName(unsigned char action) {
+        // Same order as VRHandsBridge's PROMO_* constants.
+        static constexpr const char* names[]{nullptr,"reload","gravity_pull","gun_release","gun_catch",
+            "zed_grab","zed_throw","parry","grenade_throw","tomahawk_recall","welder_taken"};
+        return action<std::size(names) ? names[action] : nullptr;
+    }
+    // Stock Zed Time slows the world clock (TimeDilation 0.2), and clients
+    // receive the same dilation, so it reads alike in Solo and online.
+    static bool ZedTime(GameScript& script,void* world) {
+        float dilation=1;
+        return world && Read(script,world,L"TimeDilation",dilation) && dilation>0 && dilation<0.9f;
+    }
+    // A short fixed vocabulary for the guns and tools the trailer shot list
+    // names; anything else is "other". Subclasses come first.
+    static const char* WeaponObject(GameScript& script,void* weapon) {
+        static const std::pair<const wchar_t*,const char*> types[]{
+            {L"KFWeap_Pistol_Dual9mm","dual_9mm"}, {L"KFWeap_Pistol_9mm","9mm"},
+            {L"KFWeap_Shotgun_MB500","pump_shotgun"}, {L"KFWeap_Shotgun_DragonsBreath","pump_shotgun"},
+            {L"KFWeap_Rifle_MosinNagant","mosin"}, {L"KFWeap_LMG_MG3","belt_fed"},
+            {L"KFWeap_LMG_Stoner63A","belt_fed"}, {L"KFWeap_AssaultRifle_AK12","ak12"},
+            {L"KFWeap_Shotgun_DoubleBarrel","break_action"}, {L"KFWeap_Shotgun_ElephantGun","break_action"},
+            {L"KFWeap_Rifle_Winchester1894","lever"}, {L"KFWeap_Rifle_CenterfireMB464","lever"},
+            {L"KFWeap_Bow_CompoundBow","bow"}, {L"KFWeap_Bow_Crossbow","crossbow"},
+            {L"KFWeap_GrenadeLauncher_M32","m32"}, {L"KFWeap_Revolver_DualRem1858","1858"},
+            {L"KFWeap_Revolver_Rem1858","1858"}, {L"VRWeap_Tomahawk","tomahawk"},
+            {L"KFWeap_Welder","welder"}, {L"KFWeap_MeleeBase","melee"}};
+        for (const auto& entry:types) if (script.IsClass(weapon,entry.first)) return entry.second;
+        return "other";
+    }
+    static const char* DamageWeapon(GameScript& script,void* type) {
+        static const std::pair<const wchar_t*,const char*> types[]{
+            {L"KFDT_Ballistic_9mm","9mm"}, {L"KFDT_Ballistic_MB500","pump_shotgun"},
+            {L"KFDT_Ballistic_DragonsBreath","pump_shotgun"}, {L"KFDT_Ballistic_MosinNagant","mosin"},
+            {L"KFDT_Ballistic_MosinNagantSpecial","mosin"}, {L"KFDT_Ballistic_MG3","belt_fed"},
+            {L"KFDT_Ballistic_Stoner63A","belt_fed"}, {L"KFDT_Ballistic_AK12","ak12"},
+            {L"KFDT_Ballistic_DBShotgun","break_action"}, {L"KFDT_Ballistic_ElephantGun","break_action"},
+            {L"KFDT_Ballistic_Winchester","lever"}, {L"KFDT_Ballistic_CenterfireMB464","lever"},
+            {L"KFDT_Pirecing_CompoundBow","bow"}, {L"KFDT_Piercing_CompoundBowSharpImpact","bow"},
+            {L"KFDT_Piercing_CompoundBowCryoImpact","bow"}, {L"KFDT_Piercing_Crossbow","crossbow"},
+            {L"KFDT_Explosive_M32","m32"}, {L"KFDT_Ballistic_M32Impact","m32"},
+            {L"KFDT_Explosive_FragGrenade","grenade"}, {L"KFDT_Explosive_HEGrenade","grenade"},
+            {L"KFDT_Explosive_DynamiteGrenade","grenade"}, {L"KFDT_Explosive_NailBombGrenade","grenade"},
+            {L"KFDT_Explosive_FlashBangGrenade","grenade"}, {L"KFDT_EMP_EMPGrenade","grenade"},
+            {L"KFDT_Fire_MolotovGrenade","grenade"}, {L"KFDT_Freeze_FreezeGrenade","grenade"},
+            {L"KFDT_Toxic_MedicGrenade","grenade"}, {L"KFDT_Piercing_NadeFragment","grenade"},
+            {L"VRDT_ThrownWeaponImpact","thrown_weapon"}, {L"VRDT_Tomahawk","tomahawk"},
+            {L"VRDT_TomahawkBash","tomahawk"}, {L"VRDT_TomahawkHeavy","tomahawk"},
+            {L"VRDT_TomahawkReturn","tomahawk"}, {L"VRDT_TomahawkShock","tomahawk"}};
         for (const auto& entry:types) if (Derives(script,type,entry.first)) return entry.second;
         return "other";
     }

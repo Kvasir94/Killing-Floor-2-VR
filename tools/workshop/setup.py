@@ -1,11 +1,26 @@
 """Configure the Workshop Play chooser for one selected Steam account."""
+import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "KF2VR/app/tools/multiplayer"))
-from workshop_distribution import configure_account
+from workshop_distribution import configure_account, launch_options
+
+
+def earlier_setup(config, play):
+    """This account's Launch Options when the earlier PowerShell setup pointed them here.
+
+    That setup wrote '"<Play.cmd>" %command%' without saving the previous value, so
+    there is no state file. Treating it as unset would wrap Play.cmd twice."""
+    current = launch_options(Path(config).read_bytes().decode("utf-8-sig")) or ""
+    if not current.startswith('"'):
+        return None
+    first = current[1:].split('"', 1)[0]
+    same = os.path.normcase(os.path.abspath(first)) == os.path.normcase(str(Path(play).resolve()))
+    return current if same else None
 
 
 def main():
@@ -35,14 +50,21 @@ def main():
                 return
             config = configs[accounts.value()]
         state = config.with_name(config.name + ".kf2vr-launch.json")
-        remove = state.exists()
-        action = "Restore this account's previous KF2 Launch Options?" if remove else "Add the KF2-VR Play choice for this account? Previous Launch Options will be saved for removal."
+        legacy = None if state.exists() else earlier_setup(config, HERE / "Play.cmd")
+        remove = state.exists() or legacy is not None
+        if legacy is not None:
+            action = "KF2-VR's Play choice is already set up for this account by an earlier version. Remove it, so Play starts plain KF2 again?"
+        else:
+            action = "Restore this account's previous KF2 Launch Options?" if remove else "Add the KF2-VR Play choice for this account? Previous Launch Options will be saved for removal."
         if not ask(None, title, action, yes="Continue", detail="Exit Steam normally before continuing."):
             return
         running = subprocess.check_output(["tasklist", "/FI", "IMAGENAME eq steam.exe", "/FO", "CSV", "/NH"],
                                           creationflags=0x08000000, text=True)
         if '"steam.exe"' in running.lower():
             raise ValueError("Steam is still running. Choose Steam > Exit and run setup again.")
+        if legacy is not None:
+            # The earlier setup kept no previous value; removing leaves the field empty.
+            state.write_text(json.dumps({"previous": None, "installed": legacy}), encoding="utf-8")
         configure_account(config, HERE / "Play.cmd", remove=remove)
         alert(None, title, "Done. Open Steam normally. " + ("Your previous Launch Options are restored." if remove else "Press Play on KF2 for the VR/normal choice. Run this setup again to undo."), kind="info")
     except Exception as error:

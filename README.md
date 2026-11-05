@@ -10,8 +10,8 @@ Made by Kvasir94 and optimumbox.
 
 ## Play the mod
 
-**Download:** [KF2VR-Multiplayer-v0.3.0-alpha.20261105-054158.zip](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/download/v0.3.0-alpha.20261105/KF2VR-Multiplayer-v0.3.0-alpha.20261105-054158.zip)
-(release [v0.3.0-alpha.20261105](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/tag/v0.3.0-alpha.20261105), build 054158).
+**Download:** [KF2VR-Multiplayer-v0.3.0-alpha.20261106-232423.zip](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/download/v0.3.0-alpha.20261106/KF2VR-Multiplayer-v0.3.0-alpha.20261106-232423.zip)
+(release [v0.3.0-alpha.20261106](https://github.com/Kvasir94/Killing-Floor-2-VR/releases/tag/v0.3.0-alpha.20261106), build 232423).
 
 1. You need Windows 10 or 11, your own Killing Floor 2 on Steam, and your
    headset's PC app (SteamVR, Quest Link / Air Link, Virtual Desktop or
@@ -62,7 +62,7 @@ This source snapshot integrates OptimumBox's `v0.5.2-alpha.20261014`
 and distribution source through `68932aef5ee76b2bcc834eed4d2f3275ea4d6995` with retained local interaction,
 rendering and launcher choices. His reload, multiplayer, interaction, camera,
 rendering, launcher and desktop-companion contributions are credited in
-[CREDITS](CREDITS.md). Release `v0.3.0-alpha.20261105` is build 054158 from this source, with
+[CREDITS](CREDITS.md). Release `v0.3.0-alpha.20261106` is build 232423 from this source, with
 matching credits and notices. Its tag pins the release source; main can contain
 later documentation updates. Earlier releases and their tags stay available.
 

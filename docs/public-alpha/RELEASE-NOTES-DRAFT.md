@@ -9,11 +9,21 @@ complete playable ZIPs from
 
 **What these notes compare.** Most players are on optimumbox's public
 **v0.5.2** (`v0.5.2-alpha.20261014`, source commit `b45ff53`). This release
-candidate is `v0.3.0-alpha.20261105`, build `KF2VR-Multiplayer-20261105-054158`
-from source commit `e8f19c3b`. Everything below is the difference
+candidate is `v0.3.0-alpha.20261106`, build `KF2VR-Multiplayer-20261105-232423`
+from source commit `c5306614`. Everything below is the difference
 between those two builds. The launcher shows the build ID (also in
 `app/release.json`). Extract each update into a fresh folder and keep the
 previous ZIP for rollback.
+
+**Since v0.3.0-alpha.20261105:**
+
+- Grenades held in the authored grip no longer bend the fingers like they
+  are broken.
+- Thrown and gravity-pulled guns no longer turn black online.
+- Rerunning the Workshop setup on an account set up by optimumbox's earlier
+  setup no longer adds Play.cmd to the Launch Options twice.
+
+Players on v0.3.0-alpha.20261105 need this build to join a server running it.
 
 ## Compatibility
 

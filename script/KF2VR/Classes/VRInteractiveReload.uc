@@ -6595,6 +6595,8 @@ function Finish(string Reason)
             Runtime.bSlideLockPending = true;
             if (Gun.EmptyMagBlendNode != None) Gun.EmptyMagBlendNode.SetBlendTarget(1, 0);
         }
+        if (Bridge.NativePromoEvents != 0 && Gun.AmmoCount[0] > AmmoAtStart)
+            Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_RELOAD, Gun, Gun.AmmoCount[0] - AmmoAtStart);
         `log("KF2VR_INTERACTIVE_RELOAD phase=end reason=" $ Reason @ "weapon=" $ Gun.Class
             @ "ammo=" $ Gun.AmmoCount[0] @ "racked=" $ bRacked @ "await_rack=" $ bAwaitRack
             @ "await_ammo=" $ bAwaitAmmo @ "slide_lock=" $ bSlideLock

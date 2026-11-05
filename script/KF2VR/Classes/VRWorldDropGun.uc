@@ -147,6 +147,19 @@ simulated function CopySharedPose(SkeletalMeshComponent Source)
     UpdateSharedVisual();
 }
 
+// KF2's deferred pass packs only the Indoor/Outdoor channels into its
+// per-pixel light mask. A fresh skeletal component has neither, so the 1P
+// gun that stands in for the pickup body rendered black wherever it showed.
+// Light it like the stock pickup body it replaces (Indoor and Outdoor).
+simulated function LightingChannelContainer WorldLightingChannels()
+{
+    local LightingChannelContainer Channels;
+    if (MyMeshComp != None) Channels = MyMeshComp.LightingChannels;
+    if (!Channels.Indoor && !Channels.Outdoor) { Channels.Indoor = true; Channels.Outdoor = true; }
+    Channels.Dynamic = true; Channels.bInitialized = true;
+    return Channels;
+}
+
 simulated function UpdateSharedVisual()
 {
     local vector At;
@@ -165,6 +178,7 @@ simulated function UpdateSharedVisual()
         if (!class'VRSharedWeaponVisual'.static.Configure(SharedVisual, class<KFWeapon>(InventoryClass), SkinItemId))
         { SharedVisual = None; return; }
         SharedVisual.SetAbsolute(true, true, true); SharedVisual.SetHidden(true);
+        SharedVisual.SetLightingChannels(WorldLightingChannels());
         AttachComponent(SharedVisual);
         class'VRSharedWeaponVisual'.static.Idle(self, SharedVisual, class<KFWeapon>(InventoryClass));
         HideParkedParts();

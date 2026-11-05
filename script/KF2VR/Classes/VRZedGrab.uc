@@ -444,6 +444,7 @@ simulated function bool TryGrab(int Hand)
             ++LivingGrabs;
             Pulse(Hand, 1.0, 0.035);
             `log("KF2VR_ZEDGRAB action=grab hand=" $ Hand $ " pawn=" $ M.Class $ " bone=" $ Bone $ " standing=1");
+            if (Bridge != None && Bridge.NativePromoEvents != 0) Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_ZED_GRAB, M, Hand);
             return true;
         }
         if (!RequestKnockdown(M))
@@ -469,6 +470,7 @@ simulated function bool TryGrab(int Hand)
     // A hard clamp; the swing hum in PlaceHeld carries the weight after it.
     Pulse(Hand, 1.0, 0.035);
     `log("KF2VR_ZEDGRAB action=grab hand=" $ Hand $ " pawn=" $ M.Class $ " bone=" $ Bone $ " living=" $ Grabs[Hand].bLiving);
+    if (Bridge != None && Bridge.NativePromoEvents != 0) Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_ZED_GRAB, M, Hand);
     return true;
 }
 
@@ -518,6 +520,7 @@ simulated function bool GrabPawn(int Hand, KFPawn_Monster M, optional bool bHead
     if (Grabs[Hand].bLiving) ++LivingGrabs; else ++CorpseGrabs;
     Pulse(Hand, 1.0, 0.05);
     `log("KF2VR_ZEDGRAB action=grab hand=" $ Hand $ " pawn=" $ M.Class $ " bone=" $ Best $ " living=" $ Grabs[Hand].bLiving $ " source=ripcord");
+    if (Bridge != None && Bridge.NativePromoEvents != 0) Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_ZED_GRAB, M, Hand);
     return true;
 }
 
@@ -779,6 +782,8 @@ simulated function Release(int Hand)
         if (VSize(Carry) > Limit) Carry = Normal(Carry) * Limit;
         if (VSize(Grabs[Hand].HandVelocity) * Scale >= MinThrowSpeed) { Throw = Carry; ++Throws; }
     }
+    if (Bridge != None && Bridge.NativePromoEvents != 0 && VSize(Throw) > 0)
+        Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_ZED_THROW, Grabs[Hand].Pawn, int(VSize(Throw)));
     `log("KF2VR_ZEDGRAB action=release hand=" $ Hand $ " throw=" $ int(VSize(Throw)) $ " carry=" $ int(VSize(Carry)) $ " mass=" $ int(HeldMass(Hand)));
     ClearGrab(Hand, "release", Throw, Carry);
     Pulse(Hand, 0.35, 0.035);

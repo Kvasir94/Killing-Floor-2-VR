@@ -272,6 +272,7 @@ function bool TryGrabHologram(int Hand)
     SwapHistory = InputOwner.Inventory.PreviousItem[Hand];
     if (!InputOwner.Inventory.Draw(Hand, W)) { InputOwner.ModeFeedback(Hand, false); return true; }
     WeldHand = Hand; bGrabbed = true; Restore = None;
+    if (Bridge.NativePromoEvents != 0) Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_WELDER_TAKEN, W, Hand);
     Welder = W; DrawnAt = Bridge.WorldInfo.RealTimeSeconds; AwaySince = -1;
     InputOwner.ModeFeedback(Hand, true);
     bHologramVisible = false; HoverMask = 0;

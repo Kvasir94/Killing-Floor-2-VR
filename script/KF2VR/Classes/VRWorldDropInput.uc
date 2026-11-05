@@ -385,6 +385,7 @@ function bool QueueRelease(VRWeaponRuntime R, int H, float Now)
     Actions[H].QueuedRoot = Position; Actions[H].QueuedFacing = QuatToRotator(Q);
     Actions[H].QueuedPalm = Bridge.PalmPosition(H); Actions[H].QueuedLinear = Linear; Actions[H].QueuedAngular = Angular;
     Actions[H].QueuedUntil = Now + ReleaseQueueSeconds;
+    if (Bridge.NativePromoEvents != 0) Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_GUN_RELEASE, R.Item, int(VSize(Linear)));
     return true;
 }
 
@@ -740,6 +741,8 @@ function DrainResult(int H)
     else if (Status != 1 && Actions[H].PendingAction == 1)
         `log("KF2VR_WORLD_DROP phase=catch-result hand=" $ H @ "weapon=" $ Actions[H].PendingWeapon
             @ "accepted=False reason=no-reply status=" $ Status);
+    if (Bridge.NativePromoEvents != 0 && Status == 1 && Action == 1 && Accepted != 0)
+        Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_GUN_CATCH, W, H);
     if (Status == 1) ApplyResult(W, H, Action, Accepted, GripRole, Position, Q);
     else if (Inventory.WorldDrops != None)
         Inventory.WorldDrops.AbandonPrediction(Actions[H].PendingWeapon, Actions[H].PendingRequest);

@@ -148,6 +148,7 @@ function ParryAttackers(VRHandsBridge Bridge)
         else bParried = Bridge.RequestNetworkFistParry(M, Hand);
         if (!bParried) continue;
         ++Parries;
+        if (Bridge.NativePromoEvents != 0) Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_PARRY, M, Hand);
         `log("KF2VR_MELEE kind=parry source=guard zed=" $ M.Class.Name);
         Feedback(Bridge, M);
     }

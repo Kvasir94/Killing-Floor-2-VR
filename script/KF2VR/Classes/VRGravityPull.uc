@@ -455,6 +455,7 @@ function SendPull(int H, vector Flick)
     Hands[H].bWorld = false; Hands[H].NextPalmAt = 0;
     Hands[H].Flight = None;
     Hands[H].SentAt = Bridge.WorldInfo.TimeSeconds;
+    if (Bridge.NativePromoEvents != 0) Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_GRAVITY_PULL, Hands[H].Target, H);
     if (Hands[H].LocalMesh != None)
     {
         if (Inventory.LocalDrops == None || !Inventory.LocalDrops.BeginGravity(Hands[H].LocalMesh, H))

@@ -113,6 +113,10 @@ simulated function BuildVisual()
         Visual = SkeletalCopy;
     }
     if (Visual == None) return;
+    // Keep the source's Indoor/Outdoor light mask; a fresh skeletal copy has
+    // none and would fly in black (see VRWorldDropGun.WorldLightingChannels).
+    if (Source.LightingChannels.Indoor || Source.LightingChannels.Outdoor)
+        Visual.SetLightingChannels(Source.LightingChannels);
     Visual.SetScale(Source.Scale * Target.DrawScale);
     Visual.SetScale3D(Source.Scale3D * Target.DrawScale3D);
     // The flight actor follows the visible item centre, not the factory's

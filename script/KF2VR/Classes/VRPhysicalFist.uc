@@ -485,6 +485,7 @@ simulated function ApplyContact(VRHandsBridge Bridge, int Hand, ImpactInfo Impac
         {
             ++Parries;
             LastBonus = LastBonus != "" ? LastBonus $ "+parry" : "parry";
+            if (Bridge.NativePromoEvents != 0) Bridge.NativePromoAction(class'VRHandsBridge'.const.PROMO_PARRY, Victim, Hand);
         }
         class'VRBreacherPhysics'.static.EmpowerPunch(Bridge.Human.Controller,Victim,Impact.HitLocation,
             Impact.HitInfo.BoneName,Damage,Momentum,HitType);

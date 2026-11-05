@@ -584,6 +584,20 @@ var int NativeWorldDropVersion;
 var float NativeLeanAllowance;
 var float ZedLeanMetres, ZedContactGap, LeanWallMargin;
 var int NativeRecenterRequested;
+// Set to 1 by the native adapter only while the -PromoEvents highlight log is
+// on; every NativePromoAction call site checks it first, so nothing runs otherwise.
+var int NativePromoEvents;
+// Highlight log action ids for NativePromoAction.
+const PROMO_RELOAD = 1;
+const PROMO_GRAVITY_PULL = 2;
+const PROMO_GUN_RELEASE = 3;
+const PROMO_GUN_CATCH = 4;
+const PROMO_ZED_GRAB = 5;
+const PROMO_ZED_THROW = 6;
+const PROMO_PARRY = 7;
+const PROMO_GRENADE_THROW = 8;
+const PROMO_TOMAHAWK_RECALL = 9;
+const PROMO_WELDER_TAKEN = 10;
 
 // Native calls this before eye-target resize, at the controller tick boundary.
 // Applying renderer settings during viewport Draw can retain the old Canvas
@@ -5295,6 +5309,13 @@ simulated function UpdateHands()
 // Native calls this when a local melee item plays its stock block or parry
 // effects (damage and grabs, solo or as a network client). The stock sound and
 // particle remain; this adds the one cue a VR player reliably notices.
+// Highlight log (-PromoEvents). The native adapter records each call in the
+// session's promo-events.jsonl with its own clock; the body does nothing.
+// Callers only call it while NativePromoEvents is set (-PromoEvents on). Subject is the
+// weapon or Zed involved, Value an action-specific number (rounds added,
+// release speed in UU/s). tools/multiplayer/promo_shots.py reads them.
+simulated final function NativePromoAction(byte Action, Object Subject, int Value) {}
+
 simulated function NotifyMeleeDefense(KFWeapon W, int Parried)
 {
     local VRWeaponRuntime R;
@@ -5308,6 +5329,7 @@ simulated function NotifyMeleeDefense(KFWeapon W, int Parried)
     Mask = 1 << Hand;
     if (Hands[1 - Hand].SupportOwner == Hand) Mask = 3;
     class'VRMeleeControls'.static.Pulse(self, Mask, Parried != 0 ? 1.0 : 0.65, Parried != 0 ? 0.12 : 0.05);
+    if (Parried != 0 && NativePromoEvents != 0) NativePromoAction(PROMO_PARRY, W, Hand);
     `log("KF2VR_MELEE_DEFENSE kind=" $ (Parried != 0 ? "parry" : "block") @ "weapon=" $ W.Class @ "hand=" $ Hand);
 }
 

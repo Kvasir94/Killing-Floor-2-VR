@@ -222,6 +222,17 @@ function bool Resolve(string Anchor, out vector At, out quat Q)
         if (H >= 0) At -= B.PalmPosition(H) - B.Hands[H].Position;
         return true;
     }
+    // grenade.<hand>: the chest grenade slot's grab point (VRChestGrenade
+    // .SlotGrabPosition), placed for that hand's palm.
+    if (Parts[0] == "grenade")
+    {
+        if (B.HandInventory == None || B.HandInventory.Input == None || B.HandInventory.Input.Grenade == None)
+            return false;
+        At = B.HandInventory.Input.Grenade.SlotGrabPosition(); Q = QuatFromRotator(rot(0,0,0));
+        H = HandOf(Parts[1]);
+        if (H >= 0) At -= B.PalmPosition(H) - B.Hands[H].Position;
+        return true;
+    }
     // pickup.<hand>: where that hand's wrist goes so its palm lands on the
     // nearest dropped gun's own catch grip (VRWorldDropGun.GripContacts: the
     // trigger grip, or a pump gun's fore-end), not the pickup's centre.
@@ -620,7 +631,36 @@ function string CarryOf(int H)
     if (L != None && L.bActive && L.HandMode == 1 && L.OffHand() == H) return "magazine";
     if (B.HandInventory != None && B.HandInventory.GravityPull != None && B.HandInventory.GravityPull.OwnsHand(H)) return "gravity";
     if (B.HandInventory != None && B.HandInventory.ZedGrab != None && B.HandInventory.ZedGrab.IsHolding(H)) return "zed";
+    if (B.HandInventory != None && B.HandInventory.Input != None && B.HandInventory.Input.Grenade != None
+        && B.HandInventory.Input.Grenade.IsHeld(H)) return "grenade";
     return "none";
+}
+
+function string FingerPose(int H)
+{
+    local quat Wrist;
+    local name Thumb, Index;
+    local VRFreeHandPose P;
+    if (B.Arms == None) return "none";
+    Thumb = name((H == 0 ? "Left" : "Right") $ "HandThumb1_1stP");
+    Index = name((H == 0 ? "Left" : "Right") $ "HandIndex2_1stP");
+    Wrist = B.Arms.GetBoneQuaternion(B.HandBone(H));
+    P = B.FreeHandPose;
+    return string(QuatToRotator(QuatProduct(QuatInvert(Wrist), B.Arms.GetBoneQuaternion(Thumb))))
+        $ "/" $ string(QuatToRotator(QuatProduct(QuatInvert(Wrist), B.Arms.GetBoneQuaternion(Index))))
+        $ "/ctl=" $ ((P != None && P.Joints.Length == 30) ? (string(P.Joints[H * 15].Control.BoneRotation)
+            $ ":" $ P.Joints[H * 15].Control.ControlStrength $ ":" $ P.Joints[H * 15].Control.bAddRotation) : "none");
+}
+
+function string CurlAxes(int H)
+{
+    local int J;
+    local string S;
+    if (B.FreeHandPose == None || B.FreeHandPose.Joints.Length != 30) return "none";
+    for (J = 0; J < 15; ++J)
+        S $= (J > 0 ? "|" : "") $ B.FreeHandPose.Joints[H * 15 + J].Axis.X $ "," $ B.FreeHandPose.Joints[H * 15 + J].Axis.Y
+            $ "," $ B.FreeHandPose.Joints[H * 15 + J].Axis.Z $ "," $ B.FreeHandPose.Joints[H * 15 + J].Degrees;
+    return S;
 }
 
 function string XPProbe(string Key)
@@ -1036,6 +1076,12 @@ function string Probe(string Key)
     // What this hand carries that is not a gun: magazine (a reload's or a
     // recovered one), gravity (a pull in flight) or zed (a held zed).
     case "carry": return CarryOf(H);
+    // Rendered free-hand fingers: thumb 1 and index 2 bone rotations relative
+    // to the wrist on the root hand rig, then the curl control's own target.
+    case "fingers": return FingerPose(H);
+    // The free-hand curl axes (bone-local) of that hand's fifteen finger joints,
+    // the frame authored finger deltas must agree with.
+    case "curl_axes": return CurlAxes(H);
     // The stock weapon clip playing now: name, position (s), rate and playing.
     case "anim": return (W == None || W.WeaponAnimSeqNode == None) ? "none"
         : (string(W.WeaponAnimSeqNode.AnimSeqName) $ ":" $ W.WeaponAnimSeqNode.CurrentTime $ ":" $ W.WeaponAnimSeqNode.Rate $ ":" $ W.WeaponAnimSeqNode.bPlaying);
