@@ -62,6 +62,16 @@ def graphics_row(page, on_change):
     return SettingRow("Graphics", "", holder(cell))
 
 
+def language_panel(window):
+    """The window's language, as joined buttons each named in its own language; it changes at once."""
+    import launcher_i18n
+    panel = Panel()
+    choice = Segmented(launcher_i18n.LANGUAGES, launcher_i18n.language(), window.set_language)
+    panel.add(SettingRow("Language", "The launcher's own text. The game and the in-game VR menu keep their language.",
+                         choice))
+    return panel
+
+
 def missing_game_actions(window, after):
     """What a player without the game found can do: get it, point at it, or look again."""
     return ((app.GET_GAME, lambda: QDesktopServices.openUrl(QUrl(app.STEAM_STORE_URL)), "secondary"),
@@ -202,6 +212,8 @@ class WelcomePage(Page):
             again = hbox(Button("Check again", self.check_again, size="sm"),
                          label("Checked just now" if self.checked else "", "muted"), None, margins=(34, T.S1, 0, 0))
             self.add_layout(again)
+        self.add(section("Language"))
+        self.add(language_panel(self.window_))
         # First-time setup can't finish without a game: Next waits for one.
         self.set_footer(primary=self.next_step, primary_text="Next",
                         enabled=install is not None or self.preselected is not None,
@@ -1127,6 +1139,8 @@ class SetupPage(Page):
             panel.add(setting_row(model.BY_KEY["LastMicMode"], state.settings_values,
                                   lambda chosen: self.persist({"LastMicMode": chosen}), running)[0])
         self.add(panel)
+        self.add(section("Language"))
+        self.add(language_panel(self.window_))
         if state.onboarding:
             return
         if not state.onboarding:
@@ -1261,6 +1275,7 @@ class HelpPage(Page):
         self.add(panel)
         self.add(section("Repair and bug reports"))
         panel = Panel()
+        rows = []
         for title, text, button, command, kind in (
                 ("Repair after a crash", "If the game crashed or was closed from Task Manager, this puts Killing "
                  "Floor 2 back to normal and keeps your settings. Close the game first.", "Repair",
@@ -1273,9 +1288,13 @@ class HelpPage(Page):
                 ("Logs folder", "The raw logs on this PC; they aren't anonymized, so keep them private.", "Open folder",
                  self.window_.open_logs, "secondary")):
             action = Button(button, command, kind=kind, size="sm")
-            action.setFixedWidth(150)
             if title == "Report a bug":
                 action.setIcon(glyph("external", T.TEXT, 14))
+            rows.append((title, text, action))
+        # One width for the four buttons: 150 px, or the widest name when a language needs more.
+        width = max([150] + [action.sizeHint().width() for _, _, action in rows])
+        for title, text, action in rows:
+            action.setFixedWidth(width)
             panel.add(SettingRow(title, text, action))
         self.add(panel)
         self.add(section("About"))

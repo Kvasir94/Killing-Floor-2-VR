@@ -16,7 +16,9 @@ import sys
 import threading
 
 import launcher_app as app
+import launcher_i18n as i18n
 from launcher_app import LOGS, parse_context
+from launcher_i18n import tr
 
 # Kept for callers and tests that address the window module directly.
 ROOT, game_folder = app.ROOT, app.game_folder
@@ -206,7 +208,7 @@ def build_window():
             return rail
 
         def _nav_button(self, name, page, active):
-            button = QPushButton(name.replace("&", "&&"))
+            button = QPushButton(tr(name).replace("&", "&&"))
             button.setProperty("nav", "true")
             button.setCheckable(True)
             button.setChecked(name == active)
@@ -312,6 +314,7 @@ def build_window():
                     page.prepare(**options)
                 page.rebuild()
             self.stack.setCurrentWidget(page)
+            self.current_name, self.current_options = name, options
             # The page itself takes focus, so no field opens wearing a focus ring; Tab still reaches every control.
             page.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
             page.setFocus()
@@ -330,6 +333,22 @@ def build_window():
                 search.clear()
             elif page is not None:
                 page.go_back()
+
+        def set_language(self, code):
+            """Show the window in another language at once: every page is built again in it."""
+            if code == i18n.language():
+                return
+            self.state.set_language(code)
+            settings = self.pages.get("settings")
+            if settings is not None:
+                self.saved_tab = settings.tab
+            for page in self.pages.values():
+                self.stack.removeWidget(page)
+                page.hide()
+                page.deleteLater()
+            self.pages, self.current = {}, None
+            self._draw_foot()
+            self.show_page(getattr(self, "current_name", "play"), **getattr(self, "current_options", {}))
 
         # ----- art and updates ------------------------------------------------------------
         def refresh_art(self):
@@ -421,7 +440,7 @@ def build_window():
             return self.pick_game_folder(None)
 
         def pick_game_folder(self, after=None):
-            picked = QFileDialog.getExistingDirectory(self, "Choose the killingfloor2 folder in your Steam or Epic library")
+            picked = QFileDialog.getExistingDirectory(self, tr("Choose the killingfloor2 folder in your Steam or Epic library"))
             if not picked:
                 return None
             install, problem = self.state.check_folder(picked)
@@ -436,7 +455,7 @@ def build_window():
 
         def pick_server_folder(self, after=None):
             start = str(Path(self.state.saved.server_root).parent)
-            picked = QFileDialog.getExistingDirectory(self, "Choose where the game server goes (about 32 GB)", start)
+            picked = QFileDialog.getExistingDirectory(self, tr("Choose where the game server goes (about 32 GB)"), start)
             if not picked:
                 return
             problem = self.state.choose_server_folder(picked)
@@ -526,7 +545,7 @@ def build_window():
             desktop = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation)
                            or Path.home() / "Desktop")
             start = desktop if desktop.is_dir() else Path.home() / "Documents"
-            folder = QFileDialog.getExistingDirectory(self, "Choose where to save your logs", str(start))
+            folder = QFileDialog.getExistingDirectory(self, tr("Choose where to save your logs"), str(start))
             if not folder:
                 return
             title, text, detail, kind = self.state.send_logs(folder)
@@ -584,12 +603,20 @@ def install_error_hook(window):
 
 
 def self_check(context):
-    """Packaging check: build every page and dialog offscreen without launching, saving or showing anything."""
+    """Packaging check: build every page and dialog offscreen, in every language, without launching, saving or
+    showing anything."""
     from PySide6.QtWidgets import QApplication
-    import launcher_settings as model
     import launcher_ui_theme as T
     application = QApplication.instance() or QApplication(sys.argv[:1])
     T.apply(application)
+    for code in i18n.CODES:
+        i18n.set_language(code)
+        _self_check_pages(context, application)
+    i18n.set_language("en")
+    return 0
+
+
+def _self_check_pages(context, application):
     state = app.LauncherState(context)
     Window = build_window()
     window = Window(state, art=False)
@@ -629,7 +656,6 @@ def self_check(context):
     application.processEvents()
     window.deleteLater()
     application.processEvents()
-    return 0
 
 
 def main(argv=None):
@@ -638,8 +664,9 @@ def main(argv=None):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         return self_check(context)
     state = app.LauncherState(context)
+    i18n.set_language(state.language())
     if not app.single_instance():
-        ctypes.windll.user32.MessageBoxW(None, "KF2-VR is already open in another window.", "KF2-VR", 0x40)
+        ctypes.windll.user32.MessageBoxW(None, tr("KF2-VR is already open in another window."), "KF2-VR", 0x40)
         return 0
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
@@ -666,8 +693,8 @@ if __name__ == "__main__":
         LOGS.mkdir(parents=True, exist_ok=True)
         import traceback
         (LOGS / "window-error.txt").write_text(traceback.format_exc(), encoding="utf-8")
-        ctypes.windll.user32.MessageBoxW(None, f"KF2-VR couldn't open its window:\n\n{error}\n\n"
+        ctypes.windll.user32.MessageBoxW(None, tr(f"KF2-VR couldn't open its window:\n\n{error}\n\n"
             "Use Save logs for a bug report when the launcher opens again. "
             "If you share window-error.txt from %LOCALAPPDATA%\\KF2VR\\Logs manually, review and remove personal details "
-            "first.", "KF2-VR", 0x10)
+            "first."), "KF2-VR", 0x10)
         raise SystemExit(1)

@@ -294,29 +294,43 @@ def search(query):
     shown = [s for s in SETTINGS if s.depth != "setup" and not s.headset_only]
     # A row's own options count as its names: "snap" finds Turning (Snap turn).
     def named(s):
-        return " ".join((s.label, s.aliases, s.group, *(name for _, name in s.choices))).casefold()
+        return " ".join((_shown(s.label, s.group, *(name for _, name in s.choices)), s.aliases)).casefold()
     def described(s):
-        return " ".join((named(s), s.help, *(line for _, line in s.choice_help))).casefold()
+        return " ".join((named(s), _shown(s.help, *(line for _, line in s.choice_help)))).casefold()
     found = [s for s in shown if all(p.search(named(s)) for p in patterns)]
     if found:
         return found
     return [s for s in shown if all(p.search(described(s)) for p in patterns)]
 
 
+def _shown(*texts):
+    """Texts as the player reads them: the English source and, in another language, what the window shows.
+    Old names (aliases) are English search words only and are never translated."""
+    from launcher_i18n import language, tr
+    texts = [text for text in texts if text]
+    if language() != "en":
+        texts += [tr(text) for text in texts]
+    return " ".join(texts)
+
+
 def _word_patterns(query):
     """One pattern per word: the word (or its singular, "shadows" -> "shadow"), at a word start, with an
-    optional plain ending (s, es, ing, ed, er)."""
+    optional plain ending (s, es, ing, ed, er). A Cyrillic word matches at a word start with any ending
+    ("перезаряд" finds Перезарядка, Перезарядки)."""
     def stem(word):
         return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
-    return [re.compile(r"(?<![a-z0-9])" + re.escape(stem(word)) + r"(?:s|es|ing|ed|er|ers)?(?![a-z0-9])")
-            for word in query.casefold().split()]
+    def pattern(word):
+        if re.search(r"[а-яё]", word):
+            return re.compile(r"(?<![0-9a-zа-яё])" + re.escape(word))
+        return re.compile(r"(?<![a-z0-9])" + re.escape(stem(word)) + r"(?:s|es|ing|ed|er|ers)?(?![a-z0-9])")
+    return [pattern(word) for word in query.casefold().split()]
 
 
 def search_elsewhere(query):
     """Settings the launcher leaves out that match, so search can say where they are changed."""
     patterns = _word_patterns(query)
     def text(s):
-        return " ".join((s.label, s.aliases, s.group)).casefold()
+        return " ".join((_shown(s.label, s.group), s.aliases)).casefold()
     return [s for s in SETTINGS if s.headset_only and not s.calibration and all(p.search(text(s)) for p in patterns)]
 
 
@@ -327,7 +341,7 @@ def preset_search(query):
     for preset, definition in PRESET_DEFS.items():
         if definition.get("row") is False:
             continue
-        text = " ".join([definition["label"], *definition.get("aliases", ()), *preset_targets(preset)]).casefold()
+        text = " ".join([_shown(definition["label"], *preset_targets(preset)), *definition.get("aliases", ())]).casefold()
         if all(word in text for word in words):
             found.append(preset)
     return found

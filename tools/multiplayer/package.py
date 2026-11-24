@@ -30,7 +30,7 @@ from dependencies import extract_verified, verified_archive, PINS
 LAUNCHER_MODULES = (
     "stable_features.py", "settings_registry.py", "machine_settings.py", "launcher_events.py", "friends.py", "launch_support.py", "native_fixture.py",
     "watchdog.py", "vr_config.py", "vr_graphics.py", "desktop_settings.py", "workshop_map.py", "workshop_loadout.py", "workshop_distribution.py",
-    "release_state.py", "launch_menu.py", "range_map.py", "installed_map_catalog.py", "launcher_gui.py", "launcher_app.py", "launcher_ui_theme.py", "launcher_ui_widgets.py", "launcher_ui_pages.py", "launcher_ui_settings.py", "launcher_art.py", "launcher_settings.py", "settings_graphics.py", "launcher_updates.py", "launcher_compat.py",
+    "release_state.py", "launch_menu.py", "range_map.py", "installed_map_catalog.py", "launcher_gui.py", "launcher_app.py", "launcher_ui_theme.py", "launcher_ui_widgets.py", "launcher_ui_pages.py", "launcher_ui_settings.py", "launcher_art.py", "launcher_settings.py", "settings_graphics.py", "launcher_updates.py", "launcher_compat.py", "launcher_i18n.py", "launcher_lang_ru.py",
     "recovery.py", "diagnostics.py", "dependencies.py", "join_code.py",
     "game_install.py", "epic_manual.py", "epic_launch.py", "epic_launch_options.py",
     "epic_broker.py", "epic_session.py", "epic_recovery.py",

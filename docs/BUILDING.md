@@ -18,6 +18,7 @@ Qt for Python (PySide6, pinned wheels) and Windows APIs; its source and module i
 | `tools/multiplayer/package.py` (`LAUNCHER_MODULES`) | Exact shipped module inventory and portable entry-point checks |
 | `tools/multiplayer/session.py`, `native_fixture.py`, `release_state.py`, `recovery.py`, `watchdog.py` | Deployment validation, process ownership, recovery and release integrity |
 | `tools/multiplayer/diagnostics.py`, `vr_config.py`, `desktop_settings.py`, `workshop_loadout.py` | Local report sanitization and preference/content handling |
+| `tools/multiplayer/launcher_i18n.py`, `launcher_lang_ru.py` | Window language: English source text translated where it is shown, and the Russian table |
 | `tools/install-multiplayer-server.ps1`, `tools/multiplayer/dependencies.py`, `tools/dependency-pins.json` | Explicit server bootstrap and SHA-256-checked vendor downloads |
 | `tools/play-main.ps1`, `Play-KF2VR.cmd` | Checkout entry points; `-Gui` and legacy `-DevGui` use the same selected Python window |
 

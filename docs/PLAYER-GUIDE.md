@@ -52,6 +52,12 @@ Feel and fit (snap angle, turn speed, your height, how guns sit in your hands)
 are tuned in the headset menu: press the **Menu** button on your left
 controller, or press and hold both sticks.
 
+**Language.** The launcher window is in English or Russian (Русский). It starts
+in your Windows display language; change it under **Language** on the first
+page or on Game & headset, and it switches at once. Only the launcher's own text
+changes: the game keeps its own language, and the in-game VR menu stays in
+English, so the launcher names its pages in English (Settings › Comfort).
+
 Upgrading from an older release keeps your saved settings and skips both steps.
 The Play page says once that settings were reorganized; the old Classic,
 Interactive and Advanced reloads show as Button, Manual and Realistic.
