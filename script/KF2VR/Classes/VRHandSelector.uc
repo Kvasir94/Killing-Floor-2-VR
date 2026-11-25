@@ -698,6 +698,7 @@ simulated function Text(Canvas C, string Value, float X, float Y, float Width, f
     local float XL, YL, Scale;
     local string ShortValue;
     if (Value == "") return;
+    Value = class'VRText'.static.T(Value);
     C.Font = class'KFGameEngine'.static.GetKFCanvasFont();
     if (C.Font == None) C.Font = class'Engine'.static.GetLargeFont();
     C.TextSize(Value, XL, YL);

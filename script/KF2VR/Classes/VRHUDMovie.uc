@@ -388,9 +388,9 @@ function SendInteractionMessageToGFX(string MessageString, string ButtonName)
     { Super.SendInteractionMessageToGFX(MessageString, ButtonName); return; }
     Rows = SplitString(MessageString, HoldCommandDelimiter);
     TextObject = CreateObject("Object");
-    TextObject.SetString("message", Rows[0]);
+    TextObject.SetString("message", class'VRText'.static.T(Rows[0]));
     TextObject.SetBool("bHoldCommand", Rows.Length > 1);
-    TextObject.SetString("holdMessage", Rows.Length > 1 ? Rows[1] : "");
+    TextObject.SetString("holdMessage", Rows.Length > 1 ? class'VRText'.static.T(Rows[1]) : "");
     TextObject.SetString("buttonName", "");
     TextObject.SetString("holdString", "");
     TextObject.SetString("tapString", "");

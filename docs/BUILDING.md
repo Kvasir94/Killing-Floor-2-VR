@@ -194,6 +194,13 @@ deployment and runtime resources retain their locks. Preserve previous release f
 server/Workshop caches and user data. Launch with `Play-KF2VR.cmd` and keep the
 launcher open for cleanup. See [launch options](../PLAY-MULTIPLAYER.md).
 
+The in-game VR text is written in English in the script classes; the functions
+that draw it pass it through `VRText.T`, which shows it in the game's language.
+The Russian table is `tools/vr-text-ru.txt` (`English => Russian`, `*` for any
+part); `python tools/vr_text.py` regenerates `script/KF2VR/Classes/VRTextRussian.uc`
+from it, and `tools/tests/test_vr_text.py` fails while that class is out of date.
+A new or changed English string draws in English until the table has it.
+
 For launcher/package checks without a game session:
 
 ```powershell

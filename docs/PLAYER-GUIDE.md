@@ -54,9 +54,9 @@ controller, or press and hold both sticks.
 
 **Language.** The launcher window is in English or Russian (Русский). It starts
 in your Windows display language; change it under **Language** on the first
-page or on Game & headset, and it switches at once. Only the launcher's own text
-changes: the game keeps its own language, and the in-game VR menu stays in
-English, so the launcher names its pages in English (Settings › Comfort).
+page or on Game & headset, and it switches at once. The in-game VR menu,
+training, the watch and the weapon wheel follow the same choice from the next
+start; the game's own menus keep the game's language.
 
 Upgrading from an older release keeps your saved settings and skips both steps.
 The Play page says once that settings were reorganized; the old Classic,
