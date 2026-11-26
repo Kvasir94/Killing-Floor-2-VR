@@ -52,7 +52,8 @@ Feel and fit (snap angle, turn speed, your height, how guns sit in your hands)
 are tuned in the headset menu: press the **Menu** button on your left
 controller, or press and hold both sticks.
 
-**Language.** The launcher window is in English or Russian (Русский). It starts
+**Language.** The launcher window is in English or Russian (Русский), or in a
+language someone has written a file for (see TRANSLATING.md in the docs folder). It starts
 in your Windows display language; change it under **Language** on the first
 page or on Game & headset, and it switches at once. The in-game VR menu,
 training, the watch and the weapon wheel follow the same choice from the next

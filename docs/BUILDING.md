@@ -18,7 +18,7 @@ Qt for Python (PySide6, pinned wheels) and Windows APIs; its source and module i
 | `tools/multiplayer/package.py` (`LAUNCHER_MODULES`) | Exact shipped module inventory and portable entry-point checks |
 | `tools/multiplayer/session.py`, `native_fixture.py`, `release_state.py`, `recovery.py`, `watchdog.py` | Deployment validation, process ownership, recovery and release integrity |
 | `tools/multiplayer/diagnostics.py`, `vr_config.py`, `desktop_settings.py`, `workshop_loadout.py` | Local report sanitization and preference/content handling |
-| `tools/multiplayer/launcher_i18n.py`, `launcher_lang_ru.py` | Window language: English source text translated where it is shown, and the Russian table |
+| `tools/multiplayer/launcher_i18n.py`, `tools/languages/*.json` | Languages: English source text translated where it is shown, in the window and (written into the game config at each start) the in-game VR text |
 | `tools/install-multiplayer-server.ps1`, `tools/multiplayer/dependencies.py`, `tools/dependency-pins.json` | Explicit server bootstrap and SHA-256-checked vendor downloads |
 | `tools/play-main.ps1`, `Play-KF2VR.cmd` | Checkout entry points; `-Gui` and legacy `-DevGui` use the same selected Python window |
 
@@ -194,12 +194,16 @@ deployment and runtime resources retain their locks. Preserve previous release f
 server/Workshop caches and user data. Launch with `Play-KF2VR.cmd` and keep the
 launcher open for cleanup. See [launch options](../PLAY-MULTIPLAYER.md).
 
-The in-game VR text is written in English in the script classes; the functions
-that draw it pass it through `VRText.T`, which shows it in the game's language.
-The Russian table is `tools/vr-text-ru.txt` (`English => Russian`, `*` for any
-part); `python tools/vr_text.py` regenerates `script/KF2VR/Classes/VRTextRussian.uc`
-from it, and `tools/tests/test_vr_text.py` fails while that class is out of date.
-A new or changed English string draws in English until the table has it.
+The launcher and the in-game VR text are written in English; what puts text on
+screen translates it (`launcher_i18n.tr` in the window, `VRText.T` in the
+game). Translations are data, not code: one JSON file per language in
+`tools/languages/` (players can add their own, see
+[TRANSLATING](TRANSLATING.md)). At every start `friends.py` writes the chosen
+language's `vr` table into `[KF2VR.VRText]` of the session's `KFGame.ini`, so a
+translation change needs no script build and leaves the packages' hashes alone.
+A new or changed English string shows in English until a language file has it;
+`python tools/multiplayer/launcher_i18n.py --check FILE` reports a file's
+mistakes and how much of it is translated.
 
 For launcher/package checks without a game session:
 

@@ -588,8 +588,7 @@ class LauncherState:
     def language(self):
         """The window's language: the player's choice, else the Windows display language."""
         import launcher_i18n
-        chosen = _preferences().get("language")
-        return chosen if chosen in launcher_i18n.CODES else launcher_i18n.detect()
+        return launcher_i18n.saved_language()
 
     def set_language(self, code):
         import launcher_i18n

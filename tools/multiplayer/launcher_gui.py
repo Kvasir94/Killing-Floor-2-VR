@@ -609,7 +609,7 @@ def self_check(context):
     import launcher_ui_theme as T
     application = QApplication.instance() or QApplication(sys.argv[:1])
     T.apply(application)
-    for code in i18n.CODES:
+    for code in i18n.codes():
         i18n.set_language(code)
         _self_check_pages(context, application)
     i18n.set_language("en")

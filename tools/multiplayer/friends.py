@@ -702,6 +702,12 @@ def configure_role(run, name, user, game, args):
             text = set_ini(text, section, launch_graphics_summary(args))
         path.write_text(text, encoding="utf-16")
     if name == "driver":
+        # The in-game VR text follows the launcher's language, chosen again at every start.
+        import launcher_i18n
+        path = configs / "KFGame.ini"
+        language = launcher_i18n.saved_language(getattr(args, "profile_root", None))
+        path.write_text(set_ini(read_ini(path), launcher_i18n.VR_SECTION, launcher_i18n.vr_text_config(language)),
+                        encoding="utf-16")
         # Personal client effects, applied after desktop profile restoration too.
         path = configs / "KFEngine.ini"
         level = 0  # FleX is retired; stale profiles and flags cannot enable it.

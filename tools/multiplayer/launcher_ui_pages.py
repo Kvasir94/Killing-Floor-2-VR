@@ -66,9 +66,18 @@ def language_panel(window):
     """The window's language, as joined buttons each named in its own language; it changes at once."""
     import launcher_i18n
     panel = Panel()
-    choice = Segmented(launcher_i18n.LANGUAGES, launcher_i18n.language(), window.set_language)
-    panel.add(SettingRow("Language", "The launcher's own text. The game and the in-game VR menu keep their language.",
-                         choice))
+    launcher_i18n.refresh()   # a language file the player has just added shows up
+    choice = Segmented(launcher_i18n.languages(), launcher_i18n.language(), window.set_language)
+    panel.add(SettingRow("Language", "The launcher and the in-game VR menu, from the next start. The game's own "
+                         "menus keep the game's language.", choice))
+
+    def open_folder():
+        folder = launcher_i18n.user_folder()
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+    panel.add(SettingRow("Your own translation", "Put a language file here, such as de.json; it is listed above. "
+                         "TRANSLATING.md in the docs folder explains how to write one.",
+                         Button("Open folder", open_folder, size="sm")))
     return panel
 
 
