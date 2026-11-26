@@ -185,6 +185,21 @@ class LanguageFileTest(unittest.TestCase):
         self.assertEqual(len(problems), 5, problems)
         self.assertIn('"plural" is one of', i18n.check({"name": "X", "plural": "xx"})[0])
 
+    def test_update_adds_new_texts_and_keeps_translations(self):
+        reference = {"name": "Русский", "plural": "ru",
+                     "launcher": {"# Play": "", "Play solo": "Соло", "New text": "Новое"},
+                     "vr": {"BACK": "НАЗАД"}}
+        old = {"name": "Deutsch", "plural": "en", "launcher": {"# Old": "", "Play solo": "Solo spielen",
+                                                               "Gone text": "Weg", "Gone empty": ""}}
+        updated, unused = i18n._updated(old, reference)
+        self.assertEqual(updated["name"], "Deutsch")
+        self.assertEqual(list(updated["launcher"].items()),
+                         [("# Play", ""), ("Play solo", "Solo spielen"), ("New text", ""),
+                          ("# no longer in the program (kept for reference; delete when done)", ""), ("Gone text", "Weg")])
+        self.assertEqual(updated["vr"], {"BACK": ""})
+        self.assertEqual(unused, {"launcher": 1, "vr": 0})
+        self.assertEqual(i18n._updated(updated, reference)[0], updated)   # running it again changes nothing
+
     def test_template_and_check_from_the_command_line(self):
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder, "de.json")

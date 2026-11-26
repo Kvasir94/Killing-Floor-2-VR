@@ -26,8 +26,9 @@ that put text on screen call tr(). In the launcher table:
   is tried last. What is still not found stays English (and is listed in the
   file KF2VR_I18N_MISSING names, for whoever keeps the translation complete).
 
-Run this file with --check FILE to check a language file, or --template FILE to
-start a new one from every English text the shipped languages translate.
+Run this file with --template FILE to start a new language file from every
+English text, --update FILE to add the English texts a newer release has (and
+move the ones it dropped to the end), or --check FILE to check a file.
 """
 import json
 import os
@@ -412,10 +413,40 @@ def _template(source):
             **{section: {key: "" for key in data.get(section, {})} for section in ("launcher", "vr")}}
 
 
+def _updated(data, reference):
+    """A language file brought up to date with the reference: every English text the reference has, in its
+    order and under its headings, keeping the file's translations (new texts empty); texts the reference no
+    longer has go last under their own heading, so nothing translated is lost."""
+    result = {key: value for key, value in data.items() if key not in ("launcher", "vr")}
+    unused = {}
+    for section in ("launcher", "vr"):
+        own = data.get(section) if isinstance(data.get(section), dict) else {}
+        merged = {key: ("" if key.startswith("# ") else own.get(key, "")) for key in reference.get(section, {})}
+        left = {key: value for key, value in own.items()
+                if key not in merged and not key.startswith("# ") and value != ""}
+        if left:
+            merged["# no longer in the program (kept for reference; delete when done)"] = ""
+            merged.update(left)
+        result[section] = merged
+        unused[section] = len(left)
+    return result, unused
+
+
+def _write(path, data):
+    Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+
 def main(argv):
+    if len(argv) == 2 and argv[0] == "--update":
+        updated, unused = _updated(_read(argv[1]), _read(SHIPPED / "ru.json"))
+        _write(argv[1], updated)
+        for section in ("launcher", "vr"):
+            empty = sum(1 for key, value in updated[section].items() if not key.startswith("# ") and value == "")
+            print(f"{section}: {empty} text(s) to translate (empty), {unused[section]} no longer used (at the end)")
+        return 0
     if len(argv) == 2 and argv[0] == "--template":
         source = SHIPPED / "ru.json"
-        Path(argv[1]).write_text(json.dumps(_template(source), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        _write(argv[1], _template(source))
         print(f"Wrote {argv[1]}: every English text, ready to translate. Name the file <code>.json (de.json).")
         return 0
     if len(argv) >= 2 and argv[0] == "--check":
