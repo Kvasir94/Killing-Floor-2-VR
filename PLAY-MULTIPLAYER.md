@@ -81,6 +81,10 @@ VAC, password and content paths are managed). Settings changed in-game during a
 desktop session are saved to **%LOCALAPPDATA%/KF2VR/Profile/desktop-settings.json**
 and carried into the next desktop session; changing the same setting later in
 stock KF2 takes precedence. VR sessions keep their fixed 1280x720 mirror window.
+Every player session gets the launcher's language: `[KF2VR.VRText]` in the
+session's KFGame.ini holds that language's in-game table from
+`tools/languages/<code>.json` or the profile's **Languages** folder (none for
+English), written at each start and never saved back ([TRANSLATING](docs/TRANSLATING.md)).
 Voice (Vivox) is always initialised for player clients, VR and desktop: KF2's
 Steam lobby code crashes at the menu without it.
 

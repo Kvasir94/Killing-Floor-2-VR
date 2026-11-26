@@ -2962,6 +2962,7 @@ function DrawSwatch(Canvas C, int Swatch, float Left, float Top, float W, float 
 function DrawFitText(Canvas C, string Value, float Scale, float Width)
 {
     local float XL, YL;
+    Value = class'VRText'.static.T(Value);
     C.TextSize(Value, XL, YL);
     if (XL > 0) Scale = FMin(Scale, Width / XL);
     C.DrawText(Value, false, Scale, Scale);
@@ -2970,6 +2971,7 @@ function DrawFitText(Canvas C, string Value, float Scale, float Width)
 function DrawRightText(Canvas C, string Value, float Scale, float Right, float Y, float Width)
 {
     local float XL, YL;
+    Value = class'VRText'.static.T(Value);
     C.TextSize(Value, XL, YL);
     if (XL > 0) Scale = FMin(Scale, Width / XL);
     C.SetPos(Right - XL * Scale, Y);

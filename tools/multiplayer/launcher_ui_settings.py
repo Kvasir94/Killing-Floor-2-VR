@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QPushButton, QSizePolicy
 import launcher_app as app
 import launcher_settings as model
 import launcher_ui_theme as T
+from launcher_i18n import tr
 from launcher_ui_pages import (ControlsDialog, graphics_pick_line, preset_control, preset_line, setting_control,
                                setting_help)
 from launcher_ui_widgets import (SplitRow, Button, Callout, Page, Panel, SettingRow, Stepper, TextField, hbox, holder,
@@ -86,7 +87,7 @@ class SettingsPage(Page):
         tabs = hbox(spacing=0)
         self.tabs = {}
         for category in TABS:
-            button = QPushButton(category.replace("&", "&&"))
+            button = QPushButton(tr(category).replace("&", "&&"))
             button.setProperty("tab", "true")
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)

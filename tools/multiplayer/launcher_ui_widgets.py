@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QComboBox, QComple
                                QStyledItemDelegate, QVBoxLayout, QWidget)
 
 import launcher_ui_theme as T
+from launcher_i18n import tr
 from launcher_app import Heading  # a dropdown entry that only labels the options below it
 
 
@@ -24,8 +25,18 @@ def polish(widget):
     widget.update()
 
 
+class Label(QLabel):
+    """A label whose text is shown in the player's language (launcher_i18n)."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(tr(text), parent)
+
+    def setText(self, text):
+        super().setText(tr(text))
+
+
 def label(text="", role="body", tone=None, wrap=False, selectable=False):
-    widget = QLabel(text)
+    widget = Label(text)
     widget.setProperty("role", role)
     if tone:
         widget.setProperty("tone", tone)
@@ -178,7 +189,7 @@ def chevron(painter, center, size, direction, color, width=1.8):
 # ----- buttons --------------------------------------------------------------------
 class Button(QPushButton):
     def __init__(self, text, on_click=None, kind="secondary", size="md", parent=None):
-        super().__init__(text.replace("&", "&&"), parent)
+        super().__init__(tr(text).replace("&", "&&"), parent)
         self.setProperty("kind", kind)
         self.setProperty("size", size)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -186,6 +197,9 @@ class Button(QPushButton):
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         if on_click is not None:
             self.clicked.connect(lambda checked=False: on_click())
+
+    def setText(self, text):
+        super().setText(tr(text).replace("&", "&&"))
 
 
 class Mark(QWidget):
@@ -332,7 +346,7 @@ class _SegmentButton(QPushButton):
     """One segment; the recommended one is named under it by its Segmented ("Recommended")."""
 
     def __init__(self, text, recommended=False):
-        super().__init__(text)
+        super().__init__(tr(text).replace("&", "&&"))
         self.recommended = recommended
 
     def minimumSizeHint(self):
@@ -376,7 +390,7 @@ class Segmented(QWidget):
             if button.recommended:
                 # The recommended option says so in its own name: a small star after it, nothing boxed.
                 button.setText(button.text() + "  ★")
-                button.setToolTip("Recommended")
+                button.setToolTip(tr("Recommended"))
         self.setLayout(layout)
         self.set_value(value)
         if on_change is not None:
@@ -392,7 +406,7 @@ class Segmented(QWidget):
         for stored, button in self.buttons.items():
             button.setChecked(stored == value)
             # A tooltip only says what isn't on screen: another option's line, and which one we recommend.
-            tip = "" if stored == value else self.tips.get(stored, "")
+            tip = "" if stored == value else tr(self.tips.get(stored, ""))
             button.setToolTip(tip)
         if value not in self.buttons:
             # No option holds (a Custom preset): nothing reads as chosen.
@@ -490,7 +504,7 @@ class Dropdown(QComboBox):
             self.setEditable(True)
             self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
             self.lineEdit().setStyleSheet("border: none; background: transparent; padding: 0; min-height: 0;")
-            self.lineEdit().setPlaceholderText("Type to search")
+            self.lineEdit().setPlaceholderText(tr("Type to search"))
             self.lineEdit().editingFinished.connect(self._restore_text)
             self.lineEdit().textChanged.connect(self._typed)
         self.set_options(options, value)
@@ -507,7 +521,7 @@ class Dropdown(QComboBox):
         self.clear()
         items = list(options.items()) if isinstance(options, dict) else list(options)
         for stored, text in items:
-            self.addItem(str(text), stored)
+            self.addItem(tr(str(text)), stored)
             if isinstance(stored, Heading):
                 item = self.model().item(self.count() - 1)
                 item.setData(True, HEADING_ROLE)
@@ -517,7 +531,7 @@ class Dropdown(QComboBox):
         index = next((i for i, (stored, _) in enumerate(items) if stored == value), choosable[0] if choosable else -1)
         self.setCurrentIndex(index)
         if self.searchable:
-            names = [str(text) for stored, text in items if not isinstance(stored, Heading)]
+            names = [tr(str(text)) for stored, text in items if not isinstance(stored, Heading)]
             completer = QCompleter(names, self)
             completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
             completer.setFilterMode(Qt.MatchFlag.MatchContains)
@@ -635,7 +649,7 @@ class TextField(QLineEdit):
 
     def __init__(self, text="", placeholder="", secret=False, clearable=False, search=False, width=None, parent=None):
         super().__init__(text, parent)
-        self.setPlaceholderText(placeholder)
+        self.setPlaceholderText(tr(placeholder))
         if width:
             self.setFixedWidth(width)
         if search:
@@ -643,7 +657,7 @@ class TextField(QLineEdit):
         self._clear = None
         if clearable:
             self._clear = self.addAction(glyph("clear", T.TEXT_2), QLineEdit.ActionPosition.TrailingPosition)
-            self._clear.setToolTip("Clear")
+            self._clear.setToolTip(tr("Clear"))
             self._clear.triggered.connect(self.clear)
             self._clear.setVisible(bool(text))
             self.textChanged.connect(lambda value: self._clear.setVisible(bool(value)))
@@ -651,7 +665,7 @@ class TextField(QLineEdit):
         if secret:
             self.setEchoMode(QLineEdit.EchoMode.Password)
             self._eye = self.addAction(glyph("eye", T.TEXT_2), QLineEdit.ActionPosition.TrailingPosition)
-            self._eye.setToolTip("Show password")
+            self._eye.setToolTip(tr("Show password"))
             self._eye.triggered.connect(self._flip)
             self._eye.setVisible(bool(text))
             self.textChanged.connect(lambda value: self._eye.setVisible(bool(value)))
@@ -660,7 +674,7 @@ class TextField(QLineEdit):
         hidden = self.echoMode() == QLineEdit.EchoMode.Password
         self.setEchoMode(QLineEdit.EchoMode.Normal if hidden else QLineEdit.EchoMode.Password)
         self._eye.setIcon(glyph("eye-off" if hidden else "eye", T.TEXT_2))
-        self._eye.setToolTip("Hide password" if hidden else "Show password")
+        self._eye.setToolTip(tr("Hide password" if hidden else "Show password"))
 
     def set_invalid(self, invalid):
         self.setProperty("invalid", "true" if invalid else "false")
@@ -684,13 +698,13 @@ class Stepper(QWidget):
             button.setFixedSize(36, 36)
             button.setStyleSheet("padding: 0;")
             button.setIcon(glyph(kind, T.TEXT, 16))
-            button.setToolTip("Less" if kind == "minus" else "More")
+            button.setToolTip(tr("Less" if kind == "minus" else "More"))
         self.field = QLineEdit(str(value))
         self.field.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sign = "-?" if minimum < 0 else ""
         pattern = rf"{sign}\d{{0,6}}" if self.whole else rf"{sign}\d{{0,6}}([.,]\d{{0,3}})?"
         self.field.setValidator(QRegularExpressionValidator(QRegularExpression(pattern), self.field))
-        unit_text = {"s": "sec"}.get(unit, unit)
+        unit_text = tr({"s": "sec"}.get(unit, unit))
         self.unit = label(unit_text, "muted")
         self.unit.setParent(self.field)
         if unit_text:
@@ -701,7 +715,7 @@ class Stepper(QWidget):
         else:
             self.field.setFixedWidth(64)
             self.unit.hide()
-        self.range_text = f"{format(minimum, 'g')}–{format(maximum, 'g')} {self.UNIT_NAMES.get(unit, unit)}".strip()
+        self.range_text = f"{format(minimum, 'g')}–{format(maximum, 'g')} {tr(self.UNIT_NAMES.get(unit, unit))}".strip()
         self.setToolTip(self.range_text)
         self.field.installEventFilter(self)
         self.message = label("", "help", "warn")
@@ -1001,7 +1015,7 @@ class Callout(QFrame):
             close.setProperty("kind", "ghost")
             close.setFixedSize(28, 28)
             close.setStyleSheet("padding: 0; min-height: 28px;")
-            close.setToolTip("Dismiss")
+            close.setToolTip(tr("Dismiss"))
             close.setCursor(Qt.CursorShape.PointingHandCursor)
             close.clicked.connect(dismiss)
             layout.addWidget(close, 0, Qt.AlignmentFlag.AlignTop)
@@ -1431,7 +1445,7 @@ class Dialog(QDialog):
         body.addWidget(accent)
         heading = label(title, "h2", wrap=True)
         body.addWidget(heading)
-        self.setWindowTitle(f"{title} - KF2-VR" if title else "KF2-VR")
+        self.setWindowTitle(f"{tr(title)} - KF2-VR" if title else "KF2-VR")
         self.content = body
         if text:
             body.addWidget(label(text, "body", wrap=True))

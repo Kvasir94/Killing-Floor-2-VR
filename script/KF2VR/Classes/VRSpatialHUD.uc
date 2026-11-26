@@ -1538,6 +1538,8 @@ simulated function Text(Canvas C, string Value, float X, float Y, float Width, f
     local float XL, YL, Scale, XScale, Fit;
     local string ShortValue;
     if (Value == "") return;
+    // Translated first: a Cyrillic label selects the stock font, not the ASCII watch atlas.
+    Value = class'VRText'.static.T(Value);
     C.Font = bWatchText ? GetWatchFont(bDigits, Value) : class'KFGameEngine'.static.GetKFCanvasFont();
     if (C.Font == None) C.Font = class'Engine'.static.GetLargeFont();
     C.TextSize(Value, XL, YL);
@@ -2370,6 +2372,7 @@ simulated function NoticeLine(Canvas C, string Value, float X, float Y, float He
 {
     local float XL, YL, SX, SY;
     if (Value == "") return;
+    Value = class'VRText'.static.T(Value);
     C.Font = class'KFGameEngine'.static.GetKFCanvasFont();
     if (C.Font == None) C.Font = class'Engine'.static.GetLargeFont();
     C.TextSize("Ag", XL, YL);

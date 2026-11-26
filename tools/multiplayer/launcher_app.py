@@ -585,6 +585,16 @@ class LauncherState:
     def set_update_check(self, enabled):
         _update_preferences({"update_check": bool(enabled)})
 
+    def language(self):
+        """The window's language: the player's choice, else the Windows display language."""
+        import launcher_i18n
+        return launcher_i18n.saved_language()
+
+    def set_language(self, code):
+        import launcher_i18n
+        launcher_i18n.set_language(code)
+        _update_preferences({"language": launcher_i18n.language()})
+
     def find_update(self):
         """(tag, url) of a newer public release, or None; network, so call it off the window's thread."""
         return launcher_updates.available_update(self.version or "", timeout=5, build=self.build) or None

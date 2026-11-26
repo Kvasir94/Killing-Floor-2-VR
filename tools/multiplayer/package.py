@@ -30,7 +30,7 @@ from dependencies import extract_verified, verified_archive, PINS
 LAUNCHER_MODULES = (
     "stable_features.py", "settings_registry.py", "machine_settings.py", "launcher_events.py", "friends.py", "launch_support.py", "native_fixture.py",
     "watchdog.py", "vr_config.py", "vr_graphics.py", "desktop_settings.py", "workshop_map.py", "workshop_loadout.py", "workshop_distribution.py",
-    "release_state.py", "launch_menu.py", "range_map.py", "installed_map_catalog.py", "launcher_gui.py", "launcher_app.py", "launcher_ui_theme.py", "launcher_ui_widgets.py", "launcher_ui_pages.py", "launcher_ui_settings.py", "launcher_art.py", "launcher_settings.py", "settings_graphics.py", "launcher_updates.py", "launcher_compat.py",
+    "release_state.py", "launch_menu.py", "range_map.py", "installed_map_catalog.py", "launcher_gui.py", "launcher_app.py", "launcher_ui_theme.py", "launcher_ui_widgets.py", "launcher_ui_pages.py", "launcher_ui_settings.py", "launcher_art.py", "launcher_settings.py", "settings_graphics.py", "launcher_updates.py", "launcher_compat.py", "launcher_i18n.py",
     "recovery.py", "diagnostics.py", "dependencies.py", "join_code.py",
     "game_install.py", "epic_manual.py", "epic_launch.py", "epic_launch_options.py",
     "epic_broker.py", "epic_session.py", "epic_recovery.py",
@@ -154,6 +154,9 @@ def copy_launcher_tools(source_root, output):
     shutil.copy2(source_root / "tools/epic-pack/Install KF2VR for Epic.bat", epic)
     for name in ("install-multiplayer-server.ps1", "vr-defaults.json", "settings-definition.json", "dependency-pins.json"):
         shutil.copy2(source_root / "tools" / name, output / "tools" / name)
+    (output / "tools/languages").mkdir(exist_ok=True)
+    for path in sorted((source_root / "tools/languages").glob("*.json")):
+        shutil.copy2(path, output / "tools/languages" / path.name)
 
 
 def check_portable_launchers(output, python):
@@ -392,7 +395,7 @@ def main(argv=None):
         shutil.copy2(documents / "docs/public-alpha/BREACHER.md", output / "docs")
     shutil.copy2(documents / "docs/public-alpha/FEEDBACK-QUESTIONS.md", output / "docs")
     shutil.copy2(documents / "docs/public-alpha/CONTROLS-CARD.txt", output / "docs")
-    for name in ("LINUX-DESKTOP.md", "EPIC-DESKTOP.md"):
+    for name in ("LINUX-DESKTOP.md", "EPIC-DESKTOP.md", "TRANSLATING.md"):
         shutil.copy2(ROOT / "docs" / name, output / "docs" / name)
     notices = output / "notices"
     notices.mkdir()
