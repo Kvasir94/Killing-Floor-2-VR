@@ -250,6 +250,7 @@ slot to recall. Behavior, tuning and pending acceptance.
 | Y / B pressed with that hand beside the head | Toggle the flashlight (head lamp), whatever either hand holds. The hand must be within 20 UU of the head and not in front of the face, so a raised pistol still quick-swaps; the press never opens the wheel |
 | Empty, free hand: fresh grip squeeze beside the head | Toggle the flashlight using the same temple zone. Release before another toggle; reloads, held items, transfers and body contacts keep their ownership |
 | Y / B, hold 250 ms then release | Open spatial inventory for that same hand; it stays open. The opening hand's stick is idle while it is open; the other stick keeps its locomotion role |
+| **CUSTOMIZE HANDS & WEAPONS > Y / B GESTURES** | Switch off any of the three Y / B gestures above: tap (previous weapon), double tap (free the hand), tap then hold (syringe). With both two-press gestures off, a single tap acts at once instead of waiting 240 ms for a second |
 | Point or move the opening controller toward an icon, then squeeze and release its trigger | Equip into that same hand on release and close the wheel automatically; stick tilt never highlights a sector |
 | Trigger with the hand back at the centre (nothing highlighted), or Y / B while the wheel is open | Cancel |
 | Wheel > DROP > DROP (weapon) | Throw that hand's item as the stock pickup a teammate can collect. Stock rules apply: the knife, 9mm backup, welder and VR pair members cannot be dropped |
@@ -646,6 +647,17 @@ host can turn it off for everyone with `VRGravityPull=0` on the server URL.
 
 ## Trader
 
+**Skip the trader from the wristwatch.** While the trader is open, bring the
+free hand (no weapon in it) to the watch: the hand forms a pointing fist and
+ticks a dot-dash haptic. Pull and hold its trigger: the face turns a dimmed
+red under the glass, SKIP / TRADER TIME and PULL AND HOLD / THE TRIGGER show on
+the left screen, and ten segments on the right fill bottom up over 1 s, with
+pulses rising to the end. Then the stock skip-trader request is sent (in
+multiplayer, the stock vote); the watch reads SKIP TRADER: VOTED. Letting go
+of the trigger early resets the fill. At the watch that trigger is not a use
+press, so it cannot open the trader beside you; a hand holding a weapon fires
+as normal.
+
 In VR the shop list offers only weapons that have an authored VR profile, plus
 stock duals that convert into paired members on pickup (`VRWeaponPair.Families`).
 Ported items stay listed. Desktop players and server-side purchases keep the
@@ -1016,8 +1028,11 @@ No mutate commands are required during normal headset play.
    - Toggle its visibility, adjust scale (50-200%), and move it forward/back or
      up/down by 1 Unreal unit per step (each offset clamped to -12..12).
    - The plate is sized to be read at arm's length: the magazine count and the
-     fire mode (AUTO / SEMI / BURST) are both large enough without raising the
-     gun to your face. Push scale past 100% if you want it larger still.
+     row under it are both large enough without raising the gun to your face.
+     The fire mode shows as KF2's own selector art (staggered bullets for auto,
+     a stack for burst, one bullet for single; other modes the gun's own
+     `FireModeIconPaths` icon, a word only without one). Push scale past 100%
+     if you want it larger still.
    - **RESET READOUT** restores the discreet default; **BACK (AUTO-SAVED)**
      returns to spatial-menu placement. Edits and resets save immediately.
 
@@ -1151,7 +1166,7 @@ came from; Back/Cancel do not write settings.
 | Locomotion and Comfort | Smooth/teleport, movement hand/direction, snap/smooth turning, +/- snap angle or smooth sensitivity, teleport blink, clot grab turning |
 | Interaction | Dominant hand, primary/support grip, independent Solo/online Zed grabbing, supported reload/manual pump switches and melee hit-stop |
 | Menu and Interface | Pointer hand, panel placement, game-menu backdrop, recenter/current-height capture |
-| HUD and Readouts | Weapon readout visibility/fit, top HUD fit/follow, wristwatch HUD, damage popups, reload hints and wrist inspection preview |
+| HUD and Readouts | Weapon readout visibility/fit, top HUD fit/follow, wristwatch HUD, damage popups, reload hints and wrist inspection preview. Interaction prompts (doors, pickups) and map messages show on the alert strip about 18 cm below the eyes, drawn 1.4x the native strip; wave notices sit above it |
 | Graphics | +/- render scale, applied per-eye dimensions, game quality, lighting and gamma; locked VR effects are status text |
 | Calibration | Global weapon fit/profile reset, current-height capture, chest-zone capture/reset and wrist inspection |
 

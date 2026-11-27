@@ -92,8 +92,8 @@ var int NativeMenuTransitionEpoch;
 var bool bCalibrationPending;
 var int PendingCalibrationPage, PendingCalibrationEpoch;
 var float PendingCalibrationUntil;
-var int PageParents[56];
-var byte PageParentValid[56];
+var int PageParents[62];
+var byte PageParentValid[62];
 var array<string> MatchMaps;
 var int MapListPage, ResetTarget;
 
@@ -150,7 +150,9 @@ const PAGE_GLOW_COLOR = 52;
 const PAGE_GLOW_ADVANCED = 53;
 const PAGE_GRIP = 54;
 const PAGE_MELEE = 55;
-const PAGE_COUNT = 56;
+// 56-60 are the HOLSTERS & POUCHES pages (feature/body-holsters).
+const PAGE_UPPER_GESTURES = 61;
+const PAGE_COUNT = 62;
 
 enum MenuAction
 {
@@ -919,6 +921,9 @@ function float HandValue(name Key)
         case 'WorldDropReturnPolicy': return (Hands != None ? Hands.WorldDropReturnPolicy : C.default.WorldDropReturnPolicy);
         case 'WorldDropReturnSeconds': return (Hands != None ? Hands.WorldDropReturnSeconds : C.default.WorldDropReturnSeconds);
         case 'bSupportHandCarry': return int(Hands != None ? Hands.bSupportHandCarry : C.default.bSupportHandCarry);
+        case 'bNoUpperTapSwap': return int(Hands != None ? Hands.bNoUpperTapSwap : C.default.bNoUpperTapSwap);
+        case 'bNoUpperDoubleTapOpen': return int(Hands != None ? Hands.bNoUpperDoubleTapOpen : C.default.bNoUpperDoubleTapOpen);
+        case 'bNoUpperTapHoldSyringe': return int(Hands != None ? Hands.bNoUpperTapHoldSyringe : C.default.bNoUpperTapHoldSyringe);
         case 'bDisableGravityPull': return int(Hands != None ? Hands.bDisableGravityPull : C.default.bDisableGravityPull);
         case 'bDisableSupportHandAim': return int(Hands != None ? Hands.bDisableSupportHandAim : C.default.bDisableSupportHandAim);
         case 'bControllerRelativeMovement': return int(Hands != None ? Hands.bControllerRelativeMovement : C.default.bControllerRelativeMovement);
@@ -1016,6 +1021,18 @@ function SetHandValue(name Key, float Value)
         case 'bSupportHandCarry':
             if (Hands != None) Hands.bSupportHandCarry = Value != 0;
             else C.default.bSupportHandCarry = Value != 0;
+            break;
+        case 'bNoUpperTapSwap':
+            if (Hands != None) Hands.bNoUpperTapSwap = Value != 0;
+            else C.default.bNoUpperTapSwap = Value != 0;
+            break;
+        case 'bNoUpperDoubleTapOpen':
+            if (Hands != None) Hands.bNoUpperDoubleTapOpen = Value != 0;
+            else C.default.bNoUpperDoubleTapOpen = Value != 0;
+            break;
+        case 'bNoUpperTapHoldSyringe':
+            if (Hands != None) Hands.bNoUpperTapHoldSyringe = Value != 0;
+            else C.default.bNoUpperTapHoldSyringe = Value != 0;
             break;
         case 'bDisableGravityPull':
             if (Hands != None) Hands.bDisableGravityPull = Value != 0;
@@ -1357,6 +1374,7 @@ function BuildMenuRows()
         AddRow(4, "PICKUPS & ZED GRABS", MA_Page, PAGE_DROPS);
         AddRow(5, "MELEE", MA_Page, PAGE_MELEE);
         AddRow(6, "GLOW COLORS & LASER", MA_Page, PAGE_GLOW_COLORS);
+        AddRow(7, "Y / B GESTURES", MA_Page, PAGE_UPPER_GESTURES);
         AddRow(8, "RESET HANDS & WEAPONS", MA_ResetCategory, PAGE_INTERACTION, 3);
         AddBack(PAGE_INTERACTION);
         break;
@@ -1367,6 +1385,16 @@ function BuildMenuRows()
         AddRow(3, "SUPPORT-HAND CARRY: " $ OnOff('bSupportHandCarry'), MA_HandToggle, 0, 1, 'bSupportHandCarry');
         AddRow(4, "TWO-HANDED AIMING: " $ (HandValue('bDisableSupportHandAim') != 0 ? "OFF" : "ON"), MA_HandToggle, 0, 1, 'bDisableSupportHandAim');
         AddRow(5, "GUN ANGLE: " $ GunAngleLabel(), MA_GunAngle, 0, 1);
+        AddBack(PAGE_HANDS_ADVANCED);
+        break;
+    case PAGE_UPPER_GESTURES:
+        // Each Y / B gesture can be switched off; a tap then acts at once
+        // instead of waiting to see whether a second one follows.
+        AddRow(0, "TAP, PREVIOUS WEAPON: " $ (HandValue('bNoUpperTapSwap') != 0 ? "OFF" : "ON"), MA_HandToggle, 0, 1, 'bNoUpperTapSwap');
+        AddRow(1, "DOUBLE TAP, FREE THE HAND: " $ (HandValue('bNoUpperDoubleTapOpen') != 0 ? "OFF" : "ON"), MA_HandToggle, 0, 1, 'bNoUpperDoubleTapOpen');
+        AddRow(2, "TAP, THEN HOLD, SYRINGE: " $ (HandValue('bNoUpperTapHoldSyringe') != 0 ? "OFF" : "ON"), MA_HandToggle, 0, 1, 'bNoUpperTapHoldSyringe');
+        AddRow(4, "HOLDING Y / B OPENS THE WEAPON WHEEL", MA_None, 0, 4);
+        AddRow(5, "WITH THE TWO-PRESS GESTURES OFF, A TAP ACTS AT ONCE", MA_None, 0, 4);
         AddBack(PAGE_HANDS_ADVANCED);
         break;
     case PAGE_MELEE:
@@ -2674,6 +2702,7 @@ function string PageTitle()
         case PAGE_AIM_ADVANCED: return "CUSTOMIZE / AIM";
         case PAGE_GRIP: return "CUSTOMIZE / GRIP";
         case PAGE_MELEE: return "CUSTOMIZE / MELEE";
+        case PAGE_UPPER_GESTURES: return "CUSTOMIZE / Y / B GESTURES";
         case PAGE_GLOW_COLORS: return "CUSTOMIZE / GLOW COLORS & LASER";
         case PAGE_GLOW_ADVANCED: return "GLOW COLORS / EACH GLOW SEPARATELY";
         case PAGE_LASER: return "GLOW COLORS / LASER SIGHT";

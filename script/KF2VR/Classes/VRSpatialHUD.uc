@@ -45,6 +45,18 @@ var HUDWidgetVisibility WidgetVisibility[3];
 var HUDWidgetVisibility BossWidgetVisibility;
 var bool bInitialized;
 var bool bWatchText;
+// Trader time: bring the free hand to the watch (it points, the hand ticks a
+// dot-dash pattern), hold its trigger SkipHoldSeconds while the face fills,
+// and the stock skip-trader vote is sent (RequestSkipTrader). The hand must be
+// empty: a gun's trigger fires. That trigger is no use press meanwhile
+// (WatchClaims), so it cannot open the trader beside you.
+var float SkipPressSince, SkipHoldSeconds, SkipTouchRadius, SkipPointRadius, NextSkipPulse, SkipPatternStart;
+var int SkipProgress, SkipHand;
+var bool bSkipOffered, bSkipVoted, bSkipNear, bSkipPressing, bSkipPointing;
+// The alert strip (interaction prompts, map messages) and the notice card
+// above it: the native pose sits 32 cm below the head at chin height and
+// reads small, so it is raised and enlarged here.
+var float AlertRaise, AlertScale;
 // The 2:1 target is stretched over the wider physical screen; watch glyphs and
 // sprites divide their X scale by this so they keep their true proportions.
 var float WatchAspect;
@@ -716,12 +728,121 @@ simulated function bool GetWristwatchTransform(out vector Position, out rotator 
     return true;
 }
 
+simulated function bool SkipTraderOpen()
+{
+    local KFGameReplicationInfo GRI;
+    local KFPlayerReplicationInfo PRI;
+    if (PC == None || !bSessionSupported) return false;
+    GRI = KFGameReplicationInfo(WorldInfo.GRI);
+    PRI = KFPlayerReplicationInfo(PC.PlayerReplicationInfo);
+    return GRI != None && PRI != None && GRI.bMatchHasBegun && !GRI.bWaveIsActive
+        && (GRI.bTraderIsOpen || GRI.bForceSkipTraderUI) && PRI.bHasSpawnedIn;
+}
+
+// The free hand beside the watch claims its trigger from the use press.
+// Two short lines, one above the other, so a label reads large on a narrow
+// screen. Each line is its own text, translated on its own.
+simulated function TwoLines(Canvas C, string First, string Second, float X, float Y, float Width, float LineHeight, color Tint)
+{
+    Text(C, First, X, Y, Width, LineHeight, Tint, true);
+    Text(C, Second, X, Y + LineHeight * 1.05, Width, LineHeight, Tint, true);
+}
+
+// The skip progress as the watch's own segment strip, standing upright and
+// filling from the bottom.
+simulated function SkipSegments(Canvas C, float X, float Y, float Width, float Height, int Count, float Value)
+{
+    local int I, Lit;
+    local float Cell, Gap;
+    Gap = 10;
+    Cell = (Height - Gap * (Count - 1)) / Count;
+    Lit = Clamp(int(Count * Value + 0.5), 0, Count);
+    if (Value > 0 && Lit == 0) Lit = 1;
+    for (I = 0; I < Count; ++I)
+        Box(C, X, Y + Height - Cell - I * (Cell + Gap), Width, Cell, I < Lit ? WatchInk : WatchTrack);
+}
+
+simulated function bool WatchClaims(int Hand)
+{
+    return bSkipPointing && Hand == SkipHand;
+}
+
+simulated function bool SkipHandFree(int Hand)
+{
+    local VRHandInventory Inv;
+    Inv = Bridge.HandInventory;
+    return Inv != None && Inv.Registry != None && Inv.Registry.GetPrimary(Hand) == None
+        && Inv.Registry.GetSupport(Hand) == None && !Inv.HasWorldGrab(Hand)
+        && (Inv.Input == None || !Inv.Input.HandCarrying(Hand));
+}
+
+simulated function UpdateSkipTouch(bool bVisible, vector Position, rotator Orientation)
+{
+    local vector Tip, Palm;
+    local float Now, Near, Scale, Phase;
+    local KFPlayerReplicationInfo PRI;
+    local bool bWasNear, bTrigger, bPoint;
+    Now = WorldInfo.RealTimeSeconds;
+    PRI = PC != None ? KFPlayerReplicationInfo(PC.PlayerReplicationInfo) : None;
+    bSkipOffered = SkipTraderOpen();
+    bSkipVoted = bSkipOffered && PRI != None && PRI.bVotedToSkipTraderTime;
+    bWasNear = bSkipNear;
+    bSkipNear = false; bPoint = false;
+    SkipHand = Clamp(Bridge.PreferredWeaponHand, 0, 1);
+    if (bVisible && bSkipOffered && !bSkipVoted && (Bridge.NativeValidMask & (1 << SkipHand)) != 0
+        && Bridge.FreeHandPose != None && Bridge.FreeHandPose.bReady && Bridge.Arms != None && SkipHandFree(SkipHand))
+    {
+        // The index fingertip, or the palm, on the face.
+        Tip = Bridge.Arms.GetBoneLocation(Bridge.FreeHandPose.FingerBone(SkipHand, 1, 3));
+        Palm = Bridge.PalmPosition(SkipHand);
+        Near = FMin(VSize(Tip - Position), VSize(Palm - Position));
+        Scale = FClamp(Bridge.WristwatchScale, 0.5, 2.0);
+        bPoint = Near <= SkipPointRadius * Scale;
+        bSkipNear = Near <= SkipTouchRadius * Scale;
+    }
+    if (bPoint != bSkipPointing)
+    {
+        bSkipPointing = bPoint;
+        if (Bridge.FreeHandPose != None) Bridge.FreeHandPose.SetPointing(SkipHand, bPoint);
+    }
+    bTrigger = (Bridge.NativeValidMask & Bridge.NativeTriggerActiveMask & Bridge.NativeTriggerMask & (1 << SkipHand)) != 0;
+    if (!bSkipNear) { bSkipPressing = false; SkipPressSince = 0; SkipProgress = 0; return; }
+    if (!bWasNear) { SkipPatternStart = Now; NextSkipPulse = Now; }
+    if (!bTrigger)
+    {
+        bSkipPressing = false; SkipPressSince = 0; SkipProgress = 0;
+        // Dot, dash, pause: the hand is on the watch.
+        if (Now >= NextSkipPulse)
+        {
+            Phase = (Now - SkipPatternStart) % 0.9;
+            if (Phase < 0.3) { Bridge.QueueHandHaptic(1 << SkipHand, 0.25, 0.035); NextSkipPulse = Now + 0.3; }
+            else { Bridge.QueueHandHaptic(1 << SkipHand, 0.25, 0.16); NextSkipPulse = Now + 0.6; }
+        }
+        return;
+    }
+    if (!bSkipPressing) { bSkipPressing = true; SkipPressSince = Now; NextSkipPulse = Now; }
+    // Held: stronger and steady, rising with the fill.
+    SkipProgress = Clamp(int(20 * (Now - SkipPressSince) / SkipHoldSeconds), 0, 20);
+    if (Now >= NextSkipPulse)
+    {
+        Bridge.QueueHandHaptic(1 << SkipHand, 0.45 + 0.4 * SkipProgress / 20.0, 0.06);
+        NextSkipPulse = Now + 0.07;
+    }
+    if (Now - SkipPressSince < SkipHoldSeconds) return;
+    PC.RequestSkipTrader();
+    `log("KF2VR_WATCH skip-trader requested",,'KF2VR');
+    Bridge.QueueHandHaptic(3, 0.9, 0.1);
+    bSkipPressing = false; SkipPressSince = 0; SkipProgress = 0;
+    bSkipVoted = true;
+}
+
 simulated function PlaceWristwatch()
 {
     local vector Position;
     local rotator Orientation;
     local bool bVisible;
     bVisible = GetWristwatchTransform(Position, Orientation);
+    UpdateSkipTouch(bVisible, Position, Orientation);
     // Resource readiness survives contextual concealment.
     Panels[0].PlacePanel(Position, Orientation,
         vect(11.4688, 4.7104, 0) * FClamp(Bridge.WristwatchScale, 0.5, 2.0), bVisible);
@@ -1060,7 +1181,7 @@ simulated function UpdateDisplay()
     // wave notices use the notice panel and the alert strip carries map
     // messages and interaction prompts. There is no floating session readout
     // (#86), so the stock wave/boss widgets stay hidden for the whole session.
-    Panels[4].PlacePanel(Bridge.HudAlertPosition, Bridge.HudAlertRotation, Bridge.HudAlertSize,
+    Panels[4].PlacePanel(AlertPosition(), Bridge.HudAlertRotation, Bridge.HudAlertSize * AlertScale,
         (Bridge.NativeHudMask & 16) != 0 && (MapMessagesActive()
             || (bSessionSupported && InteractionPromptActive())));
     PlaceNoticePanel();
@@ -1316,7 +1437,7 @@ simulated function ReadValues()
         @ bSessionSupported @ bWaveActive @ WaveNumber @ WaveLabel @ SessionLabel @ SessionValue @ int(WaveClear * 24)
         @ bBossActive @ BossLabel @ int(BossHealth * 100) @ bTraderNavActive @ (bTraderNavActive ? int(TraderBearingAngle * 8) : 0)
         @ int(TraderDistance) @ TraderElevationDiff @ int(ObjectiveProgress * 100) @ bObjectiveWarning
-        @ ChatShowing() @ ChatSender @ ChatText);
+        @ ChatShowing() @ ChatSender @ ChatText @ bSkipOffered @ bSkipVoted @ bSkipNear @ bSkipPressing @ SkipProgress);
     Dirty(4, InteractionPromptText @ InteractionPromptButton @ InteractionHoldText @ InteractionHoldButton
         @ InteractionPromptActive());
 }
@@ -1966,10 +2087,28 @@ simulated function RenderWatchFace(Canvas C)
         if (ChatShowing()) WatchChat(C, 560, 424); else WatchSupplies(C, 560, 424);
     }
     WatchRule(C, 560, 404, 424);
-    if (WatchAlertLabel != "")
+    if (!bWaveActive && bSkipOffered && bSkipVoted && WatchAlertLabel == "")
+        WatchAnnunciator(C, "SKIP TRADER: VOTED", 560, 420, 424, 58, WatchMuted, false);
+    else if (WatchAlertLabel != "")
         WatchAnnunciator(C, WatchAlertLabel, 560, 420, 424, 58, bWatchAlertCritical ? Red : Amber, bWatchAlertCritical);
     else if (StatusFeed != None && StatusFeed.SpatialSkills.Length > 0)
         DrawBuffIcons(C, 560, 424, 424, 52);
+    // The free hand on the watch during trader time: the skip face, filling
+    // while the trigger is held.
+    if (!bWaveActive && bSkipOffered && !bSkipVoted && bSkipNear)
+    {
+        // The face's own parts, as health and armor: the glass, a dimmed red
+        // wash, a red-lit brass frame per screen; the words on the left fit
+        // either language (bFit), ten segments on the right fill bottom up.
+        WatchGlassBacking(C);
+        Box(C, 0, 0, C.ClipX, C.ClipY, MakeColor(120, 14, 12, bSkipPressing ? 90 : 60));
+        WatchFrame(C, 16, 16, 472, 480, Red);
+        WatchFrame(C, 536, 16, 472, 480, Red);
+        TwoLines(C, "SKIP", "TRADER TIME", 48, 56, 408, 96, WatchInk);
+        WatchRule(C, 48, 268, 408);
+        TwoLines(C, "PULL AND HOLD", "THE TRIGGER", 48, 292, 408, 80, bSkipPressing ? WatchInk : WatchMuted);
+        SkipSegments(C, 576, 52, 392, 408, 10, SkipProgress / 20.0);
+    }
     bWatchText = false;
 }
 
@@ -2008,8 +2147,59 @@ simulated function ReadoutBackground(Canvas C, float X, float Y, float Width, fl
     }
 }
 
+// The fire mode as KF2's own selector art: four staggered bullets (auto), a
+// stack of three (burst), one (single). Named modes take their stock icon;
+// any other mode the gun's own FireModeIconPaths entry.
+// KF2's selector icons share one canvas scale, taken from the auto icon (four
+// staggered bullets, 256 x 128). A single mode draws the auto icon's first
+// bullet alone, cropped to its own texels (U 14-151, V 0-35, read from the
+// cooked texture), so it matches the auto and burst bullets exactly.
+simulated function ModeArtAt(Canvas C, Texture2D Image, float X, float Y, float Width, float Height, color Tint, bool bSingle)
+{
+    local Texture2D Reference;
+    local float Scale, DrawWidth, DrawHeight, U, V, UL, VL;
+    Reference = Texture2D(DynamicLoadObject("ui_firemodes_tex.UI_FireModeSelect_BulletAuto", class'Texture2D', true));
+    if (bSingle && Reference != None) Image = Reference;
+    if (Image == None || Image.SizeX <= 0 || Image.SizeY <= 0) return;
+    if (Reference == None || Reference.SizeX <= 0 || Reference.SizeY <= 0) Reference = Image;
+    Scale = FMin(Width / Reference.SizeX, Height / Reference.SizeY);
+    Scale = FMin(Scale, FMin(Width / Image.SizeX, Height / Image.SizeY));
+    U = 0; V = 0; UL = Image.SizeX; VL = Image.SizeY;
+    if (bSingle)
+    {
+        U = Image.SizeX * 14.0 / 256.0; UL = Image.SizeX * 138.0 / 256.0;
+        V = 0; VL = Image.SizeY * 36.0 / 128.0;
+        // One bullet of four: draw it at twice the shared scale so it reads.
+        Scale *= 2.0;
+    }
+    DrawWidth = UL * Scale; DrawHeight = VL * Scale;
+    C.SetPos(X + (Width - DrawWidth) * 0.5, Y + (Height - DrawHeight) * 0.5);
+    C.DrawColor = Tint;
+    C.DrawTile(Image, DrawWidth, DrawHeight, U, V, UL, VL,
+        MakeLinearColor(LinearChannel(Tint.R), LinearChannel(Tint.G), LinearChannel(Tint.B), float(Tint.A) / 255.0),
+        false, BLEND_Translucent);
+}
+
+simulated function Texture2D SingleModeIcon()
+{
+    return Texture2D(DynamicLoadObject("ui_firemodes_tex.UI_FireModeSelect_BulletSingle", class'Texture2D', true));
+}
+
+simulated function Texture2D ModeIcon(HUDWeaponReadout A)
+{
+    local string Label, Path;
+    Label = Caps(A.ModeLabel);
+    if (InStr(Label, "AUTO") >= 0) Path = "ui_firemodes_tex.UI_FireModeSelect_BulletAuto";
+    else if (InStr(Label, "BURST") >= 0) Path = "ui_firemodes_tex.UI_FireModeSelect_BulletBurst";
+    else if (InStr(Label, "SEMI") >= 0 || InStr(Label, "SINGLE") >= 0)
+        Path = "ui_firemodes_tex.UI_FireModeSelect_BulletSingle";
+    if (Path != "") return Texture2D(DynamicLoadObject(Path, class'Texture2D', true));
+    return A.FireModeImage;
+}
+
 simulated function RenderWeaponReadout(Canvas C, HUDWeaponReadout A)
 {
+    local Texture2D ModeArt;
     local color Tint, DetailTint;
     local string Detail, CountLabel, SecondaryDetail;
     local float CountWidth, DetailWidth, GroupWidth, PanelWidth, PanelLeft, PanelHeight;
@@ -2043,12 +2233,20 @@ simulated function RenderWeaponReadout(Canvas C, HUDWeaponReadout A)
     if (A.bUsesAmmo && A.Magazine == 0) Tint = ReadoutRed;
     if (A.bReloading) Tint = Amber;
     DetailTint = (A.bReloading || A.Magazine == 0) ? Tint : ReadoutMuted;
+    // The fire mode is a choice the player checks at a glance: its icon in
+    // full ink, the word only when the gun has no icon for it.
+    if (Detail != "" && Detail == A.ModeLabel)
+    {
+        DetailTint = ReadoutInk;
+        ModeArt = ModeIcon(A);
+    }
     // One centred stack, sized from both rows. EMPTY and RELOADING belong to
     // the count rather than an absent reserve/icon column. Keep wide special
     // ammo labels and secondary resources inside the same readable footprint.
-    CountWidth = FMin(640, TextWidth(C, CountLabel, A.bPhysicalSecondary ? 184 : 224));
-    DetailWidth = FMin(bSecondaryIcon ? 576 : 640, TextWidth(C, Detail, 48));
-    GroupWidth = DetailWidth + (bSecondaryIcon ? 64 : 0);
+    CountWidth = FMin(640, TextWidth(C, CountLabel, A.bPhysicalSecondary ? 184 : 196));
+    DetailWidth = FMin(bSecondaryIcon ? 560 : 640, TextWidth(C, Detail, 58));
+    if (ModeArt != None) DetailWidth = 200;
+    GroupWidth = DetailWidth + (bSecondaryIcon ? 80 : 0);
     if (A.bPhysicalSecondary) GroupWidth = FMax(GroupWidth, FMin(640, TextWidth(C, SecondaryDetail, 36)));
     PanelWidth = FMax(320, FMax(CountWidth, GroupWidth) + 80);
     PanelLeft = (800 - PanelWidth) * 0.5;
@@ -2056,9 +2254,9 @@ simulated function RenderWeaponReadout(Canvas C, HUDWeaponReadout A)
     ReadoutBackground(C, PanelLeft, 8, PanelWidth, PanelHeight);
     // Native HudTextAlpha supplies coverage, as on the wheel: one glyph pass
     // avoids an offset duplicate. Larger digits remain the primary reading.
-    Text(C, CountLabel, (800 - CountWidth) * 0.5, 12, CountWidth, A.bPhysicalSecondary ? 184 : 224, Tint, true, false, false, true);
+    Text(C, CountLabel, (800 - CountWidth) * 0.5, 12, CountWidth, A.bPhysicalSecondary ? 184 : 196, Tint, true, false, false, true);
     if (bSecondaryIcon)
-        Art(C, A.SecondaryImage, (800 - GroupWidth) * 0.5, 260, 48, 48, ReadoutMuted);
+        Art(C, A.SecondaryImage, (800 - GroupWidth) * 0.5, 226, 64, 64, ReadoutMuted);
     if (A.bPhysicalSecondary)
     {
         Text(C, Detail, PanelLeft + 40, 202, PanelWidth - 80, 32, DetailTint, true, false, true, true);
@@ -2066,8 +2264,10 @@ simulated function RenderWeaponReadout(Canvas C, HUDWeaponReadout A)
         Text(C, SecondaryDetail, PanelLeft + 40, 256, PanelWidth - 80, 36,
             A.bSecondaryReload ? Amber : ReadoutMuted, true, false, true, true);
     }
-    else Text(C, Detail, (800 - GroupWidth) * 0.5 + (bSecondaryIcon ? 64 : 0), 260,
-        DetailWidth, 48, DetailTint, true, false, false, true);
+    else if (ModeArt != None) ModeArtAt(C, ModeArt, (800 - GroupWidth) * 0.5 + (bSecondaryIcon ? 80 : 0), 218,
+        DetailWidth, 80, DetailTint, ModeArt == SingleModeIcon());
+    else Text(C, Detail, (800 - GroupWidth) * 0.5 + (bSecondaryIcon ? 80 : 0), 228,
+        DetailWidth, 58, DetailTint, true, false, false, true);
     // Charge is a real changing resource. Low magazines use amber digits and
     // empty ones add a red word; their old track read as a stray line.
     if (bCharge)
@@ -2347,6 +2547,13 @@ simulated function float NoticeCardHeight(int Lines)
     return 4.0 + Min(NoticeRows, Lines) * 1.8 + (NoticePageCount(Lines) > 1 ? 1.2 : 0.0);
 }
 
+simulated function vector AlertPosition()
+{
+    local vector Forward, Right, Up;
+    GetAxes(Bridge.HudAlertRotation, Forward, Right, Up);
+    return Bridge.HudAlertPosition + Up * AlertRaise;
+}
+
 simulated function PlaceNoticePanel()
 {
     local vector Forward, Right, Up, AlertAt, At, Size;
@@ -2357,12 +2564,12 @@ simulated function PlaceNoticePanel()
         && (Bridge.NativeHudMask & 16) != 0;
     if (!Visible) { Panels[13].HidePanel(); return; }
     GetAxes(Bridge.HudAlertRotation, Forward, Right, Up);
-    Distance = VSize(Bridge.HudAlertPosition - Bridge.HeadPosition);
+    Distance = VSize(AlertPosition() - Bridge.HeadPosition);
     if (Distance < 1) { Panels[13].HidePanel(); return; }
-    AlertAt = Bridge.HeadPosition + Normal(Bridge.HudAlertPosition - Bridge.HeadPosition) * 100.0;
-    AlertHeight = Bridge.HudAlertSize.Y * 100.0 / Distance;
-    At = AlertAt + Up * (AlertHeight * 0.5 + 3.0 + NoticeHeight * 0.5);
-    Size.X = 58.0; Size.Y = NoticeHeight;
+    AlertAt = Bridge.HeadPosition + Normal(AlertPosition() - Bridge.HeadPosition) * 100.0;
+    AlertHeight = Bridge.HudAlertSize.Y * AlertScale * 100.0 / Distance;
+    Size.X = 58.0 * AlertScale; Size.Y = NoticeHeight * AlertScale;
+    At = AlertAt + Up * (AlertHeight * 0.5 + 3.0 + Size.Y * 0.5);
     Panels[13].PlacePanel(At, Bridge.HudAlertRotation, Size, true);
 }
 
@@ -2500,6 +2707,11 @@ defaultproperties
     Muted=(R=163,G=164,B=164,A=235)
     Accent=(R=192,G=31,B=38,A=245)
     Amber=(R=232,G=174,B=69,A=255)
+    SkipHoldSeconds=1.0
+    AlertRaise=14.0
+    AlertScale=1.4
+    SkipTouchRadius=8.0
+    SkipPointRadius=14.0
     DoshGreen=(R=118,G=200,B=74,A=255)
     ReadoutBacking=(R=10,G=11,B=12,A=120)
     ReadoutInk=(R=230,G=231,B=227,A=255)
