@@ -18,7 +18,7 @@ MANDATORY = {
     "DepthOfField": "False", "DepthOfFieldQuality": "0", "bAllowTemporalAA": "False",
     "PostProcessAA": "False", "UseVsync": "False", "AmbientOcclusion": "False",
     "HBAO": "False", "AllowRadialBlur": "False", "AllowScreenSpaceReflections": "False", "LensFlares": "False",
-    "ImageGrainScaler": "0.500000",
+    "ImageGrainScaler": "0.000000",
 }
 
 

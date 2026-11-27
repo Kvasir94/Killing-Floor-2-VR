@@ -239,9 +239,9 @@ function vector ContactAt(float S) { return RootPos() + QuatRotateVector(RootQ()
 function float ContactDistance(int Hand)
 {
     if (!NeedsAction() || Cycle == None || Gun.MySkelMesh == None || Hand != OffHand()) return 1000000;
-    // M4 has no separate button bone. Its sampled release-hand pose locates
-    // the carrier-control button; touching the exposed bolt is not release.
-    if (Gun.Class == class'KFWeap_Shotgun_M4') return VSize(Bridge.Hands[Hand].Position - Contact());
+    // The M4 has no separate button bone: its sampled release-hand pose locates
+    // the bolt release, and a squeeze on the charging handle (RW_Bolt, where
+    // the amber glow sits) releases the locked bolt as well (#214).
     return FMin(VSize(Bridge.Hands[Hand].Position - Contact()),
         VSize(Bridge.PalmPosition(Hand) - Gun.MySkelMesh.GetBoneLocation(
             class'VRReloadFinishCatalog'.default.Profiles[Profile].Bone)));
@@ -315,7 +315,14 @@ function Update()
         if (Kind == 0) { Complete(); return; }
     }
     if (!Down) { bEngaged = false; Motion.Reset(); return; }
-    if (!Motion.Check(LocalHandPosition(), Owner.Now())) { CancelHand(OffHand()); return; }
+    if (!Motion.Check(LocalHandPosition(), Owner.Now()))
+    {
+        // R69: a frame gap or a jump keeps the grip; rebase it at the current
+        // amount so only travel after the gap moves the part.
+        if (!Motion.Begin(LocalHandPosition(), Owner.Now())) { CancelHand(OffHand()); return; }
+        Cycle.GrabOffset = P - Cycle.ContactLocal(Amount);
+        return;
+    }
     Next = Cycle.ProjectNearby(P - Cycle.GrabOffset, Amount);
     // A held mechanism retains its grip through lateral controller drift.
     // Tracking continuity and explicit grip release still cancel ownership.

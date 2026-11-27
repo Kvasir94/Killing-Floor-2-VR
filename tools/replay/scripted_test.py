@@ -69,6 +69,22 @@ if __name__ == '__main__':
     unittest.main()
 
 
+
+class PlanTest(unittest.TestCase):
+    def test_plan_applies_the_matrix(self):
+        import tempfile
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder)/'s.kfs'
+            script.write_text('preset advanced\nwait 1s\nend\n', encoding='utf-8')
+            opts = SimpleNamespace(script=script, var=[], matrix=['preset=classic,manual', 'bWorldWeaponDrops=True'])
+            heads = [line for line in scripted.plan(opts, [None]) if line.startswith('#')]
+        self.assertEqual(len(heads), 2)
+        self.assertIn("'ReloadPreset': '0'", heads[0])
+        self.assertIn("'ReloadPreset': '1'", heads[1])
+        self.assertTrue(all("'bWorldWeaponDrops': 'True'" in h for h in heads))
+        self.assertIn('matrix=preset-classic_bWorldWeaponDrops-True', heads[0])
+
 class ObserverCompileWaitTest(unittest.TestCase):
     def test_waits_through_a_running_game_and_a_busy_fixture(self):
         import tempfile

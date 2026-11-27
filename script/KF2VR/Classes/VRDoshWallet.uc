@@ -150,11 +150,21 @@ function Update(float Delta)
     }
     if (HoldingHand < 0) return;
     Now = Bridge.WorldInfo.RealTimeSeconds; Elapsed = Now - LastTime;
-    if (!HandFree(HoldingHand) || Elapsed < 0 || Elapsed > 0.1) { CancelHand(HoldingHand); return; }
+    if (!HandFree(HoldingHand) || Elapsed < 0) { CancelHand(HoldingHand); return; }
     if (Elapsed <= 0) return;
     Position = Bridge.PalmPosition(HoldingHand);
     Velocity = (Position - LastPosition - (Bridge.Human.Location - LastPawnPosition)) / Elapsed;
-    if (VSize(Velocity) > 1800) { CancelHand(HoldingHand); return; }
+    // R69: a long frame, a snap turn or a tracking jump keeps the wad in the
+    // hand; the flick history restarts here, so a release now puts it away.
+    if (Elapsed > 0.1 || VSize(Velocity) > 1800)
+    {
+        ThrowVelocity = vect(0,0,0); Samples = 0;
+        if (Thrower != None) Thrower.Reset(HoldingHand);
+        LastPosition = Position; LastPawnPosition = Bridge.Human.Location; LastTime = Now;
+        PlacePreview();
+        if (InputOwner.GripReleased(HoldingHand)) CancelHand(HoldingHand);
+        return;
+    }
     ThrowVelocity = Velocity * 0.65 + ThrowVelocity * 0.35;
     if (Thrower != None) Thrower.Add(HoldingHand, Velocity, Now);
     LastPosition = Position; LastPawnPosition = Bridge.Human.Location; LastTime = Now; ++Samples;

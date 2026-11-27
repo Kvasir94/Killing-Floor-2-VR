@@ -182,6 +182,39 @@ reliable server function ServerSpawnZed(string Zed, float Distance, float Yaw)
 // The `trader open` op online: the server opens the menu for its owner the way
 // a trader trigger does (KFPlayerController.OpenTraderMenu, forced outside
 // trader time), which sends ClientOpenTraderMenu to the client.
+// The `spawn` op with an exact class (no random elite stand-in) and/or a
+// hostile AI hunting this owner (ScriptRunner.SpawnExactZed / MakeHostile).
+reliable server function ServerSpawnZedAs(string Cls, string Zed, float Distance, float Yaw, bool bHostile)
+{
+    local PlayerController PC;
+    local KFPawn Spawned;
+    local class<KFPawn_Monster> Exact;
+    local rotator View, Turned;
+    local int Try;
+    PC = PlayerController(Owner);
+    if (PC == None || PC.Pawn == None) return;
+    if (Cls != "") Exact = class<KFPawn_Monster>(DynamicLoadObject("KFGameContent." $ Cls, class'Class', true));
+    if (Exact == None)
+    {
+        if (PC.CheatManager == None) PC.AddCheats(true);
+        if (KFCheatManager(PC.CheatManager) == None) { `log("KF2VR_SCRIPT_SERVER spawn zed=" $ Zed @ "spawned=false reason=no-cheats"); return; }
+    }
+    View = PC.Rotation;
+    for (Try = 0; Try < 9 && Spawned == None; ++Try)
+    {
+        Turned = View; Turned.Pitch = 0; Turned.Roll = 0;
+        Turned.Yaw += int((Yaw + (Try == 0 ? 0 : ((Try % 2 == 1) ? 1 : -1) * 40 * ((Try + 1) / 2))) * 182.0444);
+        if (Exact != None) { Spawned = class'ScriptRunner'.static.SpawnExactZed(self, PC.Pawn, Exact, Turned, Distance); continue; }
+        PC.SetRotation(Turned);
+        Spawned = KFCheatManager(PC.CheatManager).SpawnZed(Zed, Distance);
+    }
+    PC.SetRotation(View);
+    if (bHostile && KFPawn_Monster(Spawned) != None) class'ScriptRunner'.static.MakeHostile(KFPawn_Monster(Spawned), PC.Pawn);
+    `log("KF2VR_SCRIPT_SERVER spawn zed=" $ (Cls != "" ? Cls : Zed) @ "spawned=" $ (Spawned != None)
+        @ "class=" $ (Spawned != None ? string(Spawned.Class.Name) : "none") @ "hostile=" $ bHostile
+        @ "dist=" $ (Spawned != None ? VSize(Spawned.Location - PC.Pawn.Location) : -1.0));
+}
+
 reliable server function ServerOpenTrader()
 {
     if (KFPlayerController(Owner) == None) return;

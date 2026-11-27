@@ -114,6 +114,8 @@ function Configure(KFSkeletalMeshComponent M)
 {
     // Match other tracked hands: visible depth remains, world query depth does not.
     M.bUseAsOccluder = false;
+    // Bone motion reaches the velocity pass DLSS reads (VRHandsBridge.InitializeFreeHands).
+    M.bPerBoneMotionBlur = true;
     M.bUpdateSkelWhenNotRendered = true;
     M.bTickAnimNodesWhenNotRendered = false;
     M.bIgnoreControllersWhenNotRendered = false;

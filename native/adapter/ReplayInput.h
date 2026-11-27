@@ -17,7 +17,7 @@ public:
     struct Record { unsigned ticks=0, ageMs=0; xr::FrameState frame{}; };
     bool Load(std::istream& input, std::string& error) {
         records_.clear(); cursor_=0; remaining_=0; tick_=0; owner_=pawn_=0; epoch_=0; haveEpoch_=false; stopped_=false;
-        caseIndex_=0; caseResetBlocked_=false;
+        caseIndex_=0; caseResetBlocked_=false; holdLast_=false;
         realtimeStarted_=false; nextSampleTime_=0; delivered_=0; realtimeFrame_={};
         std::string line, magic; unsigned version=0;
         if (!std::getline(input,line)) return Fail(error,"missing header");
@@ -52,7 +52,8 @@ public:
         if (!stopped_ && cursor_<records_.size()) {
             const auto& r=records_[cursor_]; out=r.frame;
             if (!remaining_) remaining_=r.ticks;
-            if (--remaining_==0) ++cursor_;
+            // A held tape repeats its last sample instead of running out.
+            if (--remaining_==0 && !(holdLast_ && cursor_+1==records_.size())) ++cursor_;
             // An old sample is unavailable, not an observed physical release.
             if (r.ageMs>250 || (haveEpoch_ && epoch_!=out.referenceSpaceEpoch)) {
                 out.actionsSynced=false; out.headPoseValid=false;
@@ -66,6 +67,10 @@ public:
         return out;
     }
     bool Finished() const { return stopped_ || cursor_==records_.size(); }
+    // Explicit opt-in after Load (scripted runners' carrier tape): the last
+    // sample holds for as long as the session lasts. Ownership, readiness and
+    // staleness still stop the tape exactly as before.
+    void HoldLast(bool hold) { holdLast_=hold && !records_.empty(); }
     std::uint64_t Seed() const { return seed_; } // provenance, never an implicit RNG reseed
     // Explicit offline suite only. A new case reuses the parsed input against
     // the exact admitted bridge/pawn; it cannot rescue a failed input context.
@@ -145,6 +150,7 @@ private:
     bool haveEpoch_=false, stopped_=false;
     int caseIndex_=0;
     bool caseResetBlocked_=false;
+    bool holdLast_=false;
     bool realtimeStarted_=false;
     double nextSampleTime_=0;
     std::uint64_t delivered_=0;

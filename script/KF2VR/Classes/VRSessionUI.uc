@@ -921,6 +921,7 @@ function float HandValue(name Key)
         case 'bSupportHandCarry': return int(Hands != None ? Hands.bSupportHandCarry : C.default.bSupportHandCarry);
         case 'bDisableGravityPull': return int(Hands != None ? Hands.bDisableGravityPull : C.default.bDisableGravityPull);
         case 'bDisableSupportHandAim': return int(Hands != None ? Hands.bDisableSupportHandAim : C.default.bDisableSupportHandAim);
+        case 'bLauncherTriggerOnly': return int(Hands != None ? Hands.bLauncherTriggerOnly : C.default.bLauncherTriggerOnly);
         case 'bControllerRelativeMovement': return int(Hands != None ? Hands.bControllerRelativeMovement : C.default.bControllerRelativeMovement);
         case 'bStickCrouch': return int(Hands != None ? Hands.bStickCrouch : C.default.bStickCrouch);
         case 'LocomotionMode': return (Hands != None ? Hands.LocomotionMode : C.default.LocomotionMode);
@@ -938,9 +939,12 @@ function float HandValue(name Key)
         case 'ReloadPreset': return (Hands != None ? Hands.ReloadPreset : C.default.ReloadPreset);
         case 'bZedGrabEnabled': return int(Hands != None ? Hands.bZedGrabEnabled : C.default.bZedGrabEnabled);
         case 'bExperimentalInteractions': return int(Hands != None ? Hands.bExperimentalInteractions : C.default.bExperimentalInteractions);
+        case 'bExperimentalFeatures': return int(Hands != None ? Hands.bExperimentalFeatures : C.default.bExperimentalFeatures);
+        case 'bLivingArmLoss': return int(Hands != None ? Hands.bLivingArmLoss : C.default.bLivingArmLoss);
         case 'bWeaponAmmoReadouts': return int(Hands != None ? Hands.bWeaponAmmoReadouts : C.default.bWeaponAmmoReadouts);
         case 'bWristwatchHUD': return int(Hands != None ? Hands.bWristwatchHUD : C.default.bWristwatchHUD);
         case 'bDamagePopups': return int(Hands != None ? Hands.bDamagePopups : C.default.bDamagePopups);
+        case 'bPerformanceScopes': return int(Hands != None ? Hands.bPerformanceScopes : C.default.bPerformanceScopes);
         case 'bSightLineConvergence': return int(Hands != None ? Hands.bSightLineConvergence : C.default.bSightLineConvergence);
         case 'bSightPointAim': return int(Hands != None ? Hands.bSightPointAim : C.default.bSightPointAim);
         case 'bWeaponLasers': return int(Hands != None ? Hands.bWeaponLasers : C.default.bWeaponLasers);
@@ -1025,6 +1029,10 @@ function SetHandValue(name Key, float Value)
             if (Hands != None) Hands.bDisableSupportHandAim = Value != 0;
             else C.default.bDisableSupportHandAim = Value != 0;
             break;
+        case 'bLauncherTriggerOnly':
+            if (Hands != None) Hands.bLauncherTriggerOnly = Value != 0;
+            else C.default.bLauncherTriggerOnly = Value != 0;
+            break;
         case 'bControllerRelativeMovement':
             if (Hands != None) Hands.bControllerRelativeMovement = Value != 0;
             else C.default.bControllerRelativeMovement = Value != 0;
@@ -1085,6 +1093,14 @@ function SetHandValue(name Key, float Value)
             if (Hands != None) Hands.bExperimentalInteractions = Value != 0;
             else C.default.bExperimentalInteractions = Value != 0;
             break;
+        case 'bExperimentalFeatures':
+            if (Hands != None) Hands.bExperimentalFeatures = Value != 0;
+            else C.default.bExperimentalFeatures = Value != 0;
+            break;
+        case 'bLivingArmLoss':
+            if (Hands != None) Hands.bLivingArmLoss = Value != 0;
+            else C.default.bLivingArmLoss = Value != 0;
+            break;
         case 'bWeaponAmmoReadouts':
             if (Hands != None) Hands.bWeaponAmmoReadouts = Value != 0;
             else C.default.bWeaponAmmoReadouts = Value != 0;
@@ -1096,6 +1112,10 @@ function SetHandValue(name Key, float Value)
         case 'bDamagePopups':
             if (Hands != None) Hands.bDamagePopups = Value != 0;
             else C.default.bDamagePopups = Value != 0;
+            break;
+        case 'bPerformanceScopes':
+            if (Hands != None) Hands.bPerformanceScopes = Value != 0;
+            else C.default.bPerformanceScopes = Value != 0;
             break;
         case 'bStickCrouch':
             if (Hands != None)
@@ -1367,11 +1387,20 @@ function BuildMenuRows()
         AddRow(3, "SUPPORT-HAND CARRY: " $ OnOff('bSupportHandCarry'), MA_HandToggle, 0, 1, 'bSupportHandCarry');
         AddRow(4, "TWO-HANDED AIMING: " $ (HandValue('bDisableSupportHandAim') != 0 ? "OFF" : "ON"), MA_HandToggle, 0, 1, 'bDisableSupportHandAim');
         AddRow(5, "GUN ANGLE: " $ GunAngleLabel(), MA_GunAngle, 0, 1);
+        AddRow(6, "A/X + TRIGGER FIRES LAUNCHER: " $ (HandValue('bLauncherTriggerOnly') != 0 ? "OFF" : "ON"), MA_HandToggle, 0, 1, 'bLauncherTriggerOnly');
         AddBack(PAGE_HANDS_ADVANCED);
         break;
     case PAGE_MELEE:
         AddRow(0, "MELEE HIT STOP: " $ OnOff('bMeleeHitStop'), MA_HandToggle, 0, 1, 'bMeleeHitStop');
         AddRow(1, "PHYSICAL MELEE: " $ OnOff('bExperimentalInteractions'), MA_HandToggle, 0, 1, 'bExperimentalInteractions');
+        AddRow(2, "EXPERIMENTAL FEATURES: " $ OnOff('bExperimentalFeatures'), MA_HandToggle, 0, 1, 'bExperimentalFeatures');
+        // Children show only while the parent is on; arm loss needs stock gore at High.
+        if (HandValue('bExperimentalFeatures') != 0)
+        {
+            if (ArmLossGoreAllowed())
+                AddRow(3, "LIVING ZED GORE: " $ OnOff('bLivingArmLoss'), MA_HandToggle, 0, 1, 'bLivingArmLoss');
+            else AddRow(3, "LIVING ZED GORE SHOWS WITH GORE INTENSITY AT HIGH", MA_None, 0, 4);
+        }
         AddBack(PAGE_HANDS_ADVANCED);
         break;
     case PAGE_CONTROLS:
@@ -1548,6 +1577,7 @@ function BuildMenuRows()
     case PAGE_QUALITY:
         class'VRGraphicsMenu'.static.GetCurrentGFXSettings(Quality);
         for (I = 0; I < 6; ++I) AddRow(I, class'VRGraphicsMenu'.static.QualityLabel(I, Quality), MA_Quality, I, 1);
+        AddRow(6, "SCOPES: " $ (HandValue('bPerformanceScopes') != 0 ? "PERFORMANCE" : "QUALITY"), MA_HandToggle, 0, 1, 'bPerformanceScopes');
         AddBack(PAGE_GRAPHICS_ADVANCED);
         break;
     case PAGE_LIGHTING:
@@ -1996,6 +2026,7 @@ function ResetCategory(int Target)
     if (Target == PAGE_AIM_ADVANCED)
     {
         SetHandValue('bDisableSupportHandAim', 0); SetHandValue('bWeaponLasers', 1);
+        SetHandValue('bLauncherTriggerOnly', 0);
         SetHandValue('bSightPointAim', 1); SetHandValue('bSightLineConvergence', 0);
         class'VRWeaponAssistSettings'.default.AimAssistPreset = 1;
         class'VRWeaponAssistSettings'.default.bLaserFromBore = false;
@@ -2974,6 +3005,14 @@ function DrawRightText(Canvas C, string Value, float Scale, float Right, float Y
     if (XL > 0) Scale = FMin(Scale, Width / XL);
     C.SetPos(Right - XL * Scale, Y);
     C.DrawText(Value, false, Scale, Scale);
+}
+
+function bool ArmLossGoreAllowed()
+{
+    local KFGoreManager Gore;
+    if (PC == None || PC.WorldInfo == None) return false;
+    Gore = KFGoreManager(PC.WorldInfo.MyGoreEffectManager);
+    return Gore != None && Gore.AllowMutilation();
 }
 
 defaultproperties

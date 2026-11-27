@@ -190,6 +190,10 @@ function Flush()
         switch (Plan.Events[Index].Kind)
         {
             case 1:
+                // A hand-worked charging handle sounds at its own rear stop
+                // and return (R64), not on the clip's clock.
+                if (Owner.BreakAction != None && Owner.BreakAction.Gun == Gun && Owner.BreakAction.ChargePart >= 0
+                    && class'VRReloadAudioPlan'.static.StockBeltCharge(Plan.Events[Index].Sound)) break;
                 At = StockSoundLocation(Plan.Events[Index].Bone);
                 if (class'VRReloadMotionGuard'.static.ValidPosition(At))
                     Gun.PlayAkEvent(Plan.Events[Index].Sound, true, false, false, NearField(Owner.Bridge, At));

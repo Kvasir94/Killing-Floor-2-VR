@@ -613,17 +613,18 @@ def configure_role(run, name, user, game, args):
                 "DepthOfField": "False", "DepthOfFieldQuality": "0", "bAllowTemporalAA": "False",
                 "PostProcessAA": "False", "UseVsync": "False", "AmbientOcclusion": "False",
                 "HBAO": "False", "AllowScreenSpaceReflections": "False", "LensFlares": "False",
-                "ImageGrainScaler": "0.500000"}
+                "ImageGrainScaler": "0.000000"}
             # Optional screen effects. HBAO+ is KF2's AmbientOcclusion effect
-            # with the HBAO+ technique selected. Lens flares and grain stay off.
+            # with the HBAO+ technique selected. Lens flares and grain stay off:
+            # grain is per-frame noise laid over the two-eye buffer, different in
+            # each eye and fed to DLSS (0.5, the stock slider's minimum, was left
+            # here for the presets without HBAO or reflections).
             hbao = getattr(args, "hbao", False) is True
             reflections = getattr(args, "reflections", False) is True
             if hbao:
                 settings.update({"AmbientOcclusion": "True", "HBAO": "True"})
             if reflections:
                 settings["AllowScreenSpaceReflections"] = "True"
-            if hbao or reflections:
-                settings["ImageGrainScaler"] = "0.000000"
             path = configs / "KFSystemSettings.ini"
             text = read_ini(path) if path.exists() else "[SystemSettings]\n"
             text = set_ini(text, "SystemSettings", settings)

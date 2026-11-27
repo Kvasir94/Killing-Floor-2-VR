@@ -2,6 +2,7 @@
 #include "GameScript.h"
 #include "ScriptField.h"
 #include "OpticProbeBindings.h"
+#include "GpuFrameTiming.h"
 #include "include/kf2vr/adapter/GameBuild.h"
 #include <MinHook.h>
 #include <intrin.h>
@@ -44,6 +45,14 @@ public:
         enabled_.store(true,std::memory_order_release);return true;
     }
     bool Enabled() const { return enabled_.load(std::memory_order_acquire); }
+    // Optic capture cost (#212): render-thread time and GPU time of each
+    // physical-optic probe render, and how many probes were created, logged
+    // every two seconds while the optic renders. The immediate context comes
+    // from the render thread's own D3D11 calls.
+    void SetLog(void(*log)(const char*,...)) { log_=log; }
+    void NoteContext(ID3D11DeviceContext* context) {
+        if (context && !context_.load(std::memory_order_relaxed)) context_.store(context,std::memory_order_release);
+    }
 
     // Only the admitted game-thread world submission calls this, after final
     // hand placement. UObject references are inspected here, never by Render.
@@ -121,6 +130,16 @@ private:
     OpticProbeBindings<> bindings_;
     SRWLOCK recordsLock_=SRWLOCK_INIT;
     std::array<Slot,8> slots_{};std::size_t slotsUsed_=0;
+    void(*log_)(const char*,...)=nullptr;
+    std::atomic<ID3D11DeviceContext*> context_{nullptr};
+    std::atomic<std::uint64_t> opticCreates_{0},opticCreateTicks_{0};
+    // Render-thread timing state.
+    std::array<timing::GpuFrameTiming,4> gpu_{};
+    std::size_t gpuNext_=0;
+    bool gpuReady_=false,gpuFailed_=false;
+    double qpcFrequency_=0,cpuSum_=0,cpuMax_=0,gpuSum_=0,gpuMax_=0;
+    long long windowStart_=0;
+    std::uint64_t renders_=0,gpuSamples_=0;
 
     bool Bytes(std::uintptr_t rva,const unsigned char* expected,std::size_t size) const {
         auto* address=reinterpret_cast<void*>(base_+rva);
@@ -141,7 +160,10 @@ private:
     }
     static void* HookCreate(void* component) {
         auto& self=*instance_;
+        LARGE_INTEGER createStart{},createEnd{};
+        QueryPerformanceCounter(&createStart);
         auto* probe=self.create_(component);
+        QueryPerformanceCounter(&createEnd);
         // Reused native addresses must invalidate the old identity even for a
         // foreign capture. Keep other probes of this component: queued older
         // submissions can still render them after the next probe is created.
@@ -162,6 +184,8 @@ private:
         AcquireSRWLockExclusive(&self.recordsLock_);
         self.bindings_.Register(probe,{component,owner,target});
         ReleaseSRWLockExclusive(&self.recordsLock_);
+        self.opticCreates_.fetch_add(1,std::memory_order_relaxed);
+        self.opticCreateTicks_.fetch_add(static_cast<std::uint64_t>(createEnd.QuadPart-createStart.QuadPart),std::memory_order_relaxed);
         return probe;
     }
     static void HookRender(void* probe,void* renderer) {
@@ -173,12 +197,15 @@ private:
         active_=nullptr;
         // Probe is a live native render resource. These are pointer comparisons;
         // no owner/target/component UObject is dereferenced on this thread.
-        if (self.Enabled() && submissionDepth_ && submissionDepth_<=submissions_.size() &&
-            GameScript::At<std::uintptr_t>(probe,0)==self.base_+0x172a140) {
-            Identity created{};
-            AcquireSRWLockShared(&self.recordsLock_);
-            created=self.bindings_.Find(probe);
-            ReleaseSRWLockShared(&self.recordsLock_);
+        Identity created{};
+        const bool optic=self.Enabled() && GameScript::At<std::uintptr_t>(probe,0)==self.base_+0x172a140 &&
+            [&] {
+                AcquireSRWLockShared(&self.recordsLock_);
+                created=self.bindings_.Find(probe);
+                ReleaseSRWLockShared(&self.recordsLock_);
+                return created.Valid();
+            }();
+        if (optic && submissionDepth_ && submissionDepth_<=submissions_.size()) {
             const auto& snapshot=submissions_[submissionDepth_-1];
             for (std::size_t i=0;i<snapshot.opticsCount;++i) {
                 const auto& id=snapshot.optics[i];
@@ -187,7 +214,54 @@ private:
                     GameScript::At<void*>(probe,0x20)==id.target) { active_=&snapshot;break; }
             }
         }
+        if (!optic) { self.render_(probe,renderer);return; }
+        auto* context=self.context_.load(std::memory_order_acquire);
+        auto* gpu=self.BeginGpu(context);
+        LARGE_INTEGER start{},end{};
+        QueryPerformanceCounter(&start);
         self.render_(probe,renderer);
+        QueryPerformanceCounter(&end);
+        if (gpu) gpu->End(context,true);
+        self.RecordRender(context,static_cast<double>(end.QuadPart-start.QuadPart));
+    }
+    // Render-thread only, like HookRender.
+    timing::GpuFrameTiming* BeginGpu(ID3D11DeviceContext* context) {
+        if (!context || gpuFailed_) return nullptr;
+        if (!gpuReady_) {
+            ID3D11Device* device=nullptr;context->GetDevice(&device);
+            bool ok=device!=nullptr;
+            for (auto& query:gpu_) ok=ok && query.Initialise(device);
+            if (device) device->Release();
+            if (!ok) { gpuFailed_=true;return nullptr; }
+            gpuReady_=true;
+        }
+        for (std::size_t i=0;i<gpu_.size();++i) {
+            auto& query=gpu_[(gpuNext_+i)%gpu_.size()];
+            if (query.Begin(context)) { gpuNext_=(gpuNext_+i+1)%gpu_.size();return &query; }
+        }
+        return nullptr;
+    }
+    void RecordRender(ID3D11DeviceContext* context,double ticks) {
+        LARGE_INTEGER now{};QueryPerformanceCounter(&now);
+        if (!qpcFrequency_) { LARGE_INTEGER f{};QueryPerformanceFrequency(&f);qpcFrequency_=static_cast<double>(f.QuadPart); }
+        const double ms=ticks*1000.0/qpcFrequency_;
+        if (!windowStart_) windowStart_=now.QuadPart;
+        ++renders_;cpuSum_+=ms;cpuMax_=ms>cpuMax_?ms:cpuMax_;
+        if (gpuReady_) for (auto& query:gpu_) {
+            double gpuMs=0;
+            const auto result=query.Poll(context,gpuMs);
+            if (result==timing::GpuFrameTiming::Result::Ready) { ++gpuSamples_;gpuSum_+=gpuMs;gpuMax_=gpuMs>gpuMax_?gpuMs:gpuMax_; }
+            else if (result==timing::GpuFrameTiming::Result::Error) gpuFailed_=true;
+        }
+        const double seconds=static_cast<double>(now.QuadPart-windowStart_)/qpcFrequency_;
+        if (seconds<2.0) return;
+        const auto creates=opticCreates_.exchange(0,std::memory_order_relaxed);
+        const auto createTicks=opticCreateTicks_.exchange(0,std::memory_order_relaxed);
+        if (log_) log_("OpticCaptureTiming seconds=%.2f renders=%llu rendersPerSecond=%.1f probesCreated=%llu probeCreateMsAvg=%.3f cpuMsAvg=%.3f cpuMsMax=%.3f gpuMsAvg=%.3f gpuMsMax=%.3f gpuSamples=%llu",
+            seconds,static_cast<unsigned long long>(renders_),renders_/seconds,
+            static_cast<unsigned long long>(creates),creates?createTicks*1000.0/qpcFrequency_/creates:0.0,
+            cpuSum_/renders_,cpuMax_,gpuSamples_?gpuSum_/gpuSamples_:0.0,gpuMax_,static_cast<unsigned long long>(gpuSamples_));
+        windowStart_=now.QuadPart;renders_=gpuSamples_=0;cpuSum_=cpuMax_=gpuSum_=gpuMax_=0;
     }
     template<std::size_t Index> static void HookHidden(void* gri,void* set) {
         // Separate wrappers retain the original per-table dispatch without

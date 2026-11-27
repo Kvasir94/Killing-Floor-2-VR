@@ -22,6 +22,38 @@ MARKER = 'KF2VR_REPLAY_CAPTURE'
 NAME = re.compile(r'KF2VR_Replay_([0-9]{20})_([1-9][0-9]*)_([1-9][0-9]*)')
 
 
+CASE_LINE = re.compile(r'KF2VR_SCRIPT case n=(\d+) label=(\S+) weapon=(\S+)')
+POSE_LINE = re.compile(r'KF2VR_SCRIPT line=\d+ t=\S+ pose\b(.*)')
+
+
+def capture_context(text):
+    """What each logged capture belongs to, from the ScriptRunner lines before
+    it: the session case (number, weapon, settings label) and, for a capture
+    taken with its pose, what each hand held and where the camera was.
+    Returns {log line number: dict} for every KF2VR_REPLAY_CAPTURE line."""
+    context, case, pose, pose_line = {}, {}, {}, 0
+    for line_number, line in enumerate(text.splitlines(), 1):
+        match = CASE_LINE.search(line)
+        if match:
+            case = dict(case=int(match[1]), settings='' if match[2] == '-' else match[2],
+                        weapon='' if match[3] == '-' else match[3])
+            pose, pose_line = {}, 0
+            continue
+        match = POSE_LINE.search(line)
+        if match:
+            fields = dict(re.findall(r'(\w+)=(\S+)', match[1]))
+            pose = {key: value for key, value in (('held_left', fields.get('Lheld')), ('held_right', fields.get('Rheld')),
+                                                  ('camera', fields.get('camera'))) if value}
+            pose_line = line_number
+            continue
+        if re.search(r'\b'+MARKER+r'\b', line):
+            # A pose note is written just before its own capture; an older one
+            # belongs to an earlier shot.
+            context[line_number] = dict(case, **(pose if pose_line and line_number - pose_line <= 3 else {}))
+            pose, pose_line = {}, 0
+    return context
+
+
 def capture_requests(text, max_captures=None, max_cases=16):
     """Parse diagnostic requests, never filesystem paths supplied by a log."""
     max_captures = max_captures or MAX_CAPTURES
@@ -72,7 +104,19 @@ def capture_requests(text, max_captures=None, max_cases=16):
             errors.append(f'Log line {line_number}: {error}')
     if not entries:
         errors.append('No valid logged replay capture requests')
+    # case_index is the capture page (16 per page), not the case: name the
+    # case, its weapon and settings, and what the hands held, on each entry.
+    context = capture_context(text)
+    for entry in entries:
+        entry.update(context.get(entry['log_line'], {}))
     return entries, errors
+
+
+def case_title(entry):
+    """'Case 3 · KFGameContent.KFWeap_Pistol_9mm · preset-advanced' for a capture entry."""
+    parts = [f"Case {entry['case']}" if entry.get('case') is not None else f"Page {entry['case_index']}"]
+    parts += [entry[key] for key in ('weapon', 'settings') if entry.get(key)]
+    return ' · '.join(parts)
 
 
 def _bmp_info(data):
@@ -374,11 +418,19 @@ def collect_captures(run, game_log, *, started_unix, finished_unix, source_roots
                  '<style>body{font:16px system-ui;max-width:1100px;margin:auto}img{max-width:100%;height:auto}article{margin:2em 0}</style>',
                  '<h1>Replay captures</h1><p>Actual engine screenshots; subjective visual acceptance remains unverified.</p>',
                  '<p><a href="../driver/game.log">Game log</a> · <a href="index.json">Capture metadata</a></p>']
+        shown_case = None
         for entry in entries:
-            lines.append('<article><h2>Case '+str(entry['case_index'])+' / '+html.escape(entry['event'])+'</h2>')
+            if entry.get('case') is not None and entry['case'] != shown_case:
+                shown_case = entry['case']
+                lines.append('<h2 id="case-'+str(shown_case)+'">'+html.escape(case_title(entry))+'</h2>')
+            lines.append('<article><h3>'+html.escape(entry['event'])+'</h3>')
+            held = ' · '.join(f'{side} {html.escape(entry[key])}' for side, key in (('left', 'held_left'), ('right', 'held_right'))
+                              if entry.get(key))
+            if held or entry.get('camera'):
+                lines.append('<p>Held: '+(held or '-')+(' · camera '+html.escape(entry['camera']) if entry.get('camera') else '')+'</p>')
             lines.append('<p>Event game time '+str(entry['event_game_seconds'])+' s · screenshot request '+
                          str(entry['requested_game_seconds'])+' s · deferred '+str(entry['deferred'])+
-                         ' · log line '+str(entry['log_line'])+
+                         ' · log line '+str(entry['log_line'])+' · page '+str(entry['case_index'])+
                          ' · '+html.escape(entry['status'])+'</p>')
             if entry.get('image_path'):
                 lines.append('<p>Written UTC '+html.escape(entry['file_written_utc'])+

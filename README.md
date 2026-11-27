@@ -62,9 +62,9 @@ This source snapshot integrates OptimumBox's `v0.5.2-alpha.20261014`
 and distribution source through `68932aef5ee76b2bcc834eed4d2f3275ea4d6995` with retained local interaction,
 rendering and launcher choices. His reload, multiplayer, interaction, camera,
 rendering, launcher and desktop-companion contributions are credited in
-[CREDITS](CREDITS.md). Release `v0.3.0-alpha.20261106` is build 232423 from this source, with
-matching credits and notices. Its tag pins the release source; main can contain
-later documentation updates. Earlier releases and their tags stay available.
+[CREDITS](CREDITS.md). Release `v0.3.0-alpha.20261106` is build 232423, with
+matching credits and notices. Its tag pins the release source; main is newer and
+holds changes that are not in a release yet. Earlier releases and their tags stay available.
 
 The source includes one-hand and paired hip reloads, sender-timed remote poses,
 walking with the weapon wheel open, fixed boss-introduction views, level

@@ -94,8 +94,7 @@ static function bool GravityCylinder(KFWeapon W)
 static function bool Covers(KFWeapon W)
 {
     return W != None && class'VRBreakCatalog'.static.CylinderReload(W)
-        && !ClassIsChildOf(W.Class, class'KFWeap_HRG_CranialPopper')
-        && !ClassIsChildOf(W.Class, class'KFWeap_Rifle_Hemogoblin');
+        && !class'VRBreakCatalog'.static.NoHip(W);
 }
 
 // The magazine profile of a gun, a paired member taking its single gun's.
@@ -394,7 +393,10 @@ function bool BeginMagazine()
     {
         Owner.LastLostRounds = AuthorityLost;
         // A paired container (Bladed Pistol) is lost as it visibly leaves.
-        if (Owner.LosesReloadAmmo() && !class'VRMagazineCarryRecipe'.static.Supports(Gun)
+        // An empty one has nothing to lose: the authority arms no discard for
+        // it and refuses the eject, so it is never asked (as EjectOldLoad).
+        if (Owner.LosesReloadAmmo() && Gun.AmmoCount[0] > 0
+            && !class'VRMagazineCarryRecipe'.static.Supports(Gun)
             && !class'VRBreakCatalog'.static.CylinderReload(Gun))
         {
             if (!Bridge.PairedReloadEject(Gun, AuthorityRequest, AuthoritySession))
@@ -1027,9 +1029,11 @@ function Tick()
     }
     if (bAuthorityShotCancel)
     {
-        if (!PaymentEpochValid() || !BindingValid() || Owner.Now() - AuthorityRequestedAt > 5
-            || !Motion.Check(HipHandPosition(), Owner.Now()))
+        if (!PaymentEpochValid() || !BindingValid() || Owner.Now() - AuthorityRequestedAt > 5)
         { Abort("chamber-cancel-context"); return; }
+        // R69: a frame gap or a jump re-anchors; it is not a context loss.
+        if (!Motion.Check(HipHandPosition(), Owner.Now()))
+        { if (!Motion.Begin(HipHandPosition(), Owner.Now())) Abort("chamber-cancel-context"); return; }
         if (!Bridge.PairedReloadRead(Gun, AuthorityRequest, Session, Status, Ammo, Reserve, Ejected)) return;
         if (Session != AuthoritySession || Status != 3 || Gun.AmmoCount[0] != Ammo) return;
         bAuthorityShotCancel = false; bAuthorityHeld = false;
@@ -1060,9 +1064,19 @@ function Tick()
     }
     if (AuthorityRequest > 0)
     {
-        if (!PaymentEpochValid() || !BindingValid() || Owner.Now() - AuthorityRequestedAt > 50
-            || !Motion.Check(HipHandPosition(), Owner.Now()))
+        if (!PaymentEpochValid() || !BindingValid() || Owner.Now() - AuthorityRequestedAt > 50)
         { Abort("authority-context"); return; }
+        // #30: a frame hitch (a screenshot, a load spike) while the authority
+        // owns this paired reload is not a context loss. Re-anchor, skip the
+        // frame so the timed loader does not jump by the gap, and go on; a
+        // hand without a valid position still aborts.
+        if (!Motion.Check(HipHandPosition(), Owner.Now()))
+        {
+            if (!Motion.Begin(HipHandPosition(), Owner.Now())) { Abort("authority-context"); return; }
+            LastTime = Owner.Now();
+            `log("KF2VR_DUAL_CYLINDER phase=motion-gap weapon=" $ Gun.Class @ "hand=" $ GunHand);
+            return;
+        }
         if (!Bridge.PairedReloadRead(Gun, AuthorityRequest, Session, Status, Ammo, Reserve, Ejected)) return;
         // A refused ejection kept the live rounds: the cylinder is loaded.
         if (Status == 3 && Ejected == 0 && Gun.AmmoCount[0] > 0) Runtime.bLoadEmptied = false;
@@ -1098,8 +1112,10 @@ function Tick()
     }
     if (bAwaitMagazineAdmission)
     {
-        if (!StillValid() || Runtime.MagazineOut() || !Motion.Check(HipHandPosition(), Owner.Now()))
-        { Abort("magazine-admission-context"); return; }
+        if (!StillValid() || Runtime.MagazineOut()) { Abort("magazine-admission-context"); return; }
+        // R69: a frame gap or a jump re-anchors; it is not a context loss.
+        if (!Motion.Check(HipHandPosition(), Owner.Now()))
+        { if (!Motion.Begin(HipHandPosition(), Owner.Now())) Abort("magazine-admission-context"); return; }
         if (!RemovalAdmissible())
         {
             // Owner actions settle within their own deadlines; this only
@@ -1116,7 +1132,14 @@ function Tick()
     if (bAwaitMagazineRemoval) return;
     if (!StillValid()) { Abort("ended"); return; }
     Time = Owner.Now(); DT = Time - LastTime;
-    if (!Motion.Check(HipHandPosition(), Time)) { Abort("motion"); return; }
+    // R69: a frame gap or a jump keeps the hip loader. Re-anchor and skip
+    // the frame, so the timed load does not jump by the gap.
+    if (!Motion.Check(HipHandPosition(), Time))
+    {
+        if (!Motion.Begin(HipHandPosition(), Time)) { Abort("motion"); return; }
+        LastTime = Time;
+        return;
+    }
     if (DT <= 0) return;
     LastTime = Time;
     if (!bOpened)

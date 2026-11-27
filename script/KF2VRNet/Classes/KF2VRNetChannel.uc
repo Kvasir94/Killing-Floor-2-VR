@@ -97,6 +97,8 @@ var private VRWeaponDropState.HandlingState LocalReplacementHandling;
 var private float LocalReplacementFireReadyAt, LocalReplacementStartedAt, LocalCycleStartedAt;
 // Client give-up for an owner request whose authority answer never arrives.
 const OwnerReplyDeadline = 8.0;
+// How long a running paired reload outlasts a silent pose stream (#30).
+const PairedContinuationLeaseSeconds = 2.0;
 var private bool bLocalReplacementDropped, bLocalReplacementHandlingCaptured;
 var private VRHeldInventory LocalReplacementLedger;
 struct CycleEjectReceipt
@@ -349,7 +351,11 @@ function KFWeapon ResolveShieldDefender()
 function bool PairedReloadContext(int Hand, optional bool bContinuation)
 {
     return Hand >= 0 && Hand < 2 && HeldCommandsAvailable() && HeldState.bIndependentWeapons
-        && IsInventoryFocusEligible() && !bInventoryFocusRequested
+        // A begin needs a live, head-tracked pose stream. A running reload
+        // survives a brief silence (a client hitch or a screenshot frame
+        // expires the 0.25 s pose lease); only a stream gone for
+        // PairedContinuationLeaseSeconds, or a real context loss, ends it.
+        && (bContinuation ? PairedContinuationEligible() : IsInventoryFocusEligible()) && !bInventoryFocusRequested
         && (WorldDrops == None || WorldDrops.bDeleteMe || !WorldDrops.Busy()
             || (bContinuation && WorldDrops.PreservesPairedSession(PairedStates[Hand].Weapon, Hand)))
         // A new begin needs this hand's gun free of magazine traffic; a held
@@ -2231,6 +2237,20 @@ function bool IsInventoryFocusEligible()
         && bHandshakeAccepted && bVRTrackingEnabled && !bSyntheticEnabled
         && PublicPose != None && (PublicPose.Snapshot.Sample.TrackingFlags & 1) != 0
         && WorldInfo.RealTimeSeconds - LastAcceptedRealTime <= class'KF2VRNetTypes'.const.PoseLeaseSeconds;
+}
+
+// IsInventoryFocusEligible for a paired reload already running: the same
+// owner, pawn, handshake and VR identity, but the pose need not be fresh or
+// head-tracked. A pose expiry clears the tracking flags until the next
+// accepted pose, so they cannot be required here either.
+function bool PairedContinuationEligible()
+{
+    local KF2VRNetPlayerController PC;
+    PC = KF2VRNetPlayerController(Owner);
+    return PC != None && !PC.bDeleteMe && BoundPawn != None && PC.Pawn == BoundPawn
+        && BoundPawn.Controller == PC && BoundPawn.Health > 0 && !BoundPawn.bDeleteMe
+        && bHandshakeAccepted && bVRTrackingEnabled && !bSyntheticEnabled && PublicPose != None
+        && WorldInfo.RealTimeSeconds - LastAcceptedRealTime <= PairedContinuationLeaseSeconds;
 }
 
 reliable server function ServerSetInventoryFocus(int RequestWorldEpoch, int RequestConnectionEpoch,

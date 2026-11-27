@@ -18,7 +18,8 @@ struct BreakProfile
     var name ShellBones[4];
     var int Capacity;
     // Authored loading wrist, independent of which controller holds the gun.
-    // Some elite clips exchange hand roles (Dragon's Blaze).
+    // EliteInsertHand applies only where InsertAnim is an elite clip: the HX25,
+    // Scorcher and the Doomstick (R58); other shell bundles sample Reload_Empty.
     var int InsertHand, EliteInsertHand;
     // Operating the bolt/cover can use a different wrist from loading ammo.
     var int ActionHand, EliteActionHand;
@@ -59,6 +60,13 @@ struct BreakProfile
     // Rounds drawn from their own mesh (the .500's speedloader rounds): the
     // second section takes that mesh's first material instead.
     var string Section1MaterialMesh;
+    // R64: a charging handle the stock reload pulls back and lets forward
+    // before the action opens (every belt-fed reload starts with it). With a
+    // hand free it is the first hand step; the cover waits for it.
+    var name ChargeBone;
+    // A two-handed cylinder gun: a busy other hand means the full button
+    // reload, never a hip reload (R37: Head Hunter, Hemogoblin).
+    var bool bNoHip;
 };
 var array<BreakProfile> Profiles;
 
@@ -105,6 +113,13 @@ static function bool CylinderReloadClass(class<KFWeapon> W)
         || C == class'KFWeap_HRG_Revolver_Buckshot' || C == class'KFWeap_Pistol_Flare'
         || C == class'KFWeap_Pistol_HRGWinterbite'
         || C == class'KFWeap_HRG_CranialPopper' || C == class'KFWeap_Rifle_Hemogoblin';
+}
+
+static function bool NoHip(KFWeapon W)
+{
+    local int I;
+    I = W == None ? -1 : FindClass(W.Class);
+    return I >= 0 && default.Profiles[I].bNoHip;
 }
 
 // Swing-out cylinders use a speedloader, rather than replacing the cylinder.
@@ -186,17 +201,20 @@ defaultproperties
     // 2026-10-01 belt-fed guns (roadmap wave 11): the feed cover swings up
     // (94 degrees on the Stoner and Bastion, 55 on the MG3), the old box drops,
     // a new box seats, its loose belt is laid separately, then the cover closes.
-    Profiles(8)=(WeaponClass=class'KFWeap_LMG_Stoner63A',InsertHand=1,EliteInsertHand=1,ActionHand=1,MeshName=Wep_1stP_Stoner63A_Rig,Capacity=75,ClipBone=RW_Magazine1,DropBone=RW_Magazine1,Section1MaterialIndex=1,PathBones[0]=RW_ChamberCover,SlapTip=(X=-22.6,Y=0.5,Z=-0.8),WaitsForHand=1,Open="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Open",Eject="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Remove_Box",InsertA="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Insert_Box",InsertB="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Insert_Belt",Close="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Close")
-    Profiles(9)=(WeaponClass=class'KFWeap_HRG_BarrierRifle',InsertHand=1,EliteInsertHand=1,ActionHand=1,MeshName=WEP_1stP_HRG_BarrielRifle_Rig,Capacity=60,ClipBone=RW_Magazine1,DropBone=RW_Magazine1,Section1MaterialIndex=1,PathBones[0]=RW_ChamberCover,SlapTip=(X=-22.6,Y=0.6,Z=-0.7),WaitsForHand=1,Open="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Open",Eject="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Remove_Box",InsertA="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Insert_Box",InsertB="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Insert_Belt",Close="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Close")
-    Profiles(10)=(WeaponClass=class'KFWeap_LMG_MG3',MeshName=WEP_1stP_MG3_Rig,Capacity=75,ClipBone=RW_Magazine,DropBone=RW_Magazine,PathBones[0]=RW_ChamberCover,SlapTip=(X=0,Y=-1.4,Z=-38.8),WaitsForHand=1,Open="WW_WEP_MG3.Play_WEP_MG3_Reload_Open",Eject="WW_WEP_MG3.Play_WEP_MG3_Reload_Remove_Box",InsertA="WW_WEP_MG3.Play_WEP_MG3_Reload_Insert_Box",InsertB="WW_WEP_MG3.Play_WEP_MG3_Reload_Insert_Belt",Close="WW_WEP_MG3.Play_WEP_MG3_Reload_Close")
+    // Before any of it the stock hand pulls the charging handle back and lets
+    // it forward (Stoner/Bastion left hand at 0.1-0.4 s, MG3 right hand at
+    // 1.2-1.7 s, empty and partial clips alike): ChargeBone, R64.
+    Profiles(8)=(WeaponClass=class'KFWeap_LMG_Stoner63A',InsertHand=1,EliteInsertHand=1,ActionHand=1,MeshName=Wep_1stP_Stoner63A_Rig,Capacity=75,ClipBone=RW_Magazine1,DropBone=RW_Magazine1,Section1MaterialIndex=1,PathBones[0]=RW_ChamberCover,SlapTip=(X=-22.6,Y=0.5,Z=-0.8),WaitsForHand=1,ChargeBone=RW_Charging_Handle,Open="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Open",Eject="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Remove_Box",InsertA="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Insert_Box",InsertB="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Insert_Belt",Close="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Close")
+    Profiles(9)=(WeaponClass=class'KFWeap_HRG_BarrierRifle',InsertHand=1,EliteInsertHand=1,ActionHand=1,MeshName=WEP_1stP_HRG_BarrielRifle_Rig,Capacity=60,ClipBone=RW_Magazine1,DropBone=RW_Magazine1,Section1MaterialIndex=1,PathBones[0]=RW_ChamberCover,SlapTip=(X=-22.6,Y=0.6,Z=-0.7),WaitsForHand=1,ChargeBone=RW_Charging_Handle,Open="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Open",Eject="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Remove_Box",InsertA="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Insert_Box",InsertB="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Insert_Belt",Close="WW_WEP_Stoner.Play_WEP_Stoner_Reload_Close")
+    Profiles(10)=(WeaponClass=class'KFWeap_LMG_MG3',MeshName=WEP_1stP_MG3_Rig,Capacity=75,ClipBone=RW_Magazine,DropBone=RW_Magazine,PathBones[0]=RW_ChamberCover,SlapTip=(X=0,Y=-1.4,Z=-38.8),WaitsForHand=1,ChargeBone=RW_ChargingHandle,Open="WW_WEP_MG3.Play_WEP_MG3_Reload_Open",Eject="WW_WEP_MG3.Play_WEP_MG3_Reload_Remove_Box",InsertA="WW_WEP_MG3.Play_WEP_MG3_Reload_Insert_Box",InsertB="WW_WEP_MG3.Play_WEP_MG3_Reload_Insert_Belt",Close="WW_WEP_MG3.Play_WEP_MG3_Reload_Close")
     // The 1858 swaps its whole cylinder: the loading lever swings 90 degrees and
     // the pin slides out (its path), the old cylinder drops, a loaded one goes
     // in, then the pin and lever go home and the hammer is cocked.
     Profiles(11)=(WeaponClass=class'KFWeap_Revolver_Rem1858',SlapTip=(X=13.6,Z=0.3),MeshName=Wep_1stP_Remington_1858_Rig,Capacity=6,ClipBone=RW_Cylinder,DropBone=RW_Cylinder,PathBones[0]=RW_LoadingLever,PathBones[1]=RW_ExtractorPin,PathBones[2]=RW_Plunger,Open="WW_WEP_SA_1858.Play_WEP_SA_1858_Open_Lever|WW_WEP_SA_1858.Play_WEP_SA_1858_Pin_Slide",Eject="WW_WEP_SA_1858.Play_WEP_SA_1858_Cylinder_Out",InsertB="WW_WEP_SA_1858.Play_WEP_SA_1858_Cylinder_In",Close="WW_WEP_SA_1858.Play_WEP_SA_1858_Pin_Slide|WW_WEP_SA_1858.Play_WEP_SA_1858_Close_Lever|WW_WEP_SA_1858.Play_WEP_SA_1858_Hammer_Fast")
     // 2026-10-01 roadmap wave 13, read from each PSA: the Kaboomstick tips 42
     // degrees about Y like the hunting shotgun and plays its events; the
-    // Elephant Gun tips 89 degrees and takes four shells (stock carries them in
-    // two pairs; here each is seated by hand), drawn in material slot 1; the
+    // Elephant Gun tips 89 degrees and takes four shells (one handful of four
+    // from its elite clip, R58), drawn in material slot 1; the
     // HRG Buckshot is the .500's cylinder and speedloader with shotshells.
     Profiles(12)=(WeaponClass=class'KFWeap_Shotgun_HRG_Kaboomstick',MeshName=Wep_1stP_HRG_Kaboomstick_Rig,ShellBones[0]=RW_Shell1,ShellBones[1]=RW_Shell2,Capacity=2,HingeAxis=(Y=1),Open="WW_WEP_SA_Shotgun.Play_SA_WEP_DoubleBarrel_Handling_Open",InsertB="WW_WEP_SA_Shotgun.Play_SA_WEP_DoubleBarrel_Handling_ShellInsert",Close="WW_WEP_SA_Shotgun.Play_SA_WEP_DoubleBarrel_Handling_Close")
     Profiles(13)=(WeaponClass=class'KFWeap_Shotgun_ElephantGun',InsertHand=1,EliteInsertHand=0,MeshName=Wep_1stP_Quad_Barrel,ShellBones[0]=RW_Shell1,ShellBones[1]=RW_Shell2,ShellBones[2]=RW_Shell3,ShellBones[3]=RW_Shell4,Capacity=4,HingeAxis=(Y=1),MaterialIndex=1,Open="WW_WEP_Quad_Shotgun.Play_Quad_Shotgun_Open",InsertB="WW_WEP_Quad_Shotgun.Play_Quad_Shotgun_BulletIn",Close="WW_WEP_Quad_Shotgun.Play_Quad_Shotgun_Close")
@@ -213,7 +231,7 @@ defaultproperties
     // carries their seven darts.
     Profiles(16)=(WeaponClass=class'KFWeap_Pistol_HRGWinterbite',MeshName=Wep_1stP_HRG_Winterbite_Rig,Capacity=6,HingeAxis=(Y=1),ClipBone=RW_Cylinder,DropBone=RW_Cylinder,Open="WW_WEP_SA_1858.Play_WEP_SA_1858_Open_Lever",Eject="WW_WEP_SA_1858.Play_WEP_SA_1858_Cylinder_Out",InsertB="WW_WEP_SA_1858.Play_WEP_SA_1858_Cylinder_In",Close="WW_WEP_SA_1858.Play_WEP_SA_1858_Close_Lever|WW_WEP_SA_1858.Play_WEP_SA_1858_Hammer_Fast")
     Profiles(17)=(WeaponClass=class'KFWeap_Pistol_HRGScorcher',InsertHand=1,EliteInsertHand=0,MeshName=Wep_1stP_HRGScorcher_Pistol_Rig,ShellBones[0]=RW_Bullet1,Capacity=1,HingeAxis=(X=-1),Open="WW_WEP_SA_HX25.Play_WEP_SA_HX25_Handling_PutAway",InsertB="WW_WEP_SA_HX25.Play_WEP_SA_HX25_Handling_ShellInsert",Close="WW_WEP_SA_HX25.Play_WEP_SA_HX25_Handling_BarrelClose")
-    Profiles(18)=(WeaponClass=class'KFWeap_HRG_CranialPopper',MeshName=Wep_1stP_HRG_CranialPopper_Rig,Capacity=7,ClipBone=RW_Speedloader,PathBones[0]=RW_Charging_Handle,PathBones[1]=RW_Housing,PathBones[2]=RW_CylinderLock,PathBones[3]=RW_Bolt,PathBones[4]=RW_SlideFrame,Latch="WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Steam",Open="WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Open|WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Rotate",Eject="WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Pop",InsertB="WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Cartridge",Close="WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Close|WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Close_Pop")
-    Profiles(19)=(WeaponClass=class'KFWeap_Rifle_Hemogoblin',MeshName=WEP_1stP_Bleeder_Rig,Capacity=7,bWristContact=true,HingeAxis=(Z=-1),ClipBone=RW_Speedloader,PathBones[0]=RW_CylinderHousing,PathBones[1]=RW_CylinderLock,PathBones[2]=RW_SlideFrame,Latch="WW_WEP_Bleeder.Play_Bleeder_Reload_Steam",Open="WW_WEP_Bleeder.Play_Bleeder_Reload_Open|WW_WEP_Bleeder.Play_Bleeder_Reload_Rotate",Eject="WW_WEP_Bleeder.Play_Bleeder_Reload_Pop",InsertB="WW_WEP_Bleeder.Play_Bleeder_Reload_Cartridge",Close="WW_WEP_Bleeder.Play_Bleeder_Reload_Close|WW_WEP_Bleeder.Play_Bleeder_Reload_Close_Pop|WW_WEP_Bleeder.Play_Bleeder_Reload_Rotate")
+    Profiles(18)=(WeaponClass=class'KFWeap_HRG_CranialPopper',MeshName=Wep_1stP_HRG_CranialPopper_Rig,Capacity=7,bNoHip=true,ClipBone=RW_Speedloader,PathBones[0]=RW_Charging_Handle,PathBones[1]=RW_Housing,PathBones[2]=RW_CylinderLock,PathBones[3]=RW_Bolt,PathBones[4]=RW_SlideFrame,Latch="WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Steam",Open="WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Open|WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Rotate",Eject="WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Pop",InsertB="WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Cartridge",Close="WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Close|WW_WEP_HRG_CranialPopper.Play_WEP_HRG_CranialPopper_Reload_Close_Pop")
+    Profiles(19)=(WeaponClass=class'KFWeap_Rifle_Hemogoblin',MeshName=WEP_1stP_Bleeder_Rig,Capacity=7,bNoHip=true,bWristContact=true,HingeAxis=(Z=-1),ClipBone=RW_Speedloader,PathBones[0]=RW_CylinderHousing,PathBones[1]=RW_CylinderLock,PathBones[2]=RW_SlideFrame,Latch="WW_WEP_Bleeder.Play_Bleeder_Reload_Steam",Open="WW_WEP_Bleeder.Play_Bleeder_Reload_Open|WW_WEP_Bleeder.Play_Bleeder_Reload_Rotate",Eject="WW_WEP_Bleeder.Play_Bleeder_Reload_Pop",InsertB="WW_WEP_Bleeder.Play_Bleeder_Reload_Cartridge",Close="WW_WEP_Bleeder.Play_Bleeder_Reload_Close|WW_WEP_Bleeder.Play_Bleeder_Reload_Close_Pop|WW_WEP_Bleeder.Play_Bleeder_Reload_Rotate")
     Profiles(3)=(WeaponClass=class'KFWeap_HRG_Dragonbreath',InsertHand=1,EliteInsertHand=0,MeshName=Wep_1stP_HRG_MegaDragonsbreath_Rig,ShellBones[0]=RW_Shell1,ShellBones[1]=RW_Shell2,ShellBones[2]=RW_Shell3,ShellBones[3]=RW_Shell4,Capacity=4,HingeAxis=(Y=1),MaterialIndex=1,Open="ww_wep_hrg_megadragonbreath.Play_WEP_HRG_MegaDragonbreath_Open",InsertB="WW_WEP_Quad_Shotgun.Play_Quad_Shotgun_BulletIn",Close="ww_wep_hrg_megadragonbreath.Play_WEP_HRG_MegaDragonbreath_Close")
 }

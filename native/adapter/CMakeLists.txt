@@ -33,14 +33,14 @@ if(KF2VR_ADAPTER_DLL)
     ../../third_party/minhook/src/trampoline.c
     ../../third_party/minhook/src/hde/hde64.c)
   target_include_directories(kf2vr_minhook PUBLIC ../../third_party/minhook/include)
-  add_library(kf2vr_server_adapter SHARED ServerAdapter.cpp Proxy.cpp WeaponIsolation.cpp PerkContext.cpp CorpseDamageObserver.cpp WeaponBlockDispatch.cpp dinput8.def)
+  add_library(kf2vr_server_adapter SHARED ServerAdapter.cpp Proxy.cpp WeaponIsolation.cpp PerkContext.cpp CorpseDamageObserver.cpp WeaponBlockDispatch.cpp ArmLossDispatch.cpp dinput8.def)
   target_compile_definitions(kf2vr_server_adapter PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX KF2VR_SERVER_ADAPTER)
   target_sources(kf2vr_server_adapter PRIVATE WeaponBlockSurface.cpp WeaponImpactBody.cpp)
   target_link_libraries(kf2vr_server_adapter PRIVATE kf2vr_minhook bcrypt)
   set_target_properties(kf2vr_server_adapter PROPERTIES OUTPUT_NAME dinput8 PREFIX ""
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/server"
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/server")
-  add_library(kf2vr_adapter SHARED Adapter.cpp Proxy.cpp AtlasBlit.cpp StereoViews.cpp SpatialMenu.cpp SpatialHud.cpp XrGamepad.cpp HeadAim.cpp RingsideBell.cpp assets/RingsideBell.rc LoadingPlateArt.cpp WeaponIsolation.cpp WeaponContext.cpp WeaponHandling.cpp WeaponRuntimeDispatch.cpp PerkContext.cpp CorpseDamageObserver.cpp WeaponBlockDispatch.cpp dinput8.def)
+  add_library(kf2vr_adapter SHARED Adapter.cpp Proxy.cpp AtlasBlit.cpp StereoViews.cpp SpatialMenu.cpp SpatialHud.cpp XrGamepad.cpp HeadAim.cpp RingsideBell.cpp assets/RingsideBell.rc LoadingPlateArt.cpp WeaponIsolation.cpp WeaponContext.cpp WeaponHandling.cpp WeaponRuntimeDispatch.cpp PerkContext.cpp CorpseDamageObserver.cpp WeaponBlockDispatch.cpp ArmLossDispatch.cpp dinput8.def)
   target_sources(kf2vr_adapter PRIVATE DlssMath.cpp)
   target_sources(kf2vr_adapter PRIVATE GsaIsolation.cpp)
   target_sources(kf2vr_adapter PRIVATE WeaponBlockSurface.cpp WeaponImpactBody.cpp)
@@ -247,6 +247,10 @@ if(BUILD_TESTING AND WIN32)
   target_compile_definitions(kf2vr_foreground_depth_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_link_libraries(kf2vr_foreground_depth_test PRIVATE d3d11 d3dcompiler)
   add_test(NAME native_foreground_depth COMMAND kf2vr_foreground_depth_test)
+
+  add_executable(kf2vr_skin_scattering_test tests/SkinScatteringTest.cpp)
+  target_include_directories(kf2vr_skin_scattering_test PRIVATE .)
+  add_test(NAME native_skin_scattering COMMAND kf2vr_skin_scattering_test)
 
   add_executable(kf2vr_reflection_coverage_test tests/ReflectionCoverageTest.cpp)
   target_include_directories(kf2vr_reflection_coverage_test PRIVATE .)

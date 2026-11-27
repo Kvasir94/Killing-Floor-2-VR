@@ -30,6 +30,10 @@ struct VRMeleeTrait
     // spike), root-bone-local, measured with tools/re/measure_melee_point.py
     // and checked in Blender. Zero axis: the point is the far end of the head.
     var vector StabTip, StabAxis;
+    // Ruling A (Kvasir94 2026-11-09): what the back of a single-edged head does
+    // when it leads: 0 cuts (double-edged), 1 bludgeons (a blade's spine), 2
+    // pierces (an axe's back pick).
+    var byte BackKind;
 };
 
 var array<VRMeleeTrait> Traits;
@@ -83,20 +87,21 @@ static function byte ClassOf(Object Weapon)
     return T.MeleeClass;
 }
 
-// Decided damage-curve top (roadmap item 4): 1.5 blunt, 1.4 blades and axes.
+// Melee spec M30: swing speed never raises a hit above its stock number.
 static function float CurveTop(byte MeleeClass)
 {
-    return MeleeClass == CLASS_BLUNT ? 1.5 : 1.4;
+    return 1.0;
 }
 
-// Haptic intensity window in uu/s (roadmap item 1, B&S intensityMin/Max).
+// Haptic intensity window in uu/s (roadmap item 1, B&S intensityMin/Max: mace
+// 6-16 m/s, punch 2-9, blades 3-12, at 100 uu to the metre, melee spec M28).
 static function HapticWindow(byte MeleeClass, out float Low, out float High)
 {
     switch (MeleeClass)
     {
-        case CLASS_BLUNT: Low = 300; High = 800; break;
-        case CLASS_GAUNTLET: Low = 100; High = 450; break;
-        default: Low = 150; High = 600; break;
+        case CLASS_BLUNT: Low = 600; High = 1600; break;
+        case CLASS_GAUNTLET: Low = 200; High = 900; break;
+        default: Low = 300; High = 1200; break;
     }
 }
 
@@ -107,11 +112,11 @@ defaultproperties
     // double-bitted. Knife edge planes are right, but saw-backed spines fool
     // the thickness test's side choice, so knives stay double-edged (Support
     // and SWAT signs were flipped by eye).
-    Traits(0)=(WeaponClassName=KFWeap_Edged_Katana,MeleeClass=1,Mass=1.4,bPoint=true,Edge=(X=0,Y=-0.969,Z=0.246))
+    Traits(0)=(WeaponClassName=KFWeap_Edged_Katana,MeleeClass=1,Mass=1.4,bPoint=true,Edge=(X=0,Y=0.969,Z=0.246),BackKind=1)
     Traits(1)=(WeaponClassName=KFWeap_Edged_Zweihander,MeleeClass=1,Mass=3.5,bPoint=true,Edge=(X=-1,Y=0,Z=0),bDoubleEdge=true)
-    Traits(2)=(WeaponClassName=KFWeap_Edged_Scythe,MeleeClass=1,Mass=3.0,Edge=(X=0,Y=0,Z=-1))
+    Traits(2)=(WeaponClassName=KFWeap_Edged_Scythe,MeleeClass=1,Mass=3.0,Edge=(X=0,Y=0,Z=-1),BackKind=1)
     Traits(3)=(WeaponClassName=KFWeap_Edged_IonThruster,MeleeClass=1,Mass=3.0,bPoint=true,Edge=(X=1,Y=0,Z=0),bDoubleEdge=true)
-    Traits(4)=(WeaponClassName=KFWeap_Edged_FireAxe,MeleeClass=2,Mass=2.5,Edge=(X=0.998,Y=0,Z=-0.07))
+    Traits(4)=(WeaponClassName=KFWeap_Edged_FireAxe,MeleeClass=2,Mass=2.5,Edge=(X=0.998,Y=0,Z=-0.07),BackKind=2)
     Traits(5)=(WeaponClassName=KFWeap_Edged_AbominationAxe,MeleeClass=2,Mass=4.0,Edge=(X=-0.99,Y=0.009,Z=0.14),bDoubleEdge=true,bPoint=true,StabTip=(X=0,Y=-0.3,Z=84.2),StabAxis=(X=0,Y=0,Z=1))
     Traits(6)=(WeaponClassName=VRWeap_Tomahawk,MeleeClass=2,Mass=0.9)
     Traits(7)=(WeaponClassName=KFWeap_Blunt_Crovel,MeleeClass=3,Mass=2.0)

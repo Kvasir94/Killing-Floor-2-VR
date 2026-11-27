@@ -12,6 +12,10 @@ struct FlameRenderState
 var array<FlameRenderState> Saved;
 var float StockFOV;
 var bool bWorldApplied;
+// Idle sprays parked off the moving gun (#230), and when the gun last fired.
+var array<KFSprayActor> ParkedSprays;
+var array<KFWeapon> ParkedOn;
+var float LastEngagedTime;
 
 simulated function CaptureComponent(PrimitiveComponent C)
 {
@@ -154,12 +158,85 @@ static simulated function int BindSprays(KFWeapon W)
     return Count;
 }
 
+// #230: each flame gun keeps two pooled spray actors (skeletal spray mesh,
+// a particle pair per chain bone, splashes) based on its 1P mesh. A tracked
+// gun is moved several times a frame, and every move dragged both idle sprays
+// and all their components along: about 5 ms a frame on the Arc Generator,
+// Killerwatt, Reducto Ray and Freezethrower in replays. While the gun is not
+// firing or about to fire, its sprays wait unbased where they are (hidden and
+// not ticking); a trigger press (Wake) or a pending/firing state puts them
+// back on the muzzle socket before stock BeginSpray reads their base. Only the
+// local VR presenter runs this; flat play and other players' copies keep the
+// stock attachment.
+static simulated function bool Engaged(VRHandsBridge B, KFWeapon W)
+{
+    if (B.FlameRendering == None) return true;
+    if (W.IsFiring() || W.PendingFire(0) || W.PendingFire(1))
+        B.FlameRendering.LastEngagedTime = W.WorldInfo.RealTimeSeconds;
+    // The end-of-spray animation and its emitters finish within this grace.
+    return W.WorldInfo.RealTimeSeconds - B.FlameRendering.LastEngagedTime < 3.0;
+}
+
+simulated function Park(KFWeapon W)
+{
+    local KFSprayActor Spray;
+    foreach W.BasedActors(class'KFSprayActor', Spray)
+    {
+        if (Spray.bDeleteMe) continue;
+        Spray.SetBase(None);
+        if (Spray.Base != None) continue;
+        ParkedSprays.AddItem(Spray);
+        ParkedOn.AddItem(W);
+    }
+}
+
+// Returns this gun's parked sprays to the muzzle socket (or the weapon actor
+// while its mesh is detached), and forgets stale or deleted entries.
+simulated function Unpark(KFWeapon W)
+{
+    local int I;
+    local KFSprayActor Spray;
+    for (I = ParkedSprays.Length - 1; I >= 0; --I)
+    {
+        Spray = ParkedSprays[I];
+        if (Spray != None && !Spray.bDeleteMe && ParkedOn[I] == W && !W.bDeleteMe && Spray.Base == None)
+        {
+            if (W.MySkelMesh != None && W.MySkelMesh.Owner == W) Spray.AttachToMesh(W, W.MySkelMesh, Spray.SpraySocketName);
+            else Spray.SetBase(W);
+        }
+        if (Spray == None || Spray.bDeleteMe || ParkedOn[I] == None || ParkedOn[I].bDeleteMe
+            || ParkedOn[I] == W || Spray.Base != None)
+        {
+            ParkedSprays.Remove(I, 1);
+            ParkedOn.Remove(I, 1);
+        }
+    }
+}
+
+// Called just before a VR trigger starts the stock fire on W.
+static simulated function Wake(VRHandsBridge B, KFWeapon W)
+{
+    if (B == None || W == None || W.bDeleteMe || !W.IsA('KFWeap_FlameBase')) return;
+    if (B.FlameRendering != None)
+    {
+        B.FlameRendering.LastEngagedTime = W.WorldInfo.RealTimeSeconds;
+        B.FlameRendering.Unpark(W);
+    }
+    BindSprays(W);
+}
+
 static simulated function Update(VRHandsBridge B, KFWeapon W)
 {
     local KFSprayActor Spray;
     local PrimitiveComponent Component;
     local int I;
     if (W == None || !W.IsA('KFWeap_FlameBase')) return;
+    if (!Engaged(B, W))
+    {
+        B.FlameRendering.Park(W);
+        return;
+    }
+    if (B.FlameRendering != None) B.FlameRendering.Unpark(W);
     BindSprays(W);
     if (B.FlameRendering != None) B.FlameRendering.bWorldApplied = true;
     foreach W.BasedActors(class'KFSprayActor', Spray)

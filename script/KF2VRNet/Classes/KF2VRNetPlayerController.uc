@@ -1,11 +1,14 @@
 class KF2VRNetPlayerController extends KFPlayerController
-    config(Game) dependsOn(KF2VRNetTypes);
+    config(Game) dependsOn(KF2VRNetTypes, VRLivingArmLoss);
 
 var KF2VRNetChannel NetChannel;
+var KF2VRNetCorpseGore CorpseGore;
 var private KF2VRNetStrikeGuard PhysicalStrikes;
 var private KF2VRNetChannel StrikeChannel;
 var private int StrikeWorldEpoch, StrikeConnectionEpoch, StrikePawnEpoch;
 var float ThrownContactReady[2];
+// Melee spec G1-G3, G10: this player's stated guard (VRGuardState).
+var VRGuardState VRGuard;
 var float ThrownFlinchReady;
 var config bool bDiagnosticSyntheticAutoStart;
 var config bool bDiagnosticSharingReplay;
@@ -150,6 +153,7 @@ const SERVER_GRAB_MAX_THROW = 2500.0;
 // The authoritative half of a VR zed grab, one per hand.
 var private KFPawn_Monster ServerGrabPawn[2];
 var private name ServerGrabBone[2];
+var private VRLivingArmLoss.ArmYank ServerArmYanks[2];
 // A byte, not a bool: UnrealScript refuses bool arrays.
 var private byte ServerGrabHeld[2];
 var private float ServerGrabAttachTime[2];
@@ -1688,6 +1692,7 @@ event PlayerTick(float DeltaTime)
     {
         return;
     }
+    class'KF2VRNetCorpseGore'.static.Instance(self).Tick();
     // The server's trader entries, appended in the same order (VRTraderCatalog).
     if (!bTraderCatalogReady && WorldInfo.NetMode == NM_Client)
         bTraderCatalogReady = class'VRTraderCatalog'.static.Register(KFGameReplicationInfo(WorldInfo.GRI));
@@ -1862,8 +1867,10 @@ function RequestTeleport(vector Spot)
 }
 
 // Resolve the exact held item against the same physical-melee profile list
-// used by the client. The RPC must never turn an arbitrary owned weapon into
-// a stock melee hit, nor let a stowed item strike after a hand transition.
+// used by the client, so the server applies that weapon's stock attack.
+// Kvasir94 11-08 (melee plan Q8, #227): no anti-cheat geometry here. "I'm more
+// worried about it feeling great first, than players cheating." Position,
+// reach and rate are the client's; only what melee needs to work is checked.
 function bool PhysicalMeleeRequestValid(KFWeapon W, byte FiringMode, vector HitLocation, vector RayDir)
 {
     local int I;
@@ -1874,8 +1881,7 @@ function bool PhysicalMeleeRequestValid(KFWeapon W, byte FiringMode, vector HitL
         || !NetChannel.HeldState.bIndependentWeapons
         || (NetChannel.HeldState.LeftWeapon != W && NetChannel.HeldState.RightWeapon != W)
         || W.MeleeAttackHelper == None
-        || !class'VRGrenadeThrow'.static.Bounded(HitLocation - Pawn.Location, 450)
-        || RayDir != RayDir || VSize(RayDir) < 0.5 || VSize(RayDir) > 1.5) return false;
+        || HitLocation != HitLocation || RayDir != RayDir || VSizeSq(RayDir) < 0.0001) return false;
     // A firearm strikes only through its stock bash (VRPhysicalBash). This
     // path used to require KFWeap_MeleeBase, so every gun bash on a server was
     // detected, predicted and then silently dropped here.
@@ -1894,40 +1900,30 @@ function bool PhysicalMeleeRequestValid(KFWeapon W, byte FiringMode, vector HitL
         // saw remains on its ordinary firing path, which pays its fuel.
         return FiringMode == class'KFWeapon'.const.BASH_FIREMODE;
     }
-    // Melee item 8 stage B: the stock stab, only for pointed weapons whose
-    // stock bash is a piercing stab.
-    if (FiringMode == class'KFWeapon'.const.BASH_FIREMODE)
-        return NetChannel.ExperimentalInteractionsAllowed() && class'VRPhysicalMelee'.static.StabDamageAllowed(W);
-    return FiringMode == 0 || FiringMode == class'KFWeap_MeleeBase'.const.HEAVY_ATK_FIREMODE;
+    // The stock bash: a tip-first thrust (plan Q5) or a shaft, hilt or guard
+    // contact (Q9), for every VR player.
+    return FiringMode == 0 || FiringMode == class'KFWeap_MeleeBase'.const.HEAVY_ATK_FIREMODE
+        || FiringMode == class'KFWeapon'.const.BASH_FIREMODE;
 }
 
-// Use the accepted tracking frame, never a client-supplied trace origin. The
-// contact origin must remain spatially plausible independently of the swing
-// ledger; an accepted serial does not authorize an arbitrary victim.
-function bool PhysicalContactFromHand(Actor Victim, vector Contact, int Hand)
-{
-    local KFPawn_Human Body;
-    local vector Origin;
-    local byte Pose;
-    local int Revision;
-    return NetChannel != None && NetChannel.ContactHand(Hand, Body, Origin, Pose, Revision)
-        && Body == Pawn && class'VRMeleeContactGuard'.static.Valid(Body, Victim, Contact, Origin);
-}
-
-// Bind the reported striking hand to this exact held item. Gauntlets and
-// shields may use their implicit empty opposite hand; a support-only carrier
-// may bash, but never borrows the other hand's contact origin.
+// Bind the reported striking hand to this exact held item, so the hit uses
+// that item's stock attack. Gauntlets and shields use their implicit empty
+// opposite hand. No position checks (plan Q8): the client's contact stands.
 function bool StrikeHandValid(KFWeapon W, Actor Victim, vector Contact, int Hand, bool bShieldContact)
 {
     local int HeldHand;
     if (W == None || NetChannel == None || Hand < 0 || Hand > 1) return false;
     HeldHand = NetChannel.HeldState.LeftWeapon == W ? 0 : 1;
-    if (bShieldContact)
-        return Hand == 1 - HeldHand && NetChannel.PhysicalHandEligible(Hand, Contact)
-            && PhysicalContactFromHand(Victim, Contact, Hand);
-    if (Hand == HeldHand) return PhysicalContactFromHand(Victim, Contact, Hand);
-    return (KFWeap_Blunt_PowerGloves(W) != None || KFWeap_HRG_BlastBrawlers(W) != None)
-        && NetChannel.PhysicalHandEligible(Hand, Contact) && PhysicalContactFromHand(Victim, Contact, Hand);
+    if (bShieldContact) return Hand == 1 - HeldHand && HandEmpty(Hand);
+    if (Hand == HeldHand) return true;
+    return (KFWeap_Blunt_PowerGloves(W) != None || KFWeap_HRG_BlastBrawlers(W) != None) && HandEmpty(Hand);
+}
+
+// The hand holds no item and no Zed: it can be a gauntlet, shield or fist.
+function bool HandEmpty(int Hand)
+{
+    return NetChannel != None && Hand >= 0 && Hand <= 1 && ServerGrabPawn[Hand] == None
+        && (Hand == 0 ? NetChannel.HeldState.LeftWeapon : NetChannel.HeldState.RightWeapon) == None;
 }
 
 function bool AdmitPhysicalStrike(KF2VRNetTypes.NetPhysicalStrike Strike, KFWeapon W, Actor Victim)
@@ -1953,19 +1949,52 @@ function bool AdmitPhysicalStrike(KF2VRNetTypes.NetPhysicalStrike Strike, KFWeap
     return PhysicalStrikes.Admit(Strike.Hand, Strike.Serial, Strike.HandGeneration, Strike.WeaponGeneration, W, Victim, WorldInfo.RealTimeSeconds);
 }
 
-// DamageScale is the client's swing-speed multiplier; VRMeleeScale clamps it to
-// the same band the client can produce, so a forged value buys nothing more.
-// bNoDismember (melee item 5) can only remove dismemberment, never add it.
-// bBluntContact (a bladed gun struck with a blunt part) can only lower the hit.
-reliable server function ServerMeleeHit(Actor Victim, byte FiringMode, vector HitLocation, vector RayDir, name BoneName, KFWeapon SourceWeapon, KF2VRNetTypes.NetPhysicalStrike Strike, optional float DamageScale = 1.0, optional bool bShieldContact, optional bool bNoDismember, optional bool bExplosiveContact, optional bool bBluntContact)
+// DamageScale is the client's swing-speed multiplier (VRMeleeScale keeps it in
+// its working band). bNoDismember (melee item 5, plan Q9) can only remove
+// dismemberment; bBluntContact (a bladed gun struck with a blunt part) uses
+// the blunt part's stock values.
+// Corpse gore every player sees (KF2VRNetCorpseGore).
+reliable server function ServerCorpseGore(class<KFPawn_Monster> ZedClass, vector Spot, byte Zone, class<KFDamageType> DamageType, vector Dir)
+{
+    if (Role == ROLE_Authority) class'KF2VRNetCorpseGore'.static.Instance(self).Relay(ZedClass, Spot, Zone, DamageType, Dir);
+}
+
+reliable client function ClientCorpseGore(class<KFPawn_Monster> ZedClass, vector Spot, byte Zone, class<KFDamageType> DamageType, vector Dir)
+{
+    class'KF2VRNetCorpseGore'.static.Instance(self).Apply(ZedClass, Spot, Zone, DamageType, Dir);
+}
+
+// Corpses held or thrown by hand, seen by every player (KF2VRNetCorpseGore).
+reliable server function ServerCorpseHold(byte Hand, class<KFPawn_Monster> ZedClass, vector Spot, name Bone, vector At)
+{
+    if (Role == ROLE_Authority) class'KF2VRNetCorpseGore'.static.Instance(self).RelayHold(Hand, ZedClass, Spot, Bone, At);
+}
+
+reliable server function ServerCorpseRelease(byte Hand, vector Throw)
+{
+    if (Role == ROLE_Authority) class'KF2VRNetCorpseGore'.static.Instance(self).RelayRelease(Hand, Throw);
+}
+
+reliable client function ClientCorpseHold(KFPawn_Human Holder, byte Hand, class<KFPawn_Monster> ZedClass, vector Spot, name Bone, vector At)
+{
+    class'KF2VRNetCorpseGore'.static.Instance(self).BeginRemote(Holder, Hand, ZedClass, Spot, Bone, At);
+}
+
+reliable client function ClientCorpseRelease(KFPawn_Human Holder, byte Hand, vector Throw)
+{
+    class'KF2VRNetCorpseGore'.static.Instance(self).EndRemote(Holder, Hand, Throw);
+}
+
+reliable server function ServerMeleeHit(Actor Victim, byte FiringMode, vector HitLocation, vector RayDir, name BoneName, KFWeapon SourceWeapon, KF2VRNetTypes.NetPhysicalStrike Strike, optional float DamageScale = 1.0, optional bool bShieldContact, optional bool bNoDismember, optional bool bExplosiveContact, optional bool bBluntContact, optional byte Part)
 {
     local ImpactInfo Impact;
     local byte ShieldHand, HandPose;
     local int Hand, PoseRevision;
     local KFPawn_Human ContactBody;
     local KFWeap_Blunt_Pulverizer Pulverizer;
+    local KFWeap_Blunt_MedicBat MedicBat;
     local KF2VRNetItemRuntime Runtime;
-    local bool bBlast;
+    local bool bBlast, bAlly;
     if (Role != ROLE_Authority || Victim == None || Victim == Pawn || Victim.bDeleteMe) return;
     // A shield contact belongs only to a held BoneCrusher with its implicit
     // opposite hand free. Do not accept arbitrary weapon damage types.
@@ -1975,7 +2004,7 @@ reliable server function ServerMeleeHit(Actor Victim, byte FiringMode, vector Hi
     if (bShieldContact)
     {
         ShieldHand = NetChannel.HeldState.LeftWeapon == SourceWeapon ? 1 : 0;
-        if (ServerGrabPawn[ShieldHand] != None || !NetChannel.PhysicalHandEligible(ShieldHand, HitLocation)) return;
+        if (ServerGrabPawn[ShieldHand] != None) return;
     }
     if (DamageScale != DamageScale || !PhysicalMeleeRequestValid(SourceWeapon, FiringMode, HitLocation, RayDir)
         || !StrikeHandValid(SourceWeapon, Victim, HitLocation, Strike.Hand, bShieldContact))
@@ -1988,42 +2017,50 @@ reliable server function ServerMeleeHit(Actor Victim, byte FiringMode, vector Hi
     }
     if (!AdmitPhysicalStrike(Strike, SourceWeapon, Victim)) return;
     Impact.HitActor = Victim;
-    if (!NetChannel.ExperimentalInteractionsAllowed())
-    {
-        // Old physical swings still hit; experimental curves and edge flags do not.
-        DamageScale = FClamp(DamageScale, 0.75, 1.35);
-        bNoDismember = false;
-    }
     Impact.HitLocation = HitLocation;
     Impact.RayDir = Normal(RayDir);
     Impact.HitInfo.BoneName = BoneName;
     // One accepted melee contact carries the optional blast intent. Its
     // cartridge, ownership, tracking and stock fire interval remain authoritative.
+    // Melee spec M20: the Hemoclobber heals the teammate its swing touches
+    // and never damages them; its trigger-held blast is paid like the
+    // Pulverizer's and may be set off on a Zed or a teammate.
     Pulverizer = KFWeap_Blunt_Pulverizer(SourceWeapon);
-    if (bExplosiveContact && !bShieldContact && Pulverizer != None
+    MedicBat = KFWeap_Blunt_MedicBat(SourceWeapon);
+    bAlly = MedicBat != None && !bShieldContact && class'VRMedicBatImpact'.static.IsAlly(Pawn, Victim);
+    if (bExplosiveContact && !bShieldContact && (Pulverizer != None || MedicBat != None)
         && KFPawn(Victim) != None && KFPawn(Victim).Health > 0 && !KFPawn(Victim).bPlayedDeath
-        && KFPawn(Victim).GetTeamNum() != Pawn.GetTeamNum()
-        && (Pulverizer.IsInState('Active') || (Pulverizer.IsInState('WeaponDownSimple')
+        && (bAlly || KFPawn(Victim).GetTeamNum() != Pawn.GetTeamNum())
+        && (SourceWeapon.IsInState('Active') || (SourceWeapon.IsInState('WeaponDownSimple')
             && class'VRPhysicalInteraction'.static.Restrained(KFPawn_Human(Pawn)))))
     {
-        Runtime = NetChannel.WorldDropRuntime(Pulverizer);
-        Hand = NetChannel.HeldState.LeftWeapon == Pulverizer ? 0 : 1;
+        Runtime = NetChannel.WorldDropRuntime(SourceWeapon);
+        Hand = NetChannel.HeldState.LeftWeapon == SourceWeapon ? 0 : 1;
         bBlast = Runtime != None && Runtime.NativeReady == 1 && Runtime.CarryOnly == 0
             && Runtime.WorldDropped == 0 && Runtime.WorldTrickPending == 0 && Runtime.MechanismPending == 0
             && WorldInfo.TimeSeconds >= Runtime.PulverizerReadyAt
             && NetChannel.ContactHand(Hand, ContactBody, Impact.StartTrace, HandPose, PoseRevision)
             && ContactBody == Pawn;
     }
-    if (SourceWeapon != None && SourceWeapon.MeleeAttackHelper != None)
+    if (bAlly)
+    {
+        if (!bBlast) class'VRMedicBatImpact'.static.HealAuthority(MedicBat, Victim, HitLocation, FiringMode);
+    }
+    else if (SourceWeapon != None && SourceWeapon.MeleeAttackHelper != None)
     {
         class'VRMeleeScale'.static.ProcessScaledHit(SourceWeapon, FiringMode, Impact, DamageScale, bShieldContact, bNoDismember,
-            NetChannel.ExperimentalInteractionsAllowed(), bBluntContact);
+            NetChannel.ExperimentalInteractionsAllowed(), bBluntContact, Part);
     }
-    if (bBlast && class'VRPulverizerImpact'.static.DetonateAuthority(Pulverizer, Impact))
+    if (bBlast)
+    {
+        if (MedicBat != None) bBlast = class'VRMedicBatImpact'.static.DetonateAuthority(MedicBat, Impact);
+        else bBlast = class'VRPulverizerImpact'.static.DetonateAuthority(Pulverizer, Impact);
+    }
+    if (bBlast)
     {
         Runtime.PulverizerReadyAt = WorldInfo.TimeSeconds
-            + FMax(0.01, Pulverizer.GetFireInterval(class'KFWeapon'.const.CUSTOM_FIREMODE));
-        Pulverizer.ClientForceAmmoUpdate(Pulverizer.AmmoCount[0], Pulverizer.SpareAmmoCount[0]);
+            + FMax(0.01, SourceWeapon.GetFireInterval(class'KFWeapon'.const.CUSTOM_FIREMODE));
+        SourceWeapon.ClientForceAmmoUpdate(SourceWeapon.AmmoCount[0], SourceWeapon.SpareAmmoCount[0]);
     }
 }
 
@@ -2133,6 +2170,17 @@ reliable server function ServerVRGrip(KFWeapon W, int Policy)
 // raised off hand raises the Riot Shield (UpdateRiotShield). Only the
 // flag: stock ServerZoomIn would also zoom and play sight dialog. For the exact
 // Rail Gun this also carries AUTO/MANUAL; stock AltFireMode is local-only.
+// Melee spec M26 (#233): the owner folded or unfolded its Scythe. Stock's own
+// NotifyServerMode only flips bIsFolded here, never the mode's damage, reach
+// and types; VRScytheFold applies the mode and publishes it to every client.
+reliable server function ServerVRScytheFold(KFWeapon W, bool bFolded)
+{
+    if (Role != ROLE_Authority || KFWeap_Edged_Scythe(W) == None || W.bDeleteMe || W.Instigator != Pawn) return;
+    class'VRScytheFold'.static.ApplyAuthority(W, bFolded);
+    `log("KF2VR_SCYTHE phase=server fold=" $ (bFolded ? "folded" : "unfolded") @ "damage=" $ int(W.InstantHitDamage[0])
+        $ "/" $ int(W.InstantHitDamage[5]) @ "special=" $ KFPawn(Pawn).WeaponSpecialAction);
+}
+
 reliable server function ServerVRSeekerSights(KFWeapon W, bool bSighted)
 {
     local KFWeap_Rifle_RailGun Rail;
@@ -2195,60 +2243,89 @@ reliable server function ServerPhysicalDamage(Actor Victim, float DamageAmount, 
 {
     local TraceHitInfo HitInfo;
     local int EmpoweredDamage, Hand;
+    local float MomentumCap;
     Hand = Strike.Hand;
     if (Role != ROLE_Authority || Victim == None || Victim.bDeleteMe) return;
-    if (Hand < 0 || Hand > 1 || NetChannel == None || !NetChannel.PhysicalHandEligible(Hand, HitLocation)
-        || ServerGrabPawn[Hand] != None || !PhysicalContactFromHand(Victim, HitLocation, Hand)) return;
+    // Plan Q8: the punching hand must be empty; its position is the client's.
+    if (!HandEmpty(Hand) || !NetChannel.IsInventoryFocusEligible()) return;
     // Core fists remain independent of experimental grab permission. Boxing
     // gloves are a client setting; their own damage types carry their bounds.
     if (Pawn == None || Pawn.Health <= 0 || NetChannel == None || !NetChannel.bHandshakeAccepted
         || DamageAmount != DamageAmount || DamageAmount <= 0) return;
     if (Pawn(Victim) == None)
     {
-        // The same accepted hand pose, reach/visibility checks and strike
-        // ledger apply to stock breakables. Never accept charged/glove damage
-        // or arbitrary actor types through this otherwise pawn-only path.
+        // Stock breakables take the plain fist damage types only, at no more
+        // than stock bash damage (VRPhysicalFist uses the same cap).
         if (!class'VRPhysicalFist'.static.BreakableTarget(Victim)
             || (DamageType != class'VRDT_FistDamage' && DamageType != class'VRDT_FistDamageHeavy')
-            || DamageAmount > int(class'KFWeapon'.default.InstantHitDamage[class'KFWeapon'.const.BASH_FIREMODE])
-            || !class'VRGrenadeThrow'.static.Bounded(Momentum, class'VRPhysicalFist'.default.MaxFistMomentum + 1)
             || !AdmitPhysicalStrike(Strike, None, Victim)) return;
+        DamageAmount = FMin(DamageAmount, StockBashDamage());
+        if (VSize(Momentum) > class'VRPhysicalFist'.default.MaxFistMomentum)
+            Momentum = Normal(Momentum) * class'VRPhysicalFist'.default.MaxFistMomentum;
         // No client component is admitted: stock fracture/destructible damage
         // reconstructs its own HitInfo from the validated point and momentum.
         Victim.TakeDamage(int(DamageAmount), self, HitLocation, Momentum, DamageType, HitInfo, Pawn);
         return;
     }
-    if (DamageType == class'VRDT_FistDamage' || DamageType == class'VRDT_FistDamageHeavy'
-        || DamageType == class'VRDT_ChargedFist' || DamageType == class'VRDT_ChargedFistStun')
-    {
-        if (!class'VRGrenadeThrow'.static.Bounded(Momentum, 1501)
-            || DamageAmount > class'VRFistCharge'.default.ChargedDamage) return;
-    }
-    else if (DamageType == class'VRDT_PalmShove')
-    {
-        if (!NetChannel.ExperimentalInteractionsAllowed()) return;
-        // Melee item 13: token damage and a stock stumble only.
-        if (!class'VRGrenadeThrow'.static.Bounded(Momentum, class'VRPalmShove'.default.Momentum + 1)
-            || DamageAmount > class'VRPalmShove'.default.Damage) return;
-    }
-    else if (DamageType == class'VRDT_GloveFist' || DamageType == class'VRDT_GloveFistHeavy'
-        || DamageType == class'VRDT_GloveCharged' || DamageType == class'VRDT_GloveChargedStun')
-    {
-        if (!class'VRGrenadeThrow'.static.Bounded(Momentum, class'VRBoxingGloves'.static.MaxMomentum() + 1)
-            || DamageAmount > class'VRBoxingGloves'.static.MaxDamage()) return;
-    }
-    else return;
+    // Only the fist damage types travel this path; their amounts are the
+    // client's (plan Q8). Palm shoves stay B&S2-only.
+    if (DamageType == class'VRDT_PalmShove' && !NetChannel.ExperimentalInteractionsAllowed()) return;
+    if (DamageType != class'VRDT_FistDamage' && DamageType != class'VRDT_FistDamageHeavy'
+        && DamageType != class'VRDT_ChargedFist' && DamageType != class'VRDT_ChargedFistStun'
+        && DamageType != class'VRDT_PalmShove'
+        && DamageType != class'VRDT_GloveFist' && DamageType != class'VRDT_GloveFistHeavy'
+        && DamageType != class'VRDT_GloveCharged' && DamageType != class'VRDT_GloveChargedStun') return;
     if (!AdmitPhysicalStrike(Strike, None, Victim)) return;
-    // A normal punch into a Zed mid-attack parries it, as it does in solo;
-    // the stumble must start before the blow's own reaction.
+    // Kvasir94 11-10: punches are limited to normal bash damage; the Berserker
+    // raises it through his perk and class bonuses. Clamp the client's raw
+    // blow to the same caps solo applies (a tracking glitch lands a normal
+    // hit); stock perk scaling and Breacher pressure apply on top below.
+    DamageAmount = FMin(DamageAmount, PunchDamageCap(DamageType));
+    MomentumCap = PunchMomentumCap(DamageType);
+    if (VSize(Momentum) > MomentumCap) Momentum = Normal(Momentum) * MomentumCap;
+    // Melee spec G11/G13: a normal punch into a Zed mid-attack adds stumble
+    // through the stock affliction system; it parries only on the attacking
+    // arm with B&S2 melee feel on. Before the blow's own reaction, as in solo.
     if (DamageType == class'VRDT_FistDamage' || DamageType == class'VRDT_GloveFist')
-        class'VRPhysicalFist'.static.ApplyParry(KFPawn(Victim), KFPawn(Pawn), class'VRPhysicalFist'.default.LightParryStrength);
+        class'VRPhysicalFist'.static.CounterPunch(KFPawn(Victim), KFPawn(Pawn), false, BoneName, NetChannel.ExperimentalInteractionsAllowed());
     else if (DamageType == class'VRDT_FistDamageHeavy' || DamageType == class'VRDT_GloveFistHeavy')
-        class'VRPhysicalFist'.static.ApplyParry(KFPawn(Victim), KFPawn(Pawn), class'VRPhysicalFist'.default.HeavyParryStrength);
+        class'VRPhysicalFist'.static.CounterPunch(KFPawn(Victim), KFPawn(Pawn), true, BoneName, NetChannel.ExperimentalInteractionsAllowed());
     HitInfo.BoneName = BoneName;
     EmpoweredDamage=int(DamageAmount);
     class'VRBreacherPhysics'.static.EmpowerPunch(self,KFPawn(Victim),HitLocation,BoneName,EmpoweredDamage,Momentum,DamageType);
     Victim.TakeDamage(EmpoweredDamage, self, HitLocation, Momentum, DamageType, HitInfo, Pawn);
+}
+
+function float StockBashDamage()
+{
+    return class'KFWeapon'.default.InstantHitDamage[class'KFWeapon'.const.BASH_FIREMODE];
+}
+
+// The raw punch caps VRPhysicalFist and VRFistCharge apply in solo: a plain
+// fist is stock bash damage, a Berserker keeps his full punch curve and
+// bonuses, and the charged punch, boxing gloves and palm shove keep their own
+// designed maximums.
+function float PunchDamageCap(class<DamageType> DamageType)
+{
+    if (DamageType == class'VRDT_PalmShove') return class'VRPalmShove'.default.Damage;
+    if (DamageType == class'VRDT_ChargedFist' || DamageType == class'VRDT_ChargedFistStun')
+        return class'VRFistCharge'.default.ChargedDamage;
+    if (DamageType == class'VRDT_GloveFist' || DamageType == class'VRDT_GloveFistHeavy'
+        || DamageType == class'VRDT_GloveCharged' || DamageType == class'VRDT_GloveChargedStun')
+        return class'VRBoxingGloves'.static.MaxDamage();
+    if (KFPerk_Berserker(GetPerk()) != None) return class'VRPhysicalFist'.default.MaxBonusDamage;
+    return StockBashDamage();
+}
+
+function float PunchMomentumCap(class<DamageType> DamageType)
+{
+    if (DamageType == class'VRDT_PalmShove') return class'VRPalmShove'.default.Momentum;
+    if (DamageType == class'VRDT_GloveFist' || DamageType == class'VRDT_GloveFistHeavy'
+        || DamageType == class'VRDT_GloveCharged' || DamageType == class'VRDT_GloveChargedStun')
+        return class'VRBoxingGloves'.static.MaxMomentum();
+    if (DamageType == class'VRDT_ChargedFist' || DamageType == class'VRDT_ChargedFistStun')
+        return FMax(class'VRFistCharge'.default.ChargedMomentum, class'VRPhysicalFist'.default.MaxFistMomentum);
+    return class'VRPhysicalFist'.default.MaxFistMomentum;
 }
 
 // Melee roadmap item 12: a client's held melee weapon struck with its grip,
@@ -2268,6 +2345,52 @@ reliable server function ServerMeleePommel(Pawn Victim, float DamageAmount, vect
     if (!AdmitPhysicalStrike(Strike, SourceWeapon, Victim)) return;
     HitInfo.BoneName = BoneName;
     Victim.TakeDamage(int(DamageAmount), self, HitLocation, Momentum, class'VRDT_MeleePommel', HitInfo, SourceWeapon);
+}
+
+// A client's physical swing began: warn nearby Zeds like a stock attack so
+// blocking Zeds can block it (VRMeleeWarning, melee plan Q7, #227). The weapon
+// must be the held physical melee weapon so its stock reach applies.
+unreliable server function ServerVRMeleeWarning(KFWeapon SourceWeapon, byte Dir)
+{
+    if (Role != ROLE_Authority || Pawn == None || Pawn.Health <= 0
+        || !PhysicalMeleeRequestValid(SourceWeapon, class'KFWeapon'.const.BASH_FIREMODE, Pawn.Location, vector(Pawn.Rotation))) return;
+    class'VRMeleeWarning'.static.Warn(Pawn, SourceWeapon, Dir);
+}
+
+// Melee spec G10: the player's game states its guard; nothing here re-checks
+// the pose (VRGuardState).
+unreliable server function ServerVRGuard(KFWeapon SourceWeapon, int Hand, bool bUp, int Yaw, int Half, byte MetSerial)
+{
+    local KFWeapon W;
+    local vector From;
+    local int Verdict;
+    if (Role != ROLE_Authority || Pawn == None) return;
+    if (VRGuard == None) VRGuard = new(self) class'VRGuardState';
+    if (!VRGuard.State(Pawn, SourceWeapon, Hand, bUp, Yaw, Half, MetSerial)) return;
+    Verdict = VRGuard.BreakGrab(self, W, From);
+    if (Verdict > 0) ClientVRGuardEffect(W, 255, Verdict == 2, From, 0);
+}
+
+// Melee spec G9: the owner's game plays the stock sound and particle where the
+// hit met the guard, shoves the weapon and pulses the hands.
+reliable client function ClientVRGuardEffect(KFWeapon W, byte BlockType, bool bParried, vector From, byte Damage)
+{
+    if (VRHandsBridge(LocalVRBridge) != None)
+        VRHandsBridge(LocalVRBridge).PlayGuardEffect(W, BlockType, bParried, From, Damage);
+}
+
+function AdjustDamage(out int InDamage, Controller InstigatedBy, class<DamageType> DamageType, Actor DamageCauser, Actor DamageReceiver)
+{
+    local KFWeapon W;
+    local byte BlockType;
+    local vector From;
+    local int Verdict, Before;
+    if (Role == ROLE_Authority && VRGuard != None && Pawn != None && DamageReceiver == Pawn)
+    {
+        Verdict = VRGuard.Apply(self, InDamage, DamageType, DamageCauser, W, BlockType, From, Before);
+        if (Verdict > 0) ClientVRGuardEffect(W, BlockType, Verdict == 2, From, Clamp(Before, 0, 255));
+    }
+    Super.AdjustDamage(InDamage, InstigatedBy, DamageType, DamageCauser, DamageReceiver);
 }
 
 // Melee roadmap item 6: a client's moving melee weapon met a Zed's attacking
@@ -2692,6 +2815,20 @@ function UpdateTrackedGrabs()
     }
 }
 
+// Experimental arm loss (#210): a remote player's hard pull on a small Zed's
+// held arm, judged here from the tracked hand stream. Local players (Solo,
+// listen host) are judged by VRZedGrab.TryArmYank.
+function bool ServerArmYank(byte Hand, KFPawn_Monster M, vector Palm)
+{
+    local KF2VRNetGame G;
+    local int Zone;
+    G = KF2VRNetGame(WorldInfo.Game);
+    if (G == None || !G.LivingArmLossEnabled()) return false;
+    Zone = class'VRLivingArmLoss'.static.YankStep(ServerArmYanks[Hand], M, ServerGrabBone[Hand], Palm, WorldInfo.RealTimeSeconds);
+    if (Zone < 0 || !class'VRLivingArmLoss'.static.ServerTearByHand(M, Zone)) return false;
+    ReleaseServerGrab(Hand);
+    return true;
+}
 private function UpdateServerGrabFrame(byte Hand, vector Palm, rotator HandRotation)
 {
     local KFPawn_Monster M;
@@ -2713,6 +2850,7 @@ private function UpdateServerGrabFrame(byte Hand, vector Palm, rotator HandRotat
     // disagreement a round trip guarantees, so a tampered client cannot tow a
     // Zed across the map.
     if (VSize(Palm - M.Location) > SERVER_GRAB_LIMIT) { ReleaseServerGrab(Hand); return; }
+    if (!IsLocalPlayerController() && ServerArmYank(Hand, M, Palm)) return;
     if (ServerGrabStanding[Hand] != 0)
     {
         Standing = class'VRSM_StandingHold'.static.Current(M);

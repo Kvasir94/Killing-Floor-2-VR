@@ -22,6 +22,9 @@ var quat CarryLocalQ;
 // VRReloadCatalog.bSeatAtNotify: the seat is the loaded bone's pose at the
 // ammo moment of the reload clip, not its Idle pose.
 var bool bSeatAtNotify;
+// SampleBoxInsert followed a part the incoming load pushes (DrawBone): the
+// path is that whole stroke, longer than a socket's final approach.
+var bool bDrawInsert;
 var float ContactDistance;
 var bool bRackSampled;
 // VRReloadCatalog.ActionKind of the gun being sampled, set by the caller.
@@ -67,7 +70,7 @@ function Reset()
     CarryTime = 0; CarryLocal = vect(0,0,0); CarryLocalQ = EntryLocalQ;
     InsertLength = 0; PathLength = 0; SeatCorrection = 0;
     ContactDistance = 0;
-    bRackSampled = false;
+    bRackSampled = false; bDrawInsert = false;
     RackAxisLocal = vect(0,0,0); RackRestLocal = vect(0,0,0);
     RackRestLocalQ = EntryLocalQ; RackStroke = 0; RackAnim = '';
     FailureReason = ""; RackFailureReason = "";
@@ -485,15 +488,15 @@ function SampleFollower(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
 // seat; the notify remains the stock ammo timer, never a spatial target.
 function bool SampleBoxInsert(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     name Anim, name Root, name Ammo, name Hand, optional bool bLateBoxNotify,
-    optional bool bProjectilePlateau)
+    optional bool bProjectilePlateau, optional name DrawBone)
 {
     local AnimSequence Clip;
     local InsertPose Point;
     local int I, J, Steps;
     local float T, Candidate, EntryWindow;
     local bool bMoved, bStable, bFoundPlateau;
-    local vector PlateauLocal;
-    local quat PlateauLocalQ;
+    local vector PlateauLocal, DrawRest, DrawNow;
+    local quat PlateauLocalQ, DrawQ;
     Reset();
     if (M == None || M.SkeletalMesh == None || Seq == None || M.MatchRefBone(Root) < 0
         || M.MatchRefBone(Ammo) < 0 || M.MatchRefBone(Hand) < 0) return false;
@@ -576,12 +579,36 @@ function bool SampleBoxInsert(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     // The bow translates into the seat before its rotation settles. Reach
     // back far enough to include its actual nocking approach.
     EntryWindow = bProjectilePlateau ? 0.8 : 0.45;
-    for (I = 1; I <= 64; ++I)
+    if (DrawBone != '')
     {
-        EntryTime = FMax(T - EntryWindow * Clip.RateScale * float(I) / 64.0, 0);
-        Pose(M, Seq, EntryTime);
-        Relative(M, Root, Ammo, Point.Position, Point.Rotation);
-        if (VSize(Point.Position - SeatLocal) >= 8) break;
+        // R63: the load pushes this part home (the crossbow bolt draws the
+        // string). Enter where the part still rests as the clip began, so the
+        // whole push is the insert and the part follows it from the first unit.
+        if (M.MatchRefBone(DrawBone) < 0) { FailureReason = "missing-draw-part"; return false; }
+        Pose(M, Seq, 0);
+        Relative(M, Root, DrawBone, DrawRest, DrawQ);
+        EntryTime = -1;
+        for (I = 1; I <= 240; ++I)
+        {
+            Candidate = T * (1.0 - float(I) / 240.0);
+            Pose(M, Seq, Candidate);
+            Relative(M, Root, DrawBone, DrawNow, DrawQ);
+            if (VSize(DrawNow - DrawRest) > 0.25) continue;
+            EntryTime = Candidate;
+            break;
+        }
+        if (EntryTime < 0) { FailureReason = "draw-part-never-rests"; return false; }
+        bDrawInsert = true;
+    }
+    else
+    {
+        for (I = 1; I <= 64; ++I)
+        {
+            EntryTime = FMax(T - EntryWindow * Clip.RateScale * float(I) / 64.0, 0);
+            Pose(M, Seq, EntryTime);
+            Relative(M, Root, Ammo, Point.Position, Point.Rotation);
+            if (VSize(Point.Position - SeatLocal) >= 8) break;
+        }
     }
     for (I = 0; I <= 16; ++I)
     {
@@ -593,7 +620,7 @@ function bool SampleBoxInsert(KFSkeletalMeshComponent M, AnimNodeSequence Seq,
     }
     EntryLocal = Path[0].Position; EntryLocalQ = Path[0].Rotation;
     InsertLength = VSize(SeatLocal - EntryLocal);
-    if (!(InsertLength > 0.1 && PathLength < 30)) { Path.Length = 0; return false; }
+    if (!(InsertLength > 0.1 && PathLength < (bDrawInsert ? 80 : 30))) { Path.Length = 0; return false; }
     Pose(M, Seq, EntryTime);
     Relative(M, Root, Hand, HandLocal, HandLocalQ);
     CarryTime = EntryTime; CarryLocal = EntryLocal; CarryLocalQ = EntryLocalQ;

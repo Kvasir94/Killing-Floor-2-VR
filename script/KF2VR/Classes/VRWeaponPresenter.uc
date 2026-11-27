@@ -56,6 +56,8 @@ var float UnbracedRecoilFloor;
 // Diagnostic only: at most 120 firing-state observations per presenter.
 var int StonerAimSamples;
 var float StonerAimNextSample;
+// #201: the shell-eject system this presenter has moved to world space.
+var ParticleSystem WorldShellSystem;
 
 simulated function ObserveStonerAim(rotator Adjusted, rotator PoseBase, rotator Recoil, vector Origin)
 {
@@ -893,7 +895,7 @@ simulated function vector PrimaryGripWorld()
     if (ActiveWeapon == None || ActiveWeapon.MySkelMesh == None || ActiveProfile < 0) return Location;
     RootBone = WeaponProfiles[ActiveProfile].RootBone;
     return ActiveWeapon.MySkelMesh.GetBoneLocation(RootBone)
-        + QuatRotateVector(ActiveWeapon.MySkelMesh.GetBoneQuaternion(RootBone), PrimaryContactGrip);
+        + QuatRotateVector(ActiveWeapon.MySkelMesh.GetBoneQuaternion(RootBone), ReversedGripPoint(PrimaryContactGrip));
 }
 
 simulated function PlaceWeapon()
@@ -940,6 +942,8 @@ simulated function PlaceWeapon()
     HandFillLight.SetEnabled(true);
     RefreshGripIdentity();
     EnsurePhysicalCombat();
+    if (class'VRShellEjectSpace'.static.Template(ActiveWeapon) != WorldShellSystem)
+        WorldShellSystem = class'VRShellEjectSpace'.static.UseWorldSpace(ActiveWeapon);
     if (RootBridge.HandInventory != None && RootBridge.HandInventory.Input != None
         && RootBridge.HandInventory.Input.Bow != None) RootBridge.HandInventory.Input.Bow.Prepare(self);
     Super.PlaceWeapon();

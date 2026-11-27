@@ -281,5 +281,35 @@ class CaptureTests(unittest.TestCase):
             self.assertFalse(list((run/'captures/originals').iterdir()))
 
 
+
+class CaptureContextTests(unittest.TestCase):
+    def test_entries_name_their_case_weapon_settings_and_hands(self):
+        text = '\n'.join([
+            '[0010.00] ScriptLog: KF2VR_SCRIPT case n=1 label=preset-advanced weapon=KFGameContent.KFWeap_Pistol_9mm',
+            request(1, 1, 'first'),
+            '[0011.00] ScriptLog: KF2VR_SCRIPT case n=2 label=- weapon=ar15',
+            '[0011.10] ScriptLog: KF2VR_SCRIPT line=4 t=11.1 pose  Lgoal=1,2,3 Lwrist=1,2,3 Lheld=none Rgoal=1,2,3 '
+            'Rwrist=1,2,3 Rheld=KFWeap_AssaultRifle_AR15 head=1,2,3 headRot=0,0,0 camera=side',
+            request(1, 2, 'second'),
+            request(1, 3, 'third'),
+        ])
+        entries, errors = captures.capture_requests(text)
+        self.assertEqual([], errors)
+        first, second, third = entries
+        self.assertEqual((first['case'], first['weapon'], first['settings']), (1, 'KFGameContent.KFWeap_Pistol_9mm', 'preset-advanced'))
+        self.assertNotIn('held_right', first)
+        self.assertEqual((second['case'], second['weapon'], second['settings']), (2, 'ar15', ''))
+        self.assertEqual((second['held_left'], second['held_right'], second['camera']), ('none', 'KFWeap_AssaultRifle_AR15', 'side'))
+        self.assertEqual(second['case_index'], 1)   # still the page
+        self.assertEqual(third['case'], 2)
+        self.assertNotIn('held_right', third)       # that pose belonged to the earlier shot
+        self.assertEqual(captures.case_title(second), 'Case 2 · ar15')
+
+    def test_runs_without_cases_keep_the_page_only(self):
+        entries, errors = captures.capture_requests(request())
+        self.assertEqual([], errors)
+        self.assertNotIn('case', entries[0])
+        self.assertEqual(captures.case_title(entries[0]), 'Page 1')
+
 if __name__ == '__main__':
     unittest.main()

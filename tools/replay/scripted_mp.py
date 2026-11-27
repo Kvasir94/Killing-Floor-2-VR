@@ -193,6 +193,17 @@ def server_findings(text, compiled):
                 refused_gives=len(re.findall(r'KF2VR_SCRIPT_SERVER give .*granted=False', text)))
 
 
+def server_case_spans(text, cases):
+    """The server log cut at each case's ServerClear line (NetScriptRunner.StartCase),
+    one span per case in order; the first span also holds the start-up. None
+    when the log does not show one clear per case (an early end, a crash)."""
+    starts = [m.start() for m in re.finditer(r'^.*KF2VR_SCRIPT_SERVER clear .*$', text, re.M)]
+    if len(starts) != cases:
+        return None
+    cuts = [0] + starts[1:] + [len(text)]
+    return [text[cuts[i]:cuts[i+1]] for i in range(cases)]
+
+
 def run_net_session(opts, script, batches, observer, net):
     """One server and one client per batch. batches: [[(n, weapon, label, Compiled)]]."""
     user = user_config_root(opts.user_config)
@@ -250,7 +261,8 @@ def run_net_session(opts, script, batches, observer, net):
             neutral_tape(tape, timeout)
             native_log = run/'native.log'
             env = dict(base_env, KF2VR_LOG_PATH=str(native_log), KF2VR_INPUT_REPLAY=str(tape),
-                       KF2VR_INPUT_REPLAY_WAIT_READY='1', KF2VR_INPUT_REPLAY_REALTIME='1')
+                       KF2VR_INPUT_REPLAY_WAIT_READY='1', KF2VR_INPUT_REPLAY_REALTIME='1',
+                       KF2VR_INPUT_REPLAY_HOLD='1')
             time.sleep(20 * k)   # stagger the cold engine starts
             result = dict(started_unix=time.time(), errors=[])
             # One KF2 cold start at a time machine-wide (Steam crashes on several).
@@ -294,14 +306,22 @@ def run_net_session(opts, script, batches, observer, net):
         if config_hashes(user) != user_before:
             errors.append('User config changed during the run')
     server_text = log_text(server_log)
+    # One client: each case starts with its agent's ServerClear, so a server
+    # forbid match belongs to the case whose span holds it, not to every case.
+    spans = server_case_spans(server_text, len(batches[0])) if len(batches) == 1 else None
     rows = []
     for k, (role, batch, compiled) in enumerate(zip(clients, batches, merged)):
         result = results[k] or dict(ended='never-launched', errors=[])
         run, text = role['run'], log_text(Path(role['log']))
         findings = server_findings(server_text, compiled)
         got, pending = case_results(text, batch, {n: c for n, _, _, c in batch}, compiled, result.get('ended'))
-        session_errors = errors + result['errors'] + (['Dedicated server logged a fatal line'] if findings['fatal'] else []) \
-            + [f'server log matched forbid {f}' for f in findings['forbidden']]
+        base_errors = errors + result['errors'] + (['Dedicated server logged a fatal line'] if findings['fatal'] else [])
+        session_errors = base_errors + [f'server log matched forbid {f}' for f in findings['forbidden']]
+        if spans:
+            order = {n: i for i, (n, _, _, _) in enumerate(batch)}
+            for row in got:
+                own = server_findings(spans[order[row['n']]], compiled)['forbidden']
+                row['_errors'] = base_errors + [f'server log matched forbid {f}' for f in own]
         caps = 0
         if 'KF2VR_REPLAY_CAPTURE' in text:
             try:
@@ -312,9 +332,10 @@ def run_net_session(opts, script, batches, observer, net):
                 session_errors.append('Capture collection failed: '+str(error))
         for row in got:
             row.update(client=k+1, summary=str(run/'summary.md'), server=findings)
-            if session_errors:
+            own = row.pop('_errors', session_errors)
+            if own:
                 row['passed'] = False
-                row['errors'] = session_errors
+                row['errors'] = own
         rows += got
         rows += [dict(n=n, weapon=w, settings=l, passed=False, ended=f'pending-{result.get("ended")}', failed=[],
                       errors=session_errors, captures=0, client=k+1, summary=str(run/'summary.md'), server=findings)

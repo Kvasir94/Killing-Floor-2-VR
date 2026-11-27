@@ -42,9 +42,11 @@ static function bool Get(KFWeapon W, out array<BlockCapsule> Shapes)
     if(W==None) return false;
     if(W.Class==class'KFWeap_Edged_Katana')
     {
-        Add(Shapes,vect(0,0.45,12),vect(0,3.7,38),2.1);
-        Add(Shapes,vect(0,3.7,38),vect(0,8.2,63),2.1);
-        Add(Shapes,vect(0,8.2,63),vect(0,14.1,87.8),1.6);
+        // Game space: the blade curves toward -Y (UModel exports mirror Y,
+        // docs/re/MELEE_WEAPON_ZONES_AND_GRIPS.md).
+        Add(Shapes,vect(0,-0.45,12),vect(0,-3.7,38),2.1);
+        Add(Shapes,vect(0,-3.7,38),vect(0,-8.2,63),2.1);
+        Add(Shapes,vect(0,-8.2,63),vect(0,-14.1,87.8),1.6);
     }
     else if(class'VRWeaponBlockFirearms'.static.Get(W,Shapes)) return true;
     else

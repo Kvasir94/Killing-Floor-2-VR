@@ -772,6 +772,19 @@ simulated function UpdateAvatarPreview(bool bFresh)
         Right, Normalize(Basis + Frame.Sample.RightGripRotation), PreviewStrength);
 }
 
+// Where this player's hand is drawn on this machine (the frame its body
+// presents). Corpses another player holds follow it (KF2VRNetCorpseGore).
+simulated function bool PresentedHand(int Hand, out vector Position)
+{
+    local vector Root;
+    local rotator Basis;
+    if (Hand < 0 || Hand > 1 || !HasFreshPose() || DisplaySnapshot.Motion.bEnabled
+        || (DisplaySnapshot.Sample.TrackingFlags & (2 << Hand)) == 0) return false;
+    PresentationRoot(DisplaySnapshot, Root, Basis);
+    Position = Root + ((Hand == 0 ? DisplaySnapshot.Sample.LeftPosition : DisplaySnapshot.Sample.RightPosition) >> Basis);
+    return true;
+}
+
 simulated function bool HasFreshPose()
 {
     return bHaveSnapshot && TargetPawn != None && !TargetPawn.bDeleteMe

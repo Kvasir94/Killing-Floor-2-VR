@@ -52,6 +52,8 @@ def resolve_weapon(name):
 def neutral_tape(path, seconds):
     # The tape only carries boot/readiness and head position; the script owns
     # hands, buttons, sticks and head rotation through the v3 goal ingress.
+    # Launches set KF2VR_INPUT_REPLAY_HOLD, so the adapter holds this sample
+    # past the tape's 360000-tick bound (a live session of several hours).
     ticks = min(360000, int(seconds*120)+1200)
     path.write_text(f'{TAPE_HEADER}\n# Scripted replay carrier; ScriptRunner supplies all controls.\n{ticks} {NEUTRAL}\n',
                     encoding='ascii')
@@ -357,6 +359,19 @@ def compile_case(opts, script, weapon, overrides=None):
     return compiled
 
 
+def plan(opts, weapons):
+    """--plan: every weapon x --matrix combination's compiled ops, as a run
+    would launch them (the matrix overrides the script's set/preset lines)."""
+    lines = []
+    for weapon in weapons:
+        for label, overrides in settings_cases(opts.matrix):
+            compiled = compile_case(opts, opts.script, weapon, overrides)
+            lines.append(f'# weapon={weapon} matrix={label or "-"} ops={len(compiled.ops)} '
+                         f'settings={compiled.settings} setup={compiled.setup}')
+            lines += compiled.ops
+    return lines
+
+
 def run_one(opts, script, weapon, observer_package, root, overrides=None, label=''):
     """One isolated launch. The caller holds the fixture lease. Overrides beat the script's settings."""
     return launch(opts, compile_case(opts, script, weapon, overrides), root/run_name(weapon, label),
@@ -383,7 +398,8 @@ def launch(opts, compiled, run, observer_package, script, weapon=None, deadline=
                                     for name in ('dinput8.dll', 'openxr_loader.dll')}}
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith('KF2VR_')}
     env.update(SteamAppId='232090', SteamGameId='232090', KF2VR_LOG_PATH=str(run/'native.log'),
-               KF2VR_INPUT_REPLAY=str(tape), KF2VR_INPUT_REPLAY_WAIT_READY='1', KF2VR_INPUT_REPLAY_REALTIME='1')
+               KF2VR_INPUT_REPLAY=str(tape), KF2VR_INPUT_REPLAY_WAIT_READY='1', KF2VR_INPUT_REPLAY_REALTIME='1',
+               KF2VR_INPUT_REPLAY_HOLD='1')
     destination = game/'Binaries/Win64'
     # A parallel batch installs the proxy once for all its game instances.
     deploy = SHARED_DEPLOY or NativeDeployment(release/'Native', destination, run/'ReplayNativeBackup', receipt, digest)
@@ -462,7 +478,9 @@ def merge_cases(cases):
             # repeat-until jumps hold absolute op indices: shift them with the case.
             rest = re.sub(r'(?<=\|to=)(\d+)', lambda m: str(int(m[1]) + base), rest)
             merged.ops.append(f'{int(line)+offset+1}|{rest}')
-        merged.timeout += int(compiled.setup['timeout'])
+        # A live session (live.py) idles for its tester well past the script's
+        # own timeout: session_timeout sets the launch watchdog, not the case.
+        merged.timeout += int(compiled.setup.get('session_timeout', compiled.setup['timeout']))
         for check in compiled.log_checks:   # live forbids apply session-wide
             if check['kind'] == 'forbid' and not check['since'] and check['pattern'] not in [c['pattern'] for c in merged.log_checks]:
                 merged.log_checks.append(check)
@@ -587,12 +605,10 @@ def main():
         p.error(f'No fixture for lane {fixture.lane()}: python tools/replay/fixture.py create {fixture.lane()}')
     weapons = [w for item in opts.weapons for w in item.split(',') if w] or [None]
     if opts.plan:
-        for weapon in weapons:
-            variables = dict(v.split('=', 1) for v in opts.var)
-            if weapon: variables['weapon'] = weapon
-            compiled = kfs.compile_script(opts.script, variables, resolve_weapon)
-            print(f'# weapon={weapon} ops={len(compiled.ops)} settings={compiled.settings} setup={compiled.setup}')
-            print('\n'.join(compiled.ops))
+        try:
+            print('\n'.join(plan(opts, weapons)))
+        except ValueError as error:
+            p.error(str(error))
         return
     if not opts.candidate or not opts.candidate.is_absolute():
         p.error('--candidate <absolute release directory> is required to run')

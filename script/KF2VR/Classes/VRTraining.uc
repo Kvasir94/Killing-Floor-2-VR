@@ -715,8 +715,8 @@ function BuildText()
     default:
         Title = "TRAINING COMPLETE";
         Lines[0] = "Double-tap " $ Upper(G) $ ": open hand, to punch or grab Zeds.";
-        Lines[1] = "Tap " $ Upper(G) $ " then hold: quick heal. Grip by your head: flashlight.";
-        Lines[2] = "Click the movement stick to sprint. Good luck out there.";
+        Lines[1] = "Tap " $ Upper(G) $ ", then hold: syringe. Trigger at chest: heal.";
+        Lines[2] = "Grip by your head: flashlight. Click the move stick to sprint. Good luck!";
         break;
     }
     if (Step == STEP_DRILL) Progress = (Hold != None && LastLive >= 0) ? FClamp(1.0 - float(LastLive) / 3.0, 0, 1) : -1.0;

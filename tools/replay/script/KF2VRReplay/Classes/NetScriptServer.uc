@@ -8,6 +8,16 @@ class NetScriptServer extends KFMutator;
 
 var array<NetScriptAgent> Agents;
 var array<float> LoginTimes;
+// The clients scripted_mp.py starts (?VRNetClients=). Nobody is readied until
+// all of them have logged in: a player readied alone starts the match, and a
+// client whose cold start was slower then joins a running match with no pawn.
+var int ExpectedPlayers;
+
+function InitMutator(string Options, out string ErrorMessage)
+{
+    Super.InitMutator(Options, ErrorMessage);
+    ExpectedPlayers = class'GameInfo'.static.GetIntOption(Options, "VRNetClients", 1);
+}
 
 function NotifyLogin(Controller NewPlayer)
 {
@@ -39,6 +49,9 @@ event Tick(float DT)
     local PlayerController PC;
     local KFPlayerReplicationInfo PRI;
     Super.Tick(DT);
+    // Wait for every expected client, but not forever: one that never comes
+    // must not hold the others (three minutes after the first login).
+    if (Agents.Length == 0 || (Agents.Length < ExpectedPlayers && WorldInfo.RealTimeSeconds - LoginTimes[0] < 180.0)) return;
     for (I = 0; I < Agents.Length; ++I)
     {
         if (Agents[I] == None || WorldInfo.RealTimeSeconds - LoginTimes[I] < 8.0) continue;

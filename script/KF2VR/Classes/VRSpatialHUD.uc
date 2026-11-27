@@ -33,7 +33,9 @@ var KFPlayerController PC;
 // 6-11 teammate tags, 12 right pouch, 13 full priority/boss-introduction text.
 const TeammateFirst = 6;
 const TeammateSlots = 6;
-var VRHUDPanel Panels[14];
+var VRHUDPanel Panels[15];
+// Panel 14: the Rack 'em Up blood splat (#224).
+var VRRackEmUp RackEmUp;
 var KFPawn_Human Teammates[6];
 var KFGFxMoviePlayer_HUD SourceMovie;
 var GFxObject SourceWidgets[3];
@@ -71,7 +73,7 @@ struct MagazineDepositReceipt
 var MagazineDepositNotice MagazineDeposits[2];
 var array<MagazineDepositReceipt> MagazineDepositReceipts;
 var bool bSessionUrgent;
-var string ContentKey[14];
+var string ContentKey[15];
 var int HealthValue, HealthLimit, ArmorValue, ArmorLimit, Charge, Dosh, Grenades, Battery;
 var int XPPercent;
 var HUDWeaponReadout Ammo[2]; // actual left/right ownership, never Pawn.Weapon mirrored twice
@@ -166,6 +168,8 @@ simulated function bool InitializeHUD(VRHandsBridge B)
         if (Panels[I] == None || !Panels[I].InitializePanel(self, I)) return false;
     }
     bInitialized = true;
+    RackEmUp = new(self) class'VRRackEmUp';
+    RackEmUp.Initialize(self);
     CommandoHealthbars = Spawn(class'VRCommandoHealthbars', self);
     if (CommandoHealthbars != None) CommandoHealthbars.Initialize(self);
     ZedMarkers = Spawn(class'VRZedMarkers', self);
@@ -182,7 +186,7 @@ simulated function bool InitializeHUD(VRHandsBridge B)
     if (PC.MyHUD != None && (PC.MyHUD.Class == class'KFGFxHudWrapper'
         || PC.MyHUD.Class == class'VRHUDSafeWrapper'))
         PC.ClientSetHUD(class'VRHUDWrapper');
-    `log("KF2VR_HUD initialized wristWorldDepth=1 sessionForeground=1 surfaces=14 independentHandAmmo=1 redrawOnChange=1 stockArtwork=1");
+    `log("KF2VR_HUD initialized wristWorldDepth=1 sessionForeground=1 surfaces=15 independentHandAmmo=1 redrawOnChange=1 stockArtwork=1");
     return true;
 }
 
@@ -497,9 +501,9 @@ simulated function bool InteractionPromptPresented()
         && Panels[4] != None && Panels[4].bPresented;
 }
 
-// The Rack 'Em Up / Rhythm Method streak has no VR surface for now (#86): its
-// per-tier sound carries it. The stock flat counter must never sit between
-// the eyes, so it stays hidden for the whole VR session.
+// The Rack 'Em Up / Rhythm Method streak shows as the world-space blood splat
+// beside the headshot Zed (VRRackEmUp, panel 14, #224). The stock flat counter
+// must never sit between the eyes, so it stays hidden for the whole VR session.
 simulated function bool SuppressStockRhythmCounter()
 {
     return ContextValid();
@@ -607,6 +611,7 @@ simulated function SuspendHUD()
     if (Panels[5] != None) Panels[5].HidePanel();
     if (Panels[12] != None) Panels[12].HidePanel();
     if (Panels[13] != None) Panels[13].HidePanel();
+    if (RackEmUp != None) RackEmUp.Hide();
     for (I = 0; I < TeammateSlots; ++I)
     {
         Teammates[I] = None;
@@ -693,8 +698,11 @@ simulated function bool GetWristwatchTransform(out vector Position, out rotator 
     Thm = QuatRotateVector(BoneQ, Bridge.FreeHandPose.LocalThumb[StatusHand]);
     Plm = QuatRotateVector(BoneQ, Bridge.FreeHandPose.LocalPalm[StatusHand]);
 
-    // Dorsal monitor origin matches the baked Blender screen-local frame.
-    Position = Position - Fwd * 3.9 - Plm * 3.72;
+    // Dorsal monitor origin matches the baked Blender screen-local frame
+    // (seat_watch_keepers.EXPORT_FRAME). Hand art revision 88 moved the panel
+    // 2.5 cm up the forearm, so its case stops at the wrist instead of lying
+    // on the back of the glove.
+    Position = Position - Fwd * 6.38 - Plm * 3.66;
     if (Bridge.WristwatchOffset != vect(0,0,0))
     {
         Position = Position + Fwd * Bridge.WristwatchOffset.X
@@ -1078,6 +1086,13 @@ simulated function UpdateDisplay()
     Bridge.LockSource = LockOnWeapon();
     if (LockOnMarkers != None) LockOnMarkers.UpdateMarkers();
     UpdateDamagePopups();
+    if (RackEmUp != None) RackEmUp.Update();
+}
+
+// The perk's Rack 'em Up / Rhythm Method counter, as pushed to the HUD movie.
+simulated function NotifyRhythm(int Value, int MaxValue)
+{
+    if (RackEmUp != None && ContextValid()) RackEmUp.Notify(Value, MaxValue);
 }
 
 // Native standalone ScoreDamage forwarding: the stock callback already holds
@@ -1424,8 +1439,6 @@ simulated function ReadWeapon(int HandIndex)
                     A.ReloadPrompt = Bridge.HandInventory.Input.Reloads.M32Action.ReloadPrompt(W);
                 if (A.ReloadPrompt == "" && Bridge.HandInventory.Input.Reloads.FinishAction != None)
                     A.ReloadPrompt = Bridge.HandInventory.Input.Reloads.FinishAction.ReloadPrompt(W);
-                if (A.ReloadPrompt == "" && Bridge.HandInventory.Input.Reloads.CrossbowCocking != None)
-                    A.ReloadPrompt = Bridge.HandInventory.Input.Reloads.CrossbowCocking.ReloadPrompt(W);
                 if (A.ReloadPrompt == "" && Bridge.HandInventory.Input.Reloads.BreakAction != None)
                     A.ReloadPrompt = Bridge.HandInventory.Input.Reloads.BreakAction.ReloadPrompt(W);
                 if (Bridge.HandInventory.Input.Reloads.Brawlers != None
@@ -2442,6 +2455,7 @@ simulated function bool RenderPanel(int Index, Canvas C)
     if (!bInitialized || Bridge == None || C == None || !(C.ClipX > 0 && C.ClipY > 0)) return false;
     // ScriptedTexture may request its initial draw before the first value read.
     if (Index == 0 && (HealthLimit <= 0 || ArmorLimit <= 0)) return false;
+    if (Index == class'VRRackEmUp'.const.PanelIndex) return RackEmUp != None && RackEmUp.Render(C);
     if (Index < 3) RenderPersonalPanel(Index, C);
     else if (Index == 4) RenderAlertPanel(C);
     else if (Index == 5 || Index == 12) RenderPouchPanel(C, Index == 5 ? 0 : 1);

@@ -322,6 +322,8 @@ simulated function ApplyContact(ImpactInfo Impact, float ContactSpeed)
     // Damage follows the actual contact sample. A fast windup followed by a
     // slow wiggle inside a head must not retain the windup's full damage.
     if (!AdmitsContactSpeed(ContactSpeed)) return;
+    // The curve reaches the stock bash at about 2.1 times StartSpeed and stays
+    // there (M30, VRMeleeScale.MAX_SCALE).
     Scale = class'VRMeleeScale'.static.SwingScale(ContactSpeed, StartSpeed, StartSpeed * 3, 0.35, 1.5);
     Helper = Weapon.MeleeAttackHelper;
     SavedShake = Helper.MeleeImpactCamShakeScale;
@@ -424,7 +426,9 @@ simulated function GatherContacts(vector Start, vector End, float SampleSpeed)
     Radius = BashRadius;
     Extent = vect(1,1,1) * Radius;
     LimitedEnd = End;
-    Wall = Presenter.Trace(HitLocation, HitNormal, End, Start, false, Extent, Info);
+    // A point trace like the melee weapons: an extent trace also meets
+    // invisible player-clip volumes and ended bashes in the open.
+    Wall = Presenter.Trace(HitLocation, HitNormal, End, Start, false, vect(0,0,0), Info);
     if (Wall != None)
     {
         LimitedEnd = HitLocation;
@@ -438,7 +442,7 @@ simulated function GatherContacts(vector Start, vector End, float SampleSpeed)
     {
         if (++Count > 32) break;
         if (A == None || A == Presenter.Human || A == Weapon || A.bDeleteMe || A.IsA('Weapon')
-            || HitActors.Find(A) != INDEX_NONE) continue;
+            || A.IsA('Volume') || HitActors.Find(A) != INDEX_NONE) continue;
         Victim = KFPawn(A);
         if (Victim != None)
         {

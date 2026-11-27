@@ -38,6 +38,7 @@
 #include "ReflectionCoverage.h"
 #include "ObjectMotion.h"
 #include "StereoAmbientOcclusion.h"
+#include "SkinScattering.h"
 #include "Dlss.h"
 #include "XrGamepad.h"
 #include "HeadAim.h"
@@ -61,6 +62,7 @@
 #include "WeaponIsolation.h"
 #include "WorldDropGuard.h"
 #include "WeaponBlockDispatch.h"
+#include "ArmLossDispatch.h"
 #include "WeaponContext.h"
 #include "WeaponHandling.h"
 #include "PerkContext.h"
@@ -159,6 +161,7 @@ bool leftQueryConstantsReady=false;
 std::uint64_t queryConstantWrites=0;
 adapter::StereoAmbientOcclusion stereoAmbientOcclusion;
 adapter::StereoReflections stereoReflections;
+adapter::SkinScattering skinScattering;
 adapter::ReflectionCoverage reflectionCoverage;
 const std::byte* ssrEyeView=nullptr;
 bool ssrPairFailed=false;
@@ -306,6 +309,7 @@ struct DemoRuntime {
     std::uint64_t roomMovementTicks=0;
     void* replayPawn=nullptr;
     kf2vr::Quat replayBody;
+    bool replayBodyAtReady=false;
     int eyePass=-1;
     bool menuVisible=false,menuFrame=false,menuBackdrop=true;
     bool menuInputBlocked=false;
@@ -633,6 +637,18 @@ std::uint64_t SupplyHands(void* bridge) {
         if (demo->replayPawn!=demo->controlledPawn) {
             demo->replayPawn=demo->controlledPawn;
             demo->replayBody=adapter::NativeActorRotation({0,current.yaw,0});
+            demo->replayBodyAtReady=false;
+        }
+        // A scripted replay (v3 goals) may face the pawn to a fixed start spot
+        // in the tick it reports ready: the room's body frame takes the view's
+        // yaw then, as it took it at spawn, so the body anchors face the view.
+        if (reloadGeometryRequested && !demo->replayBodyAtReady &&
+            script.Read<int>(bridge,L"NativeReplayReady")==1 &&
+            script.Read<int>(bridge,L"ReloadCaseControlVersion")==3) {
+            demo->replayBodyAtReady=true;
+            const auto previous=RotationFromQuat(demo->replayBody).yaw;
+            demo->replayBody=adapter::NativeActorRotation({0,current.yaw,0});
+            Log("ReplayInput body-at-ready yaw=%d previous=%d",current.yaw&65535,previous&65535);
         }
         aim.reference={}; aim.bodyRotation=demo->replayBody;
         if (replaySuiteRequested) {
@@ -1200,6 +1216,7 @@ void HookProcessInternal(void* object,void* stack,void* result) {
     adapter::BowReleaseDispatchScope bowRelease(script,object,function,
         adapter::GameScript::At<void*>(stack,0x2c),result,demo->handsBridge);
     if (bowRelease.Suppressed()) return;
+    if (adapter::RouteArmLoss(script,object,function,adapter::GameScript::At<void*>(stack,0x2c),result,demo->handsBridge)) return;
     if (adapter::RouteVampireReloadGuard(script,object,function,demo->handsBridge)) return;
     if (adapter::RouteSecondaryReloadPayment(script,object,function,
             adapter::GameScript::At<void*>(stack,0x2c),result,demo->handsBridge,
@@ -3900,6 +3917,7 @@ HRESULT STDMETHODCALLTYPE HookResize(IDXGISwapChain* swapchain,UINT count,UINT w
     return result;
 }
 void STDMETHODCALLTYPE HookClearDepth(ID3D11DeviceContext* context,ID3D11DepthStencilView* view,UINT flags,FLOAT depth,UINT8 stencil) {
+    opticVisibility.NoteContext(context);
     if (OnRenderCommandThread() && foregroundDepth.FilterDeviceClear(context,view,flags,depth,stencil) &&
         Interesting(++preservedForegroundDepth))
         Log("Foreground world depth preserved count=%llu",static_cast<unsigned long long>(preservedForegroundDepth));
@@ -4277,7 +4295,15 @@ std::int32_t HookRenderAo(void* self,void* context,void* input,const void* param
         && std::memcmp(hbaoPending.projections,projectionBytes,sizeof(projectionBytes))==0
         && (matches!=2 || std::memcmp(hbaoPending.inputBytes,in,sizeof(hbaoPending.inputBytes))==0);
     hbaoPending={}; // One use, also invalidated by any unmatched callback.
-    if(mate) return 0;
+    if(mate) {
+        // The effect composites the AO target over the whole scene buffer after
+        // every view's call (0x89e620: BeginRenderingSceneColor resets the
+        // viewport, then a full-target rectangle with a multiply blend). The
+        // first call's composite already darkened both eyes; leave the mate's
+        // composite nothing to multiply in.
+        if(target) { const float neutral[4]{1,1,1,1}; static_cast<ID3D11DeviceContext*>(context)->ClearRenderTargetView(target.Get(),neutral); }
+        return 0;
+    }
     std::int32_t result=0;
     if(!stereoAmbientOcclusion.RenderPair(originalRenderAo,self,static_cast<ID3D11DeviceContext*>(context),
             input,params,target.Get(),mask,rects,projections,result)) {
@@ -4395,6 +4421,54 @@ void HookSsrCompute(void* renderer) {
     // HiZ. This does not make hands occluders for shared world queries.
     if (!ssrPairFailed) reflectionCoverage.Mask(gameContext);
     else reflectionCoverage.Clear();
+}
+// Screen-space skin scattering (0x306ed0: renderer, DPG; SkinScattering.h and
+// docs/re/10-skin-scattering-pass.md). For the single-pass pair: one run for
+// both eyes, with the kernel step scaled to the eye in the parameter upload
+// (0x30ae40: shader, view; shader+0x50 RHI shader, +0x106 buffer, +0x108 base,
+// +0x10a bytes, through RHI slot 0x4a8, as the original).
+using SkinScatteringFn=std::uint64_t(*)(void*,std::int32_t);
+SkinScatteringFn originalSkinScattering=nullptr;
+using SkinScatteringParamsFn=void(*)(void*,void*);
+SkinScatteringParamsFn originalSkinScatteringParams=nullptr;
+std::uint64_t skinScatteringPairs=0;
+std::uint64_t HookSkinScattering(void* renderer,std::int32_t dpg) {
+    if(!OnRenderCommandThread() || !renderer || dpg!=1) return originalSkinScattering(renderer,dpg);
+    auto* base=static_cast<std::byte*>(renderer); std::byte* views=nullptr; std::int32_t count=0;
+    std::memcpy(&views,base+0x6c,sizeof(views)); std::memcpy(&count,base+0x74,sizeof(count));
+    if(!views || count!=2 || views!=singlePassPairViews) return originalSkinScattering(renderer,dpg);
+    std::int32_t rects[2][4]{},buffer[2]{};
+    for(int eye=0;eye<2;++eye) std::memcpy(rects[eye],views+std::size_t(eye)*0x1380+0x6c,sizeof(rects[eye]));
+    std::memcpy(&buffer[0],reinterpret_cast<const void*>(gameBase+adapter::build::Rva(0x2222a7c)),sizeof(buffer[0]));
+    std::memcpy(&buffer[1],reinterpret_cast<const void*>(gameBase+adapter::build::Rva(0x2222a80)),sizeof(buffer[1]));
+    if(!skinScattering.Begin(rects,count,buffer[0],buffer[1])) return originalSkinScattering(renderer,dpg);
+    struct Restore {
+        std::byte* base; std::int32_t count;
+        ~Restore(){ std::memcpy(base+0x74,&count,sizeof(count)); skinScattering.End(); }
+    } restore{base,count};
+    // Each run already covers the whole buffer, so the first view's run is the pair's.
+    const std::int32_t one=1; std::memcpy(base+0x74,&one,sizeof(one));
+    const auto result=originalSkinScattering(renderer,dpg);
+    if(skinScattering.Uploads() && Interesting(++skinScatteringPairs))
+        Log("SinglePass skin scattering once for both eyes count=%llu uploads=%u eye=%dx%d buffer=%dx%d",
+            static_cast<unsigned long long>(skinScatteringPairs),skinScattering.Uploads(),rects[0][2],rects[0][3],buffer[0],buffer[1]);
+    return result;
+}
+void HookSkinScatteringParams(void* shader,void* view) {
+    originalSkinScatteringParams(shader,view);
+    if(!OnRenderCommandThread() || !shader || !view || !skinScattering.Active()) return;
+    const float scale=skinScattering.Next();
+    auto* s=static_cast<std::byte*>(shader);
+    void* rhi=nullptr; std::memcpy(&rhi,reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x21f6ed0)),sizeof(rhi));
+    std::uint16_t bytes=0; std::memcpy(&bytes,s+0x10a,sizeof(bytes));
+    if(!rhi || !bytes) return;
+    float projection=0; std::memcpy(&projection,static_cast<std::byte*>(view)+0xc0,sizeof(projection));
+    float values[2]{}; adapter::SkinScattering::Parameters(projection,scale,values);
+    using SetParameterFn=void(*)(void*,void*,std::uint16_t,std::uint16_t,std::uint32_t,const void*,std::int32_t);
+    void** table=*static_cast<void***>(rhi);
+    void* handle=nullptr; std::memcpy(&handle,s+0x50,sizeof(handle));
+    std::uint16_t slot=0,offset=0; std::memcpy(&slot,s+0x106,sizeof(slot)); std::memcpy(&offset,s+0x108,sizeof(offset));
+    reinterpret_cast<SetParameterFn>(table[0x4a8/8])(rhi,handle,slot,offset,bytes<8?bytes:8u,values,-1);
 }
 // KF2's velocity pass as DLSS object motion (ObjectMotion.h). Steam RVAs from
 // docs/re/09-velocity-pass.md. objectMotionWanted follows DLSS; the engine
@@ -4716,6 +4790,10 @@ bool InstallHooks(HINSTANCE module) {
                 reinterpret_cast<void*>(&HookShadowProjection),reinterpret_cast<void**>(&originalShadowProjection)});
             hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0xcd03b0)),
                 reinterpret_cast<void*>(&HookHbaoRhi),reinterpret_cast<void**>(&originalHbaoRhi)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x306ed0)),
+                reinterpret_cast<void*>(&HookSkinScattering),reinterpret_cast<void**>(&originalSkinScattering)});
+            hooks.push_back({reinterpret_cast<void*>(gameBase+adapter::build::Rva(0x30ae40)),
+                reinterpret_cast<void*>(&HookSkinScatteringParams),reinterpret_cast<void**>(&originalSkinScatteringParams)});
         }
         singlePassSplit=singlePass && wcsstr(GetCommandLineW(),L"-kf2vr-sp-split")!=nullptr;
         // The game's own two-view lighting matches both eyes' shadows; the
@@ -4726,7 +4804,7 @@ bool InstallHooks(HINSTANCE module) {
         singlePassLeftOcclusion=singlePass && wcsstr(GetCommandLineW(),L"-kf2vr-sp-left-occlusion")!=nullptr;
         singlePassOcclusion=singlePass && !singlePassSeparateState && !singlePassRightOcclusion &&
             wcsstr(GetCommandLineW(),L"-kf2vr-sp-no-occlusion")==nullptr;
-        Log("SinglePass revision=75 occlusion=%d stereoReflections=1 hbaoBothEyes=1 privateEffects=1 queryConstants=1 scopedViews=1 stereoDepthGuard=1 hbaoViewports=1 sharedEyeShadows=4 rightEyeQuads=1 kf2Visibility=1 leftOcclusion=%d rightEyeState=%d rightOcclusion=%d enabled=%d splitSubmit=%d stockLighting=%d",
+        Log("SinglePass revision=76 occlusion=%d stereoReflections=1 hbaoBothEyes=1 hbaoCompositeOnce=1 skinScatteringOnce=1 privateEffects=1 queryConstants=1 scopedViews=1 stereoDepthGuard=1 hbaoViewports=1 sharedEyeShadows=4 rightEyeQuads=1 kf2Visibility=1 leftOcclusion=%d rightEyeState=%d rightOcclusion=%d enabled=%d splitSubmit=%d stockLighting=%d",
             singlePassOcclusion?1:0,singlePassLeftOcclusion?1:0,singlePassSeparateState?1:0,singlePassRightOcclusion?1:0,singlePass?1:0,
             singlePassSplit?1:0,singlePassStockLighting?1:0);
         if (MH_Initialize()==MH_OK) {
@@ -4750,7 +4828,9 @@ bool InstallHooks(HINSTANCE module) {
             }
             // Optional Steam-only optic exclusions fail open independently of
             // the mandatory VR hook gate and never disable the whole adapter.
-            if (success && stereoRequested) {
+            // Hand replays install it too, so scripted runs time the optic (#212).
+            if (success && (stereoRequested || handReplayRequested)) {
+                opticVisibility.SetLog(&Log);
                 const bool optics=opticVisibility.Install(gameBase,[] {
                     return GetCurrentThreadId()==worldDrawThread.load(std::memory_order_acquire);
                 });
@@ -4838,8 +4918,14 @@ DWORD WINAPI AdapterMain(void* parameter) {
         inputReplayWaitReady=GetEnvironmentVariableW(L"KF2VR_INPUT_REPLAY_WAIT_READY",option,8)==1 && option[0]==L'1';
         inputReplayRealtime=inputReplayWaitReady || (GetEnvironmentVariableW(L"KF2VR_INPUT_REPLAY_REALTIME",option,8)==1 && option[0]==L'1');
         if (replaySuiteRequested) inputReplayWaitReady=inputReplayRealtime=true;
-        Log("ReplayInput schema=1 seed=%llu owner=first-local-bridge clock=%s waitReady=%d",
-            static_cast<unsigned long long>(replayInput.Seed()),inputReplayRealtime?"realtime":"bridge-tick",inputReplayWaitReady);
+        // Scripted runners (reload-geometry goals, waits-for-ready clock) carry
+        // only head tracking on the tape: holding its last sample lets a live
+        // session outlast the tape's 360000-tick bound. Fixed tapes still end.
+        const bool hold=inputReplayWaitReady && reloadGeometryRequested &&
+            GetEnvironmentVariableW(L"KF2VR_INPUT_REPLAY_HOLD",option,8)==1 && option[0]==L'1';
+        replayInput.HoldLast(hold);
+        Log("ReplayInput schema=1 seed=%llu owner=first-local-bridge clock=%s waitReady=%d hold=%d",
+            static_cast<unsigned long long>(replayInput.Seed()),inputReplayRealtime?"realtime":"bridge-tick",inputReplayWaitReady,hold);
     }
     adapter::timing::scriptEnabled=wcsstr(GetCommandLineW(),L"-kf2vr-vm-timings")!=nullptr;
     reuseVmIdentity=wcsstr(GetCommandLineW(),L"-kf2vr-no-identity-reuse")==nullptr;

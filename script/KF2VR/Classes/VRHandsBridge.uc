@@ -49,6 +49,10 @@ struct VRWeaponProfile
     var bool bWristEquipment;
     // Sidearms brace at the authored grip without steering from wrist spacing.
     var bool bPistolBrace;
+    // A braced sidearm whose stock support hand holds the barrel, not the
+    // firing hand (the Blunderbuss): that grip steers the aim as a long gun's
+    // fore-end does, and it is not swung like a wrap (#215).
+    var bool bForegripSupport;
     // Use the authored primary wrist as the controller grip frame. This is
     // independent of barrel geometry and keeps a canted grip physically aligned.
     var bool bPrimaryWristAim;
@@ -242,6 +246,8 @@ var config float TopHudYawDeadZoneDegrees, TopHudPitchDeadZoneDegrees, TopHudTra
 var config float TopHudDetailLookDegrees;
 var config bool bWeaponAmmoReadouts;
 var config bool bDamagePopups;
+// Scope quality (#212): render scope glass on one frame in two at 80 FPS or more.
+var config bool bPerformanceScopes;
 var config float WeaponAmmoReadoutScale, WeaponAmmoReadoutForward, WeaponAmmoReadoutHeight;
 var config bool bWristwatchHUD;
 var config vector WristwatchOffset;
@@ -349,7 +355,7 @@ var ESceneDepthPriorityGroup OriginalWeaponDepthGroup, OriginalWeaponOwnerDepthG
 var bool bOriginalWeaponOwnerDepth, bOriginalWeaponOccluder;
 var float OriginalWeaponFOV;
 var KFSkeletalMeshComponent OriginalFreeHandsOccluderMesh;
-var bool bOriginalFreeHandsOccluder;
+var bool bOriginalFreeHandsOccluder, bOriginalFreeHandsBoneMotion;
 var VRCartridgeRendering CartridgeRendering;
 var VRReloadMeshPresentation ReloadMeshPresentation;
 var VRVampireReloadAuthority VampireAuthority;
@@ -411,6 +417,11 @@ var config bool bBodySlotsEnabled; // Legacy compatibility only; holsters are in
 // Support ownership, sighted handling and braced recoil remain grip-driven.
 // False also preserves the existing alignment for profiles missing this key.
 var config bool bDisableSupportHandAim;
+// R61: on a gun whose launcher or shotgun has its own trigger (R59), True
+// fires that secondary only from its trigger grip; the gun hand's A/X +
+// trigger then fires the rifle. False (and a profile missing the key) keeps
+// the modifier route too, the default.
+var config bool bLauncherTriggerOnly;
 // Hold-to-grab for empty hands: grip a real physics body on an ordinary zed
 // or a corpse. Prototype gate; see docs/ZED_PHYSICS_GRAB_ROADMAP.md.
 // Shared launch defaults enable this; saved booleans remain authoritative.
@@ -419,10 +430,17 @@ var config bool bZedGrabEnabled;
 var config int ZedGrabSettingsRevision;
 // Opt in to B&S-style interactions; missing preferences retain old melee.
 var config bool bExperimentalInteractions;
+// Experimental features (#210): the parent switch and its children. Arm loss
+// follows the host online; Solo and a listen host use these live.
+var config bool bExperimentalFeatures, bLivingArmLoss;
+var array<KFPawn_Monster> PendingArmLoss;
 
 
 // Struck Zeds stick on the fist for a few frames (VRHitStop).
 var config bool bMeleeHitStop;
+// Debug view: draw each held melee weapon's live hit volumes (VRPhysicalMelee
+// .DrawHitVolumes). Off unless set in the ini or a replay's set line.
+var config bool bMeleeDebugDraw;
 // Melee physicality A/B switches (docs/MELEE_PHYSICALITY_IMPLEMENTATION_PLAN.md).
 // Each names the old behaviour, so a missing ini key keeps the new one on.
 var config bool bLegacyMeleeHaptics, bLegacyMeleeDamageCurve, bLegacyMeleeEdge, bLegacyMeleeCorpseTouch;
@@ -447,14 +465,51 @@ var MaterialInstanceConstant GhostMaterial;
 var float GhostAlpha, GhostMinGap, GhostMinAngle, GhostFadeRate, GhostVisibility;
 // Visible melee weapon weight (VRWeightFollower); one per presenter.
 var VRWeightFollower WeightFollower;
+// Riot Shield guard (G8): when it was last stated, and its half cone (70 degrees).
+var float RiotShieldGuardSent;
+var int RiotShieldGuardHalf;
+// The local guard, only where the stock controller is in use (RequestNetworkGuard).
+var VRGuardState LocalGuard;
 // Item 14: the held melee weapon's head was stopped by world geometry.
 var bool bMeleeWallContact;
 // Item 16: support-hand travel along the shaft (uu) and the bound hand's
 // attachment frame it slides from.
 var float SupportSlide[2], AttachedSlide[2];
+// Reverse grip (Kvasir94 2026-11-09, #227 follow-up): holding the trigger on the
+// hand holding a class knife or the Katana spins it into a reverse grip until
+// release. The weapon turns ReverseAngle degrees about its axis through
+// ReversePivot (both in root-bone space) relative to both hands; everything
+// that reads a grip in weapon space reads it through ReversedGripPoint and
+// ReversedGripRotation. The knives follow the stock twirl (WEP_1P_CommandoKnife
+// Guncheck_v3 frames 33-46: about weapon +Y, round a point on the handle,
+// edge in); the Katana follows its stock blood wipe's turn (Clean_NoBlood
+// frames 0-10, about -Y, its edge direction: edge out) stretched to a half
+// turn, round its primary hand or the middle of both hands when two-handed.
+var byte ReversePhase; // 0 forward, 1 turning to reverse, 2 reversed, 3 turning back
+var float ReverseAngle, ReverseClock, ReversePivotAlpha, ReverseLastTime;
+var quat ReverseQ;
+var vector ReversePivot;
+var array<float> ReverseInDegrees, ReverseOutDegrees, KatanaInDegrees, KatanaOutDegrees;
+var float ReverseFrameTime, KatanaFrameTime;
+var vector KnifeReverseAxis, KnifeReversePivot, KatanaReverseAxis;
+var name KnifeTwirlClip;
+var byte bReverseAttached[2];
+var vector AppliedReverseRel[2];
+var rotator AppliedReverseRot[2];
+var int AttachedFingerFrame[2];
 var vector AttachedRelative[2];
 var rotator AttachedRotation[2];
 var float SupportSlideRate, SupportSlideMinGap, SupportSlideHeadGap;
+// Melee spec M26: how far down the Scythe's snath a hand may slide (uu).
+var float ScytheSlideFar;
+// Melee plan Q10 (#227): on long two-handed melee weapons the weapon hand can
+// slide too. With the support hand held still on the shaft, moving the weapon
+// hand along it chokes up or down; the weapon swings from where both hands
+// are. PrimaryGrip = SlideBasePrimaryGrip + the shaft axis x PrimarySlide.
+// Either hand settles into its stock grip within SlideSnap of it.
+var vector SlideBasePrimaryGrip, PrimarySlideWritten, PrimarySlideLast[2];
+var float PrimarySlide, PrimarySlideStill, PrimarySlideMove, SlideSnap;
+var bool bPrimarySlideSeeded;
 // Empty fists wear boxing gloves: a far stronger punch and a ringside bell on
 // the trigger charge (VRBoxingGloves). PRACTICE AND TOOLS page.
 var config bool bBoxingGloves;
@@ -695,6 +750,33 @@ simulated function bool ExperimentalInteractionsEnabled()
 {
     if (RootBridge != None) return RootBridge.ExperimentalInteractionsEnabled();
     return class'VRExperimentalPolicy'.static.InteractionsEnabled() && bExperimentalInteractions;
+}
+
+// Host side of arm loss (#210): the switch is on and this player's own stock
+// gore allows mutilation (the row is hidden otherwise).
+simulated function bool LivingArmLossEnabled()
+{
+    local KFGoreManager Gore;
+    if (RootBridge != None) return RootBridge.LivingArmLossEnabled();
+    if (!bExperimentalFeatures || !bLivingArmLoss) return false;
+    Gore = KFGoreManager(WorldInfo.MyGoreEffectManager);
+    return Gore != None && Gore.AllowMutilation();
+}
+
+// Experimental arm loss (#210): the native adapter calls this when stock
+// KFPawn_Monster.HitZoneInjured runs here (an injury, or a Zed with a lost arm
+// replicating in). Played next tick, once stock has applied the bit.
+simulated function NativeArmLossInjured(KFPawn_Monster Zed)
+{
+    if (RootBridge != None) { RootBridge.NativeArmLossInjured(Zed); return; }
+    if (Zed != None && PendingArmLoss.Find(Zed) == INDEX_NONE) PendingArmLoss.AddItem(Zed);
+}
+
+simulated function PlayPendingArmLoss()
+{
+    local int I;
+    for (I = 0; I < PendingArmLoss.Length; ++I) class'VRLivingArmLoss'.static.PlayInjuredArms(PendingArmLoss[I]);
+    PendingArmLoss.Length = 0;
 }
 
 simulated function bool UseLegacyMelee(bool bLegacy)
@@ -1145,6 +1227,7 @@ function FinishInventoryFocus()
 simulated event Tick(float DeltaTime)
 {
     if (Training != None) Training.Update(DeltaTime);
+    if (PendingArmLoss.Length > 0) PlayPendingArmLoss();
     if (!IsLocalVRContext() || PC == None || PC.Pawn == None)
     {
         ReleaseControls();
@@ -1288,6 +1371,7 @@ simulated function CopyPreferencesTo(class<VRHandsBridge> To)
     To.default.TopHudTranslationDeadZone = TopHudTranslationDeadZone;
     To.default.TopHudDetailLookDegrees = TopHudDetailLookDegrees;
     To.default.bWeaponAmmoReadouts = bWeaponAmmoReadouts; To.default.bDamagePopups = bDamagePopups;
+    To.default.bPerformanceScopes = bPerformanceScopes;
     To.default.WeaponAmmoReadoutScale = WeaponAmmoReadoutScale;
     To.default.WeaponAmmoReadoutForward = WeaponAmmoReadoutForward;
     To.default.WeaponAmmoReadoutHeight = WeaponAmmoReadoutHeight; To.default.bWristwatchHUD = bWristwatchHUD;
@@ -1301,9 +1385,12 @@ simulated function CopyPreferencesTo(class<VRHandsBridge> To)
     To.default.bToggleGrip = bToggleGrip; To.default.bHoldSupportGrip = bHoldSupportGrip;
     To.default.bSupportHandCarry = bSupportHandCarry; To.default.bBodySlotsEnabled = bBodySlotsEnabled;
     To.default.bDisableSupportHandAim = bDisableSupportHandAim; To.default.bZedGrabEnabled = bZedGrabEnabled;
+    To.default.bLauncherTriggerOnly = bLauncherTriggerOnly;
     To.default.ZedGrabSettingsRevision = ZedGrabSettingsRevision;
     To.default.bExperimentalInteractions = bExperimentalInteractions;
+    To.default.bExperimentalFeatures = bExperimentalFeatures; To.default.bLivingArmLoss = bLivingArmLoss;
     To.default.bMeleeHitStop = bMeleeHitStop; To.default.bLegacyMeleeHaptics = bLegacyMeleeHaptics;
+    To.default.bMeleeDebugDraw = bMeleeDebugDraw;
     To.default.bLegacyMeleeDamageCurve = bLegacyMeleeDamageCurve;
     To.default.bLegacyMeleeEdge = bLegacyMeleeEdge;
     To.default.bLegacyMeleeCorpseTouch = bLegacyMeleeCorpseTouch;
@@ -1379,6 +1466,7 @@ static function CopyDefaultPreferencesTo(class<VRHandsBridge> To)
     To.default.TopHudDetailLookDegrees = default.TopHudDetailLookDegrees;
     To.default.bWeaponAmmoReadouts = default.bWeaponAmmoReadouts;
     To.default.bDamagePopups = default.bDamagePopups;
+    To.default.bPerformanceScopes = default.bPerformanceScopes;
     To.default.WeaponAmmoReadoutScale = default.WeaponAmmoReadoutScale;
     To.default.WeaponAmmoReadoutForward = default.WeaponAmmoReadoutForward;
     To.default.WeaponAmmoReadoutHeight = default.WeaponAmmoReadoutHeight;
@@ -1397,10 +1485,13 @@ static function CopyDefaultPreferencesTo(class<VRHandsBridge> To)
     To.default.bSupportHandCarry = default.bSupportHandCarry;
     To.default.bBodySlotsEnabled = default.bBodySlotsEnabled;
     To.default.bDisableSupportHandAim = default.bDisableSupportHandAim;
+    To.default.bLauncherTriggerOnly = default.bLauncherTriggerOnly;
     To.default.bZedGrabEnabled = default.bZedGrabEnabled;
     To.default.ZedGrabSettingsRevision = default.ZedGrabSettingsRevision;
     To.default.bExperimentalInteractions = default.bExperimentalInteractions;
+    To.default.bExperimentalFeatures = default.bExperimentalFeatures; To.default.bLivingArmLoss = default.bLivingArmLoss;
     To.default.bMeleeHitStop = default.bMeleeHitStop;
+    To.default.bMeleeDebugDraw = default.bMeleeDebugDraw;
     To.default.bLegacyMeleeHaptics = default.bLegacyMeleeHaptics;
     To.default.bLegacyMeleeDamageCurve = default.bLegacyMeleeDamageCurve;
     To.default.bLegacyMeleeEdge = default.bLegacyMeleeEdge;
@@ -1960,9 +2051,9 @@ simulated function int AllocateReloadPropSerial()
     return ++ReloadPropSerial;
 }
 
-simulated function bool RequestNetworkMeleeHit(byte FiringMode, Actor Victim, vector HitLocation, vector RayDir, name BoneName, KFWeapon SourceWeapon, int Hand, int SwingSerial, optional float DamageScale = 1.0, optional bool bShieldContact, optional bool bNoDismember, optional bool bExplosiveContact, optional bool bBluntContact)
+simulated function bool RequestNetworkMeleeHit(byte FiringMode, Actor Victim, vector HitLocation, vector RayDir, name BoneName, KFWeapon SourceWeapon, int Hand, int SwingSerial, optional float DamageScale = 1.0, optional bool bShieldContact, optional bool bNoDismember, optional bool bExplosiveContact, optional bool bBluntContact, optional byte Part)
 {
-    if (RootBridge != None) return RootBridge.RequestNetworkMeleeHit(FiringMode, Victim, HitLocation, RayDir, BoneName, SourceWeapon, Hand, SwingSerial, DamageScale, bShieldContact, bNoDismember, bExplosiveContact, bBluntContact);
+    if (RootBridge != None) return RootBridge.RequestNetworkMeleeHit(FiringMode, Victim, HitLocation, RayDir, BoneName, SourceWeapon, Hand, SwingSerial, DamageScale, bShieldContact, bNoDismember, bExplosiveContact, bBluntContact, Part);
     return false;
 }
 // A network client's Blast Brawlers gauntlet blast (VRBrawlerBlast).
@@ -1976,10 +2067,60 @@ simulated function bool RequestNetworkSeekerSights(KFWeapon W, bool bSighted)
     if (RootBridge != None) return RootBridge.RequestNetworkSeekerSights(W, bSighted);
     return false;
 }
+simulated function bool RequestNetworkScytheFold(KFWeapon W, bool bFolded)
+{
+    if (RootBridge != None) return RootBridge.RequestNetworkScytheFold(W, bFolded);
+    return false;
+}
 simulated function bool RequestNetworkPhysicalDamage(Actor Victim, float DamageAmount, vector HitLocation, vector Momentum, class<DamageType> DamageType, name BoneName, int Hand, int SwingSerial)
 {
     if (RootBridge != None) return RootBridge.RequestNetworkPhysicalDamage(Victim, DamageAmount, HitLocation, Momentum, DamageType, BoneName, Hand, SwingSerial);
     return false;
+}
+// A physical swing began (VRPhysicalMelee.BeginSwing): warn nearby Zeds the
+// way a stock attack does (VRMeleeWarning, plan Q7). Authority warns here; a
+// network client asks its server.
+simulated function MeleeSwingWarning(KFWeapon SourceWeapon, byte Dir)
+{
+    if (RootBridge != None) { RootBridge.MeleeSwingWarning(SourceWeapon, Dir); return; }
+    if (Human != None && Human.Role == ROLE_Authority) class'VRMeleeWarning'.static.Warn(Human, SourceWeapon, Dir);
+    else RequestNetworkMeleeWarning(SourceWeapon, Dir);
+}
+simulated function bool RequestNetworkMeleeWarning(KFWeapon SourceWeapon, byte Dir)
+{
+    return false;
+}
+// Melee spec G10: the player's game states its guard (which yaw interval the
+// held weapon covers, and a serial that steps each time the guard met a hit);
+// the authority applies it when a Zed's hit lands.
+simulated function bool RequestNetworkGuard(KFWeapon SourceWeapon, int Hand, bool bUp, int Yaw, int Half, byte MetSerial)
+{
+    local KFWeapon W;
+    local vector From;
+    local int Verdict;
+    if (RootBridge != None) return RootBridge.RequestNetworkGuard(SourceWeapon, Hand, bUp, Yaw, Half, MetSerial);
+    // The stock controller is in use (mutator-only solo): this bridge holds
+    // the guard itself and VRBootstrap.NetDamage applies it. The network
+    // bridge overrides this and sends it to its controller instead.
+    if (PC == None || Human == None || Human.Role != ROLE_Authority) return false;
+    if (LocalGuard == None) LocalGuard = new(self) class'VRGuardState';
+    if (LocalGuard.State(Human, SourceWeapon, Hand, bUp, Yaw, Half, MetSerial))
+    {
+        Verdict = LocalGuard.BreakGrab(PC, W, From);
+        if (Verdict > 0) PlayGuardEffect(W, 255, Verdict == 2, From, 0);
+    }
+    return true;
+}
+// Mutator-only solo: a hit on this bridge's player, from VRBootstrap.NetDamage.
+function ApplyLocalGuard(out int Damage, class<DamageType> DamageType, Actor DamageCauser)
+{
+    local KFWeapon W;
+    local byte BlockType;
+    local vector From;
+    local int Verdict, Before;
+    if (LocalGuard == None || PC == None) return;
+    Verdict = LocalGuard.Apply(PC, Damage, DamageType, DamageCauser, W, BlockType, From, Before);
+    if (Verdict > 0) PlayGuardEffect(W, BlockType, Verdict == 2, From, Before);
 }
 // A network client's moving melee weapon met a Zed's attacking arm
 // (VRPhysicalMelee.TryWeaponParry); the server validates and parries.
@@ -2665,12 +2806,11 @@ simulated function bool IsSeekerLockOn(KFWeapon W)
         || (KFWeap_SMG_G18(W) != None && bRiotShieldRaised);
 }
 
-// Riot Shield: stock raises the shield with iron sights, and only a raised
-// shield blocks (AdjustDamage, server side). In VR the empty off hand raises
-// it: lift that hand in front of the chest or face. Hysteresis keeps a hand
-// held at the edge from flickering the block. The shield mesh already rides
-// that hand (VRRiotShield), so the stock raise animation is not played: it
-// would only turn the tracked Glock by up to 57 degrees.
+// Riot Shield (melee spec G8): the shield's face is the guard. The shield
+// rides the off hand (VRRiotShield); lifted in front of the chest or face it
+// covers a wide cone around the direction from the head to that hand, stated
+// to the authority like any other guard (RequestNetworkGuard). The stock
+// iron-sight raise and its facing test are not used. It never parries.
 simulated function UpdateRiotShield()
 {
     local KFWeap_SMG_G18 W;
@@ -2694,20 +2834,21 @@ simulated function UpdateRiotShield()
         bRaise=(Rel dot Forward)>(bRiotShieldRaised ? 6.0 : 12.0)
             && Rel.Z>(bRiotShieldRaised ? -42.0 : -32.0);
     }
-    if (W!=None) W.bUsingSights=bRaise;
-    if (bRaise == bRiotShieldRaised && W == RiotShieldWeapon) return;
-    // Lower a shield left behind by a weapon switch or a lost item.
-    if (RiotShieldWeapon != None && RiotShieldWeapon != W && !RiotShieldWeapon.bDeleteMe && bRiotShieldRaised)
+    if (W != None)
     {
-        RiotShieldWeapon.bUsingSights = false;
-        RequestNetworkSeekerSights(RiotShieldWeapon, false);
+        if (W.bUsingSights) { W.bUsingSights = false; RequestNetworkSeekerSights(W, false); }
+        if (bRaise != bRiotShieldRaised || W != RiotShieldWeapon
+            || (bRaise && WorldInfo.RealTimeSeconds - RiotShieldGuardSent >= 0.05))
+        {
+            Rel.Z = 0;
+            RiotShieldGuardSent = WorldInfo.RealTimeSeconds;
+            RequestNetworkGuard(W, Off, bRaise, rotator(Rel).Yaw & 65535, RiotShieldGuardHalf, 0);
+        }
     }
     RiotShieldWeapon = W;
     if (bRaise == bRiotShieldRaised) return;
     bRiotShieldRaised = bRaise;
     if (W == None) return;
-    W.bUsingSights = bRaise;
-    RequestNetworkSeekerSights(W, bRaise);
     if (Off >= 0) class'VRMeleeControls'.static.Pulse(self, 1 << Off, bRaise ? 0.45 : 0.2, 0.04);
 }
 
@@ -2783,28 +2924,289 @@ simulated function bool ClearProjectileToss(KFWeapon W, KFProjectile P)
 simulated function bool SupportSlideRange(KFWeapon W, out vector AxisWorld, out float MinSlide, out float MaxSlide)
 {
     local VRHandsBridge Root;
-    local vector Axis, HeadCenter, Base;
+    local vector Axis, Base;
     local quat RootQ, Q;
     local name RootBone;
     local float Head, Primary, Support;
     Root = RootBridge != None ? RootBridge : self;
-    if (Root.UseLegacyMelee(Root.bLegacyMeleeSlidingGrip) || W == None || W.MySkelMesh == None || ActiveProfile < 0
+    if ((Root.ExperimentalInteractionsEnabled() && Root.bLegacyMeleeSlidingGrip) || W == None || W.MySkelMesh == None || ActiveProfile < 0
         || !WeaponProfiles[ActiveProfile].bPhysicalMelee || WeaponProfiles[ActiveProfile].bFirearm
         || WeaponProfiles[ActiveProfile].bPhysicalDualGauntlets || WeaponProfiles[ActiveProfile].bOneHanded
-        || !GetSupportGripWorld(W, Base, Q)) return false;
-    HeadCenter = (WeaponProfiles[ActiveProfile].MeleeHeadStart + WeaponProfiles[ActiveProfile].MeleeHeadEnd) * 0.5;
-    if (VSizeSq(HeadCenter) < 100) return false;
-    Axis = Normal(HeadCenter);
+        || !MeleeSlideAllowed(W) || !GetSupportGripWorld(W, Base, Q)) return false;
+    if (!MeleeSlideFrame(W, Axis, Head)) return false;
     RootBone = WeaponProfiles[ActiveProfile].RootBone;
     RootQ = W.MySkelMesh.GetBoneQuaternion(RootBone);
     Support = QuatRotateVector(QuatInvert(RootQ), Base - W.MySkelMesh.GetBoneLocation(RootBone)) dot Axis;
     Primary = PrimaryGrip dot Axis;
-    Head = FMin(WeaponProfiles[ActiveProfile].MeleeHeadStart dot Axis, WeaponProfiles[ActiveProfile].MeleeHeadEnd dot Axis)
-        - WeaponProfiles[ActiveProfile].MeleeRadius;
     MinSlide = FMin(Primary + SupportSlideMinGap - Support, 0);
     MaxSlide = FMax(Head - SupportSlideHeadGap - Support, 0);
     if (MaxSlide - MinSlide < 4) return false;
     AxisWorld = QuatRotateVector(RootQ, Axis);
+    return true;
+}
+
+// Q10: the weapon hand slides along the shaft while the support hand holds it
+// still (not during a swing or guard). The weapon then sits on the tracked
+// weapon hand at its new grip point. Range: from SlideSnap behind the stock
+// grip to SupportSlideMinGap short of the support hand and the head.
+static simulated function bool ReverseGripWeapon(KFWeapon W)
+{
+    return KFWeap_Edged_Knife(W) != None || KFWeap_Edged_Katana(W) != None;
+}
+
+simulated function vector ReversedGripPoint(vector G)
+{
+    if (ReversePhase == 0) return G;
+    return ReversePivot + QuatRotateVector(QuatInvert(ReverseQ), G - ReversePivot);
+}
+
+simulated function quat ReversedGripRotation(quat Q)
+{
+    if (ReversePhase == 0) return Q;
+    return QuatProduct(QuatInvert(ReverseQ), Q);
+}
+
+simulated function bool ReverseTurning()
+{
+    return ReversePhase == 1 || ReversePhase == 3;
+}
+
+// Degrees along a stock-sampled turn, ReverseFrameTime per sample.
+simulated function float ReverseCurve(array<float> Curve, float Clock, float FrameTime, out byte bDone)
+{
+    local float F;
+    local int I;
+    F = Clock / FMax(FrameTime, 0.001);
+    I = int(F);
+    bDone = 0;
+    if (I >= Curve.Length - 1) { bDone = 1; return Curve[Curve.Length - 1]; }
+    return Lerp(Curve[I], Curve[I + 1], F - I);
+}
+
+// The stock twirl frame the primary hand's fingers take while a knife turns
+// (open fingers as it spins), or -1 for the held Idle fist.
+simulated function int ReverseFingerFrame(KFWeapon W)
+{
+    local int F;
+    if (KFWeap_Edged_Knife(W) == None || !ReverseTurning()) return -1;
+    F = int(ReverseClock / FMax(ReverseFrameTime, 0.001));
+    // Turning in: stock frames 33-38, closing on the reversed fist at 39.
+    // Turning back: frames 40-45 from the reversed fist.
+    if (ReversePhase == 1) return F < 6 ? 33 + F : -1;
+    return (F >= 1 && F < 7) ? 39 + F : -1;
+}
+
+simulated function UpdateReverseGrip(KFWeapon W)
+{
+    local bool bHeld, bBusy, bTwoHand;
+    local float Delta, Target;
+    local byte bDone;
+    local vector Axis;
+    local VRHandsBridge B;
+    Delta = ReverseLastTime > 0 ? FClamp(WorldInfo.RealTimeSeconds - ReverseLastTime, 0, 0.1) : 0.0;
+    ReverseLastTime = WorldInfo.RealTimeSeconds;
+    if (!ReverseGripWeapon(W) || ActiveProfile < 0 || !WeaponProfiles[ActiveProfile].bPhysicalMelee
+        || WeaponProfiles[ActiveProfile].bFirearm || WeaponHand < 0 || WeaponHand > 1)
+    {
+        ReversePhase = 0; ReverseAngle = 0; ReverseClock = 0; ReversePivotAlpha = 0;
+        return;
+    }
+    bHeld = (PresentedItem == None || PresentedItem.PrimaryHand == WeaponHand)
+        && (NativeValidMask & (1 << WeaponHand)) != 0 && (NativeTriggerMask & (1 << WeaponHand)) != 0;
+    // Never turn mid-stroke: the hit zones would jump. A flip waits for the
+    // stroke to end, and so does the turn back.
+    bBusy = PhysicalMelee != None && PhysicalMelee.bSwing;
+    B = RootBridge != None ? RootBridge : self;
+    switch (ReversePhase)
+    {
+    case 0:
+        if (bHeld && !bBusy) { ReversePhase = 1; ReverseClock = 0; }
+        break;
+    case 1:
+        ReverseClock += Delta;
+        ReverseAngle = KFWeap_Edged_Katana(W) != None ? ReverseCurve(KatanaInDegrees, ReverseClock, KatanaFrameTime, bDone)
+            : ReverseCurve(ReverseInDegrees, ReverseClock, ReverseFrameTime, bDone);
+        if (bDone != 0) { ReversePhase = 2; ReverseAngle = 180; B.QueueHandHaptic(1 << WeaponHand, 0.3, 0.02); }
+        break;
+    case 2:
+        if (!bHeld && !bBusy) { ReversePhase = 3; ReverseClock = 0; }
+        break;
+    case 3:
+        ReverseClock += Delta;
+        ReverseAngle = KFWeap_Edged_Katana(W) != None ? ReverseCurve(KatanaOutDegrees, ReverseClock, KatanaFrameTime, bDone)
+            : ReverseCurve(ReverseOutDegrees, ReverseClock, ReverseFrameTime, bDone);
+        if (bDone != 0) { ReversePhase = 0; ReverseAngle = 0; B.QueueHandHaptic(1 << WeaponHand, 0.3, 0.02); }
+        break;
+    }
+    if (KFWeap_Edged_Knife(W) != None)
+    {
+        Axis = KnifeReverseAxis;
+        ReversePivot = KnifeReversePivot;
+    }
+    else
+    {
+        // The Katana turns round its primary hand; held in both hands, round
+        // the middle of the two grips so both stay on the handle.
+        bTwoHand = Hands[1 - WeaponHand].SupportOwner == WeaponHand;
+        Target = bTwoHand ? 1 : 0;
+        ReversePivotAlpha += (Target - ReversePivotAlpha) * FClamp(1 - Exp(-12 * Delta), 0, 1);
+        if (Abs(ReversePivotAlpha - Target) < 0.01) ReversePivotAlpha = Target;
+        Axis = KatanaReverseAxis;
+        ReversePivot = vect(0,0,1) * Lerp(PrimaryGrip.Z, (PrimaryGrip.Z + SupportGrip.Z) * 0.5, ReversePivotAlpha);
+    }
+    ReverseQ = QuatFromAxisAndAngle(Normal(Axis), ReverseAngle * Pi / 180.0);
+}
+
+// Re-seat a bound hand for the reverse grip: the hand keeps its place on the
+// tracked wrist while the weapon turns beneath it.
+simulated function ApplyReverseAttachment(KFWeapon W, int I)
+{
+    local vector Rel;
+    local rotator Rot;
+    if (AttachedHands[I] == None || ActiveProfile < 0 || AttachedHandBones[I] != WeaponProfiles[ActiveProfile].RootBone) return;
+    if (ReversePhase == 0)
+    {
+        if (bReverseAttached[I] == 0) return;
+        bReverseAttached[I] = 0;
+        Rel = AttachedRelative[I];
+        Rot = AttachedRotation[I];
+    }
+    else
+    {
+        Rel = ReversedGripPoint(AttachedRelative[I]);
+        Rot = QuatToRotator(ReversedGripRotation(QuatFromRotator(AttachedRotation[I])));
+        if (bReverseAttached[I] != 0 && VSizeSq(Rel - AppliedReverseRel[I]) < 0.0001 && Rot == AppliedReverseRot[I]) return;
+        bReverseAttached[I] = 1;
+        AppliedReverseRel[I] = Rel;
+        AppliedReverseRot[I] = Rot;
+    }
+    AttachedHands[I].DetachFromAny();
+    W.MySkelMesh.AttachComponent(AttachedHands[I], AttachedHandBones[I], Rel, Rot);
+}
+
+simulated function UpdatePrimarySlide(KFWeapon W, float Delta)
+{
+    local vector Axis, LocalAxis, Move[2], Body, BodyAxis;
+    local quat InverseBody, RootQ;
+    local float MinSlide, MaxSlide, Along, Limit, Head, BaseAlong, Far;
+    local int S, I;
+    if (W == None || W.MySkelMesh == None || ActiveProfile < 0 || ActiveProfile >= WeaponProfiles.Length || !bCalibrated
+        || !WeaponProfiles[ActiveProfile].bPhysicalMelee || WeaponProfiles[ActiveProfile].bFirearm)
+    {
+        bPrimarySlideSeeded = false;
+        return;
+    }
+    if (!MeleeSlideFrame(W, LocalAxis, Far)) { bPrimarySlideSeeded = false; return; }
+    S = -1;
+    for (I = 0; I < 2; ++I) if (I != WeaponHand && Hands[I].SupportOwner == WeaponHand) S = I;
+    InverseBody = QuatInvert(QuatFromRotator(BodyRotation));
+    Body = Human != None ? Human.Location : vect(0,0,0);
+    for (I = 0; I < 2; ++I)
+    {
+        Move[I] = QuatRotateVector(InverseBody, Hands[I].Position - Body) - PrimarySlideLast[I];
+        PrimarySlideLast[I] = QuatRotateVector(InverseBody, Hands[I].Position - Body);
+    }
+    // Slide only with the support hand on the shaft, never during a swing,
+    // and only deliberately: the support hand still, the weapon hand
+    // moving along the shaft more than across it.
+    if (S >= 0 && bPrimarySlideSeeded && Delta > 0 && SupportSlideRange(W, Axis, MinSlide, MaxSlide)
+        && (PhysicalMelee == None || !PhysicalMelee.bSwing))
+    {
+        BodyAxis = QuatRotateVector(InverseBody, Axis);
+        Along = Move[WeaponHand] dot BodyAxis;
+        if (VSize(Move[S]) / Delta <= PrimarySlideStill && Abs(Along) / Delta >= PrimarySlideMove
+            && Abs(Along) >= VSize(Move[WeaponHand] - BodyAxis * Along))
+        {
+            RootQ = W.MySkelMesh.GetBoneQuaternion(WeaponProfiles[ActiveProfile].RootBone);
+            BaseAlong = SlideBasePrimaryGrip dot LocalAxis;
+            // Up to SupportSlideMinGap short of the support hand and the head.
+            Limit = (QuatRotateVector(QuatInvert(RootQ), Hands[S].Position
+                - W.MySkelMesh.GetBoneLocation(WeaponProfiles[ActiveProfile].RootBone)) dot LocalAxis)
+                - BaseAlong - SupportSlideMinGap;
+            Head = Far - SupportSlideMinGap - BaseAlong;
+            PrimarySlide = FClamp(PrimarySlide + Along, -SlideSnap, FMax(FMin(Limit, Head), 0));
+            // Settle into the stock grip when close to it.
+            if (Abs(PrimarySlide) <= SlideSnap * 0.5) PrimarySlide = 0;
+        }
+    }
+    bPrimarySlideSeeded = true;
+    // The base is whatever grip the presenter chose for this hand role (a
+    // right hand on the Fire Axe holds the mirrored left-hand grip): take it
+    // fresh whenever something other than the slide set PrimaryGrip.
+    if (VSizeSq(PrimaryGrip - PrimarySlideWritten) > 0.0001) SlideBasePrimaryGrip = PrimaryGrip;
+    if (!MeleeSlideAllowed(W) && PrimarySlide == 0) { PrimarySlideWritten = PrimaryGrip; return; }
+    PrimaryGrip = SlideBasePrimaryGrip + LocalAxis * PrimarySlide;
+    PrimarySlideWritten = PrimaryGrip;
+}
+
+// Plan Q10: the weapons whose stock attack animations slide a hand along the
+// haft (docs/re/MELEE_WEAPON_ZONES_AND_GRIPS.md, sliding grip). The Katana,
+// Ion Thruster and Chain Bat keep fixed hands; one-handers never slide. The
+// Scythe slides only unfolded (melee spec M26): folded, its blade lies along
+// the snath with the tip below the support hand.
+static simulated function bool MeleeSlideAllowed(KFWeapon W)
+{
+    return KFWeap_Edged_FireAxe(W) != None || KFWeap_Blunt_Pulverizer(W) != None
+        || KFWeap_Blunt_MedicBat(W) != None || KFWeap_Blunt_Crovel(W) != None
+        || KFWeap_Edged_AbominationAxe(W) != None || KFWeap_Edged_Zweihander(W) != None
+        || (class'VRScytheFold'.static.Is(W) && class'VRScytheFold'.static.Unfold(W) >= 0.99);
+}
+
+// The held melee head in the root frame: the profile's, carried onto the
+// Scythe's blade as shown, folded or unfolded (melee spec M26).
+simulated function MeleeHeadEnds(KFWeapon W, out vector HeadStart, out vector HeadEnd)
+{
+    local float U;
+    HeadStart = WeaponProfiles[ActiveProfile].MeleeHeadStart;
+    HeadEnd = WeaponProfiles[ActiveProfile].MeleeHeadEnd;
+    if (!class'VRScytheFold'.static.Is(W)) return;
+    U = class'VRScytheFold'.static.Unfold(W);
+    HeadStart = class'VRScytheFold'.static.FoldPoint(HeadStart, U);
+    HeadEnd = class'VRScytheFold'.static.FoldPoint(HeadEnd, U);
+}
+
+// The shaft a hand slides along, in the root frame, and how far along it a
+// hand may go: from the grip toward the head on hafted weapons. The Scythe's
+// support hand sits below the weapon hand on a snath along Z, so its axis
+// runs down to the butt (stock takes the lower hand to -45 in the guard and
+// up to -10.5 in swings).
+simulated function bool MeleeSlideFrame(KFWeapon W, out vector LocalAxis, out float Far)
+{
+    local vector HeadStart, HeadEnd, HeadCenter;
+    if (class'VRScytheFold'.static.Is(W))
+    {
+        LocalAxis = vect(0,0,-1);
+        Far = ScytheSlideFar;
+        return true;
+    }
+    MeleeHeadEnds(W, HeadStart, HeadEnd);
+    HeadCenter = (HeadStart + HeadEnd) * 0.5;
+    if (VSizeSq(HeadCenter) < 100) return false;
+    LocalAxis = Normal(HeadCenter);
+    Far = FMin(HeadStart dot LocalAxis, HeadEnd dot LocalAxis) - WeaponProfiles[ActiveProfile].MeleeRadius;
+    return true;
+}
+
+// Melee spec M26: X/A on a hand holding the Scythe folds or unfolds it
+// (VRScytheFold), with a detent pulse on that hand. The authority applies the
+// mode and publishes it; a network client asks its server to.
+simulated function bool ToggleScytheFold(KFWeapon W, int Hand)
+{
+    local VRHandsBridge Root;
+    local KFWeap_Edged_Scythe S;
+    Root = RootBridge != None ? RootBridge : self;
+    S = KFWeap_Edged_Scythe(W);
+    // The settled blade's turn from the bind pose as the mesh shows it (stock
+    // idle_folded 140 degrees, idle_unfolded 45), which the rails assume.
+    if (S != None && S.MySkelMesh != None)
+        `log("KF2VR_SCYTHE blade unfold=" $ int(class'VRScytheFold'.static.Unfold(S)) @ "fold_deg=" $ int(2 * Acos(FMin(Abs(
+            QuatProduct(QuatInvert(S.MySkelMesh.GetBoneQuaternion('RW_Weapon')),
+            S.MySkelMesh.GetBoneQuaternion('RW_Fold')).W), 1)) * 180 / Pi));
+    if (S == None || !class'VRScytheFold'.static.Toggle(S)) return false;
+    if (Hand >= 0 && Hand <= 1) Root.QueueHandHaptic(1 << Hand, 0.5, 0.04);
+    if (!Root.RequestNetworkScytheFold(S, S.bIsFolded)) class'VRScytheFold'.static.ApplyAuthority(S, S.bIsFolded);
+    `log("KF2VR_SCYTHE fold=" $ (S.bIsFolded ? "folded" : "unfolded") @ "hand=" $ Hand
+        @ "damage=" $ int(S.InstantHitDamage[0]) $ "/" $ int(S.InstantHitDamage[5]) @ "netmode=" $ WorldInfo.NetMode);
     return true;
 }
 
@@ -2831,6 +3233,8 @@ simulated function vector SlideSupportHand(KFWeapon W, int I, vector Base, float
     local quat BoneQ;
     if (!SupportSlideRange(W, Axis, MinSlide, MaxSlide)) { SupportSlide[I] = 0; return Base; }
     Want = FClamp((Hands[I].Position - Base) dot Axis, MinSlide, MaxSlide);
+    // Settle into the stock grip when the hand is close to it.
+    if (Abs(Want) <= SlideSnap) Want = 0;
     SupportSlide[I] += (Want - SupportSlide[I]) * FClamp(1 - Exp(-SupportSlideRate * FMax(Delta, 0)), 0, 1);
     if (AttachedHands[I] != None && Abs(SupportSlide[I] - AttachedSlide[I]) > 0.05)
     {
@@ -2863,6 +3267,11 @@ simulated function bool GetSupportGripWorld(KFWeapon W, out vector GripPosition,
     local name SupportBone;
     local quat SupportQ;
     if (!GetSupportGripContact(W, SupportBone, GripPosition, GripRotation)) return false;
+    if (ReversePhase != 0 && ActiveProfile >= 0 && SupportBone == WeaponProfiles[ActiveProfile].RootBone)
+    {
+        GripPosition = ReversedGripPoint(GripPosition);
+        GripRotation = ReversedGripRotation(GripRotation);
+    }
     SupportQ = W.MySkelMesh.GetBoneQuaternion(SupportBone);
     GripPosition = W.MySkelMesh.GetBoneLocation(SupportBone) + QuatRotateVector(SupportQ, GripPosition);
     GripRotation = QuatProduct(SupportQ, GripRotation);
@@ -2940,6 +3349,14 @@ simulated function InitializeFreeHands()
     bOriginalFreeHandsPhysicsInstance = Arms.bHasPhysicsAssetInstance;
     // These near-face tracked meshes must not contribute world query depth.
     Arms.bUseAsOccluder = false;
+    // The free hands move by their wrist bones inside a component anchored to
+    // the torso. KF2's velocity pass, which DLSS reads as object motion, knows
+    // a skinned mesh's bones only with per-bone motion on; the stock arms have
+    // it off, so the hands reported the torso's motion instead of their own
+    // (found under #10; the effect on DLSS still needs headset frames). Read
+    // when the mesh is attached, so set before the reattach below.
+    bOriginalFreeHandsBoneMotion = Arms.bPerBoneMotionBlur;
+    Arms.bPerBoneMotionBlur = true;
     if (Arms.SkeletalMesh != FloatingHandsMesh) Arms.SetSkeletalMesh(FloatingHandsMesh);
     class'VRHandBounds'.static.Apply(Arms);
     Arms.SetMaterial(0, GetFloatingHandsMaterial());
@@ -3517,6 +3934,7 @@ simulated function CalibrateGripPose(KFWeapon W)
         SupportGripOffset = SupportGripOffsetInWeapon[0];
         SupportGripRotation = SupportGripRotationInWeapon[0];
     }
+    SlideBasePrimaryGrip = PrimaryGrip; PrimarySlideWritten = PrimaryGrip; PrimarySlide = 0; bPrimarySlideSeeded = false;
     bCalibrated = true;
     NativeWeaponReady = 1;
     `log("KF2VR_HANDS grip-calibrated weapon=" $ W.Class @ "right=" $ GripInWeapon[1]
@@ -3854,6 +4272,8 @@ simulated function UpdateHandAttachment(KFWeapon W, int I, name BoneName, vector
     if (AttachedHands[I] != None) AttachedHands[I].DetachFromAny();
     HandMesh = new(self) class'KFSkeletalMeshComponent';
     HandMesh.bUseAsOccluder = false;
+    // Its fingers move by bones too: report them to the velocity pass.
+    HandMesh.bPerBoneMotionBlur = true;
     HandMesh.SetSkeletalMesh(FloatingHandsMesh);
     class'VRHandBounds'.static.Apply(HandMesh);
     HandMesh.SetMaterial(0, GetFloatingHandsMaterial());
@@ -3926,6 +4346,8 @@ simulated function UpdateHandAttachment(KFWeapon W, int I, name BoneName, vector
     AttachedRelative[I] = RelativePosition;
     AttachedRotation[I] = QuatToRotator(RelativeQ);
     AttachedSlide[I] = 0;
+    bReverseAttached[I] = 0;
+    AttachedFingerFrame[I] = (PoseClip == KnifeTwirlClip && PoseClip != '') ? int(PoseTime / FMax(ReverseFrameTime, 0.001) + 0.5) : -1;
     AttachedHands[I] = HandMesh;
     AttachedHandBones[I] = BoneName;
     OtherHandRevealLogged[I] = 0;
@@ -3971,7 +4393,9 @@ simulated function FitSupportWrist(KFWeapon W, KFSkeletalMeshComponent HandMesh,
     else if (W.Class == class'KFWeap_AssaultRifle_AR15') { Degrees = 6; AxisDegrees = 225; }
     else if (W.Class == class'KFWeap_AssaultRifle_FNFal') { Degrees = 13; AxisDegrees = 195; }
     else if (W.Class == class'KFWeap_LMG_MG3') { Degrees = 8; AxisDegrees = 270; }
-    else if (W.Class == class'KFWeap_LMG_Stoner63A') { Degrees = 6; AxisDegrees = 225; }
+    // Hand art revision 88 (watch 2.5 cm up the forearm, longer bracer): at 6
+    // the watch crossed the Stoner; tools/measure_support_cuff.py clears at 9.
+    else if (W.Class == class'KFWeap_LMG_Stoner63A') { Degrees = 9; AxisDegrees = 225; }
     else if (W.Class == class'KFWeap_AssaultRifle_Medic') { Degrees = 12; AxisDegrees = 225; }
     // Kvasir94 (10-29, #16): the 13 degree turn still clipped, "turn out more".
     // 24 at 180 is the sweep's clearing candidate: cuff crossings 653 -> 0,
@@ -4041,7 +4465,7 @@ simulated function PresentBracedSupport(KFWeapon W, int I)
     if (HandMesh == None || AttachedHandBones[I] == '' || BraceFrameReady[I] == 0) return;
     // Presenters copy the root bridge's head position but not its tracking flag.
     if ((RootBridge != None ? RootBridge.NativeHeadTracked == 0 : NativeHeadTracked == 0)
-        || !WeaponProfiles[ActiveProfile].bPistolBrace)
+        || !WeaponProfiles[ActiveProfile].bPistolBrace || WeaponProfiles[ActiveProfile].bForegripSupport)
     {
         if (BraceApplied[I] != 0)
         {
@@ -4173,7 +4597,8 @@ simulated function bool HasOpenOpticalBarrel(KFWeapon W)
 // already processed visibility/attachment and its animation state normally.
 // Melee roadmap item 3: the visible weapon follows the tracked grip with
 // mass-scaled lag (VRWeightFollower). Melee weapons only; firearms, melee guns
-// and gauntlets stay exactly tracked. Target/DesiredQ are the root placement.
+// stay exactly tracked; gauntlets add only their per-contact rebound below.
+// Target/DesiredQ are the root placement.
 // Item 14: B&S drives held items through a joint, so a blade meets a wall and
 // stops while the hand's target goes on. Here the follower's target is pushed
 // back out of world geometry along the surface normal until the head capsule
@@ -4202,8 +4627,7 @@ simulated function StopMeleeAtWorld(KFWeapon W, out vector Grip, quat DesiredQ, 
     local float Radius, Depth, Best;
     local int I, Mask;
     local Actor Wall;
-    Ends[0] = WeaponProfiles[ActiveProfile].MeleeHeadStart;
-    Ends[1] = WeaponProfiles[ActiveProfile].MeleeHeadEnd;
+    MeleeHeadEnds(W, Ends[0], Ends[1]);
     Radius = WeaponProfiles[ActiveProfile].MeleeRadius;
     for (I = 0; I < 2; ++I)
     {
@@ -4250,12 +4674,14 @@ simulated function ApplyMeleeWeight(KFWeapon W, out vector Target, out quat Desi
 {
     local VRHandsBridge Root;
     local VRMeleeTraits.VRMeleeTrait Trait;
-    local vector Grip, Head, TrackedGrip, RawGrip;
+    local vector Grip, Head, TrackedGrip, RawGrip, HeadStart, HeadEnd;
     local quat OutQ, TrackedQ, RawQ;
     local bool bTwoHanded;
     local int Damage;
     local float Kick;
     Root = RootBridge != None ? RootBridge : self;
+    // Melee spec G9: a blocked hit shoves the weapon, for every VR player.
+    if (PhysicalMelee != None && PhysicalMelee.Weapon == W) PhysicalMelee.ApplyGuardShove(Target);
     RawGrip = Target + QuatRotateVector(DesiredQ, PrimaryGrip);
     RawQ = DesiredQ;
     if (Root.UseLegacyMelee(Root.bLegacyMeleeWeight) || ActiveProfile < 0 || ActiveProfile >= WeaponProfiles.Length
@@ -4287,7 +4713,8 @@ simulated function ApplyMeleeWeight(KFWeapon W, out vector Target, out quat Desi
     }
     if (WeightFollower == None) WeightFollower = new(self) class'VRWeightFollower';
     Grip = Target + QuatRotateVector(DesiredQ, PrimaryGrip);
-    Head = (WeaponProfiles[ActiveProfile].MeleeHeadStart + WeaponProfiles[ActiveProfile].MeleeHeadEnd) * 0.5;
+    MeleeHeadEnds(W, HeadStart, HeadEnd);
+    Head = (HeadStart + HeadEnd) * 0.5;
     bTwoHanded = SupportHand >= 0 && SupportHand <= 1 && Hands[SupportHand].SupportOwner == WeaponHand;
     // Item 20: a Zed's blow knocks the visible weapon off line; the follower's
     // spring brings it back. Blocked blows kick half as hard.
@@ -4430,6 +4857,7 @@ simulated function PlaceWeapon()
     local VRCompoundBowInput BowInput;
     local name RootBone;
     local float ReleaseElapsed, ReleaseAlpha, NowTime, KickImpulse, KickWeight, KickElapsed;
+    local int FingerFrame;
 
     // Native reads the scene-wide request from this root bridge, not the
     // per-item presenters. Publish it before independent placement returns.
@@ -4458,6 +4886,7 @@ simulated function PlaceWeapon()
         return;
     }
     AuthoredPrimaryHand = AuthoredPrimaryIndex();
+    UpdateReverseGrip(W);
     BoreQ = QuatFromRotator(WeaponProfiles[ActiveProfile].BoreRotation);
     if (WeaponProfiles[ActiveProfile].bPhysicalMelee) ItemRecoil = rot(0,0,0);
     EnforceWeaponMotion(W);
@@ -4556,7 +4985,7 @@ simulated function PlaceWeapon()
         bTwoHandReleaseSmoothing = false;
         SupportAimReference = vect(0,0,0);
     }
-    else if (!WeaponProfiles[ActiveProfile].bPistolBrace
+    else if ((!WeaponProfiles[ActiveProfile].bPistolBrace || WeaponProfiles[ActiveProfile].bForegripSupport)
         && bSupportAimValid && Hands[SupportHand].SupportOwner == WeaponHand && !IsWeaponReadying(W) && !bReadyPoseSettling)
     {
         Forward = Normal(Hands[SupportHand].Position - Hands[WeaponHand].Position);
@@ -4679,6 +5108,8 @@ simulated function PlaceWeapon()
     // Tracking, bracing and recoil above describe the bore. Solve the authored
     // root frame before applying action motion and anchoring its grip.
     DesiredQ = QuatProduct(DesiredQ, QuatInvert(BoreQ));
+    // Reverse grip: the weapon turns in the hands, after any two-hand aim.
+    if (ReversePhase != 0) DesiredQ = QuatProduct(DesiredQ, ReverseQ);
 
     // The first Idle/fire pose may still blend from the outgoing ready pose.
     // Do not briefly reintroduce that pose's large arm offset after the timer.
@@ -4708,7 +5139,7 @@ simulated function PlaceWeapon()
     }
     // Anchor AFTER all rotations, including recoil and action animation, so
     // they pivot around the held grip instead of swinging that grip away.
-    Target = Hands[WeaponHand].Position - QuatRotateVector(DesiredQ, PrimaryGrip);
+    Target = Hands[WeaponHand].Position - QuatRotateVector(DesiredQ, ReversedGripPoint(PrimaryGrip));
     if (VRWeaponPresenter(self) != None && VRWeaponPresenter(self).ForegripCarryRoot(Target, DesiredQ)) RecoilKick = 0;
     if(ExperimentalInteractionsEnabled() && WeaponBlockResponseUntil>WorldInfo.RealTimeSeconds)
         Target+=WeaponBlockResponse*Square(FClamp((WeaponBlockResponseUntil-WorldInfo.RealTimeSeconds)/0.12,0,1));
@@ -4729,6 +5160,8 @@ simulated function PlaceWeapon()
     // in its input while leaving that stock recoil addition exactly once.
     FireRotation = QuatToRotator(QuatProduct(DesiredQ, BoreQ)) - ItemRecoil;
     ApplyMeleeWeight(W, Target, DesiredQ, SupportHand);
+    if (PhysicalMelee != None && WeaponProfiles[ActiveProfile].bPhysicalDualGauntlets)
+        PhysicalMelee.ApplyGauntletContact(WeaponHand, Target);
     ActorQ = QuatFromRotator(W.Rotation);
     RelativeQ = QuatProduct(QuatInvert(ActorQ), RootQ);
     HandPos = QuatRotateVector(QuatInvert(ActorQ), RootPos - W.Location);
@@ -4829,6 +5262,7 @@ simulated function PlaceWeapon()
     // deferred lighting has no per-weapon channel in this shipped renderer.
     HandFillLight.SetTranslation((Hands[WeaponHand].Position + vect(0,0,15) - Location) << Rotation);
     HandFillLight.ForceUpdate(true);
+    UpdatePrimarySlide(W, WorldInfo.DeltaSeconds / FMax(WorldInfo.TimeDilation, 0.01));
     for (I = 0; I < 2; ++I)
     {
         // Another presenter or the root neutral rig owns the other hand.
@@ -4850,10 +5284,21 @@ simulated function PlaceWeapon()
                 if (I != PrimaryContactSourceHand())
                     RelativeQ = class'VRHandRolePose'.static.RetargetWrist(self,
                         PrimaryContactSourceHand(), I, RelativeQ);
-                HandQ = QuatProduct(M.GetBoneQuaternion(RootBone), RelativeQ);
-                HandPos = M.GetBoneLocation(RootBone) + QuatRotateVector(M.GetBoneQuaternion(RootBone), PrimaryGrip);
+                HandQ = QuatProduct(M.GetBoneQuaternion(RootBone), ReversedGripRotation(RelativeQ));
+                HandPos = M.GetBoneLocation(RootBone) + QuatRotateVector(M.GetBoneQuaternion(RootBone), ReversedGripPoint(PrimaryGrip));
+                // A turning knife takes the stock twirl's open fingers, frame
+                // by frame; rebuild the bound hand when its frame changes.
+                FingerFrame = ReverseFingerFrame(W);
+                if (AttachedHands[I] != None && AttachedFingerFrame[I] != FingerFrame)
+                {
+                    AttachedHands[I].DetachFromAny();
+                    AttachedHands[I] = None;
+                    AttachedHandBones[I] = '';
+                }
                 UpdateHandAttachment(W, I, RootBone, PrimaryGrip, GripRotationInWeapon[PrimaryContactSourceHand()],
-                    false, '', 0, PrimaryContactSourceHand());
+                    false, FingerFrame >= 0 ? KnifeTwirlClip : '', FingerFrame >= 0 ? FingerFrame * ReverseFrameTime : 0.0,
+                    PrimaryContactSourceHand());
+                ApplyReverseAttachment(W, I);
             }
         }
         else if (Hands[I].SupportOwner == WeaponHand && !IsWeaponReadying(W) && !bReadyPoseSettling)
@@ -4863,6 +5308,7 @@ simulated function PlaceWeapon()
             GetSupportGripWorld(W, HandPos, HandQ);
             UpdateSupportHandAttachment(W, I);
             HandPos = SlideSupportHand(W, I, HandPos, WorldInfo.DeltaSeconds / FMax(WorldInfo.TimeDilation, 0.01));
+            ApplyReverseAttachment(W, I);
             PresentBracedSupport(W, I);
         }
         else UpdateHandAttachment(W, I, '', vect(0,0,0), HandQ);
@@ -5150,9 +5596,11 @@ simulated function RestoreFreeHandsOccluder()
     OriginalFreeHandsOccluderMesh.bComponentUseFixedSkelBounds = bOriginalFreeHandsFixedBounds;
     OriginalFreeHandsOccluderMesh.bUseBoundsFromParentAnimComponent = bOriginalFreeHandsParentBounds;
     OriginalFreeHandsBoundsAsset = None;
-    if (OriginalFreeHandsOccluderMesh.bUseAsOccluder != bOriginalFreeHandsOccluder)
+    if (OriginalFreeHandsOccluderMesh.bUseAsOccluder != bOriginalFreeHandsOccluder
+        || OriginalFreeHandsOccluderMesh.bPerBoneMotionBlur != bOriginalFreeHandsBoneMotion)
     {
         OriginalFreeHandsOccluderMesh.bUseAsOccluder = bOriginalFreeHandsOccluder;
+        OriginalFreeHandsOccluderMesh.bPerBoneMotionBlur = bOriginalFreeHandsBoneMotion;
         if (OriginalFreeHandsOccluderMesh.bAttached && OriginalFreeHandsOccluderMesh.Owner != None)
             OriginalFreeHandsOccluderMesh.ForceUpdate(false);
     }
@@ -5284,6 +5732,7 @@ simulated function UpdateHands()
     {
         if (Trigger)
         {
+            class'VRFlamePresentation'.static.Wake(self, W);
             if (W.IsA('KFWeap_Healer_Syringe') && VSize(Hands[I].Position - (HeadPosition - vect(0,0,35))) < 32)
                 W.StartFire(1);
             else if (WeaponProfiles[ActiveProfile].bGripAltFire && Hands[I].bGrip && Hands[I].bGripArmed)
@@ -5315,6 +5764,48 @@ simulated function UpdateHands()
 // weapon or Zed involved, Value an action-specific number (rounds added,
 // release speed in UU/s). tools/multiplayer/promo_shots.py reads them.
 simulated final function NativePromoAction(byte Action, Object Subject, int Value) {}
+
+// Melee spec G9: the authority reports a blocked or parried hit. The stock
+// sound and particle for this weapon and damage type play where the hit met
+// the guard, the weapon is shoved, the perk hears of it and the hands pulse.
+simulated function PlayGuardEffect(KFWeapon W, byte BlockType, bool bParried, vector From, int Damage)
+{
+    local VRHandsBridge Root;
+    local VRWeaponRuntime R;
+    local VRPhysicalMelee M;
+    local KFWeap_MeleeBase Melee;
+    local KFWeap_SMG_G18 Shield;
+    local AkBaseSoundObject Sound;
+    local ParticleSystem Template;
+    local KFPerk Perk;
+    Root = RootBridge != None ? RootBridge : self;
+    if (W == None || W.bDeleteMe) return;
+    Melee = KFWeap_MeleeBase(W);
+    Shield = KFWeap_SMG_G18(W);
+    if (Melee != None)
+    {
+        if (bParried) Melee.GetParryEffects(BlockType, Sound, Template);
+        else Melee.GetBlockEffects(BlockType, Sound, Template);
+        if (Root.HeldInventory != None) R = Root.HeldInventory.FindItem(W);
+        if (R != None && R.Presenter != None) M = R.Presenter.PhysicalMelee;
+        else if (W == Root.ActiveWeapon) M = Root.PhysicalMelee;
+        if (M != None && M.Weapon == W) M.GuardImpact(From, bParried, Damage, Sound, Template);
+        else Melee.PlayLocalBlockEffects(Sound, Template);
+    }
+    else if (Shield != None)
+    {
+        Shield.GetBlockEffects(BlockType, Sound, Template);
+        Shield.PlayLocalBlockEffects(Sound, Template);
+    }
+    else return;
+    Perk = Root.PC != None ? Root.PC.GetPerk() : None;
+    if (Perk != None)
+    {
+        if (bParried) Perk.SetSuccessfullParry();
+        else Perk.SetSuccessfullBlock();
+    }
+    Root.NotifyMeleeDefense(W, bParried ? 1 : 0);
+}
 
 simulated function NotifyMeleeDefense(KFWeapon W, int Parried)
 {
@@ -5390,7 +5881,59 @@ simulated function SelectNextItem()
 
 defaultproperties
 {
+    RiotShieldGuardHalf=12743
+    // Stock knife twirl, Guncheck_v3 at 29.22 fps (tools/re/melee_flip_candidates.py):
+    // frames 33-39 turning in, 39-46 turning back, degrees from Idle.
+    ReverseFrameTime=0.0342
+    ReverseInDegrees(0)=0
+    ReverseInDegrees(1)=14.2
+    ReverseInDegrees(2)=40.7
+    ReverseInDegrees(3)=76.3
+    ReverseInDegrees(4)=107.8
+    ReverseInDegrees(5)=139.3
+    ReverseInDegrees(6)=180
+    ReverseOutDegrees(0)=180
+    ReverseOutDegrees(1)=222.5
+    ReverseOutDegrees(2)=263
+    ReverseOutDegrees(3)=296.4
+    ReverseOutDegrees(4)=322.7
+    ReverseOutDegrees(5)=338.9
+    ReverseOutDegrees(6)=349
+    ReverseOutDegrees(7)=360
+    KnifeReverseAxis=(X=0.08,Y=1,Z=-0.02)
+    KnifeReversePivot=(X=-0.3,Y=0,Z=2.0)
+    KatanaReverseAxis=(X=0,Y=-1,Z=0)
+    // Stock Katana wipe (Clean_NoBlood at 31.2 fps, frames 0-10, 0 to 91
+    // degrees) stretched to 180; it turns back the way it came.
+    KatanaFrameTime=0.0321
+    KatanaInDegrees(0)=0
+    KatanaInDegrees(1)=13.8
+    KatanaInDegrees(2)=29.7
+    KatanaInDegrees(3)=53.4
+    KatanaInDegrees(4)=73.2
+    KatanaInDegrees(5)=94.9
+    KatanaInDegrees(6)=120.7
+    KatanaInDegrees(7)=152.3
+    KatanaInDegrees(8)=168.1
+    KatanaInDegrees(9)=178
+    KatanaInDegrees(10)=180
+    KatanaOutDegrees(0)=180
+    KatanaOutDegrees(1)=178
+    KatanaOutDegrees(2)=168.1
+    KatanaOutDegrees(3)=152.3
+    KatanaOutDegrees(4)=120.7
+    KatanaOutDegrees(5)=94.9
+    KatanaOutDegrees(6)=73.2
+    KatanaOutDegrees(7)=53.4
+    KatanaOutDegrees(8)=29.7
+    KatanaOutDegrees(9)=13.8
+    KatanaOutDegrees(10)=0
+    KnifeTwirlClip=Guncheck_v3
+    AttachedFingerFrame(0)=-1
+    AttachedFingerFrame(1)=-1
     bExperimentalInteractions=false
+    bExperimentalFeatures=false
+    bLivingArmLoss=false
     bSupportHandCarry=true
     bRealisticAmmo=false
     bKeepChamberedRound=false
@@ -5452,7 +5995,7 @@ defaultproperties
     WeaponProfiles(9)=(WeaponClassName=KFWeap_Flame_CaulkBurn,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true)
     WeaponProfiles(10)=(WeaponClassName=KFWeap_Rifle_Winchester1894,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true)
     WeaponProfiles(11)=(WeaponClassName=KFWeap_SMG_MP7,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_ForeGrip,MuzzleSocket=MuzzleFlash,bFirearm=true,bGripAltFire=true,AlternateKind=1,PrimaryModeLabel="AUTO",AlternateModeLabel="SEMI")
-    WeaponProfiles(12)=(WeaponClassName=KFWeap_Blunt_Crovel,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=9.3,Y=0.1,Z=34.4),MeleeHeadEnd=(X=-9.3,Y=0.1,Z=34.4),MeleeRadius=6.9)
+    WeaponProfiles(12)=(WeaponClassName=KFWeap_Blunt_Crovel,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=1.1,Y=0.2,Z=20.3),MeleeHeadEnd=(X=-1.1,Y=-0.4,Z=45.9),MeleeRadius=8.2)
     WeaponProfiles(13)=(WeaponClassName=KFWeap_Revolver_Rem1858,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true,bOneHanded=true,bPistolBrace=true,bUseSharedPistolBrace=true)
     WeaponProfiles(14)=(WeaponClassName=KFWeap_Pistol_Deagle,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true,bOneHanded=true,bPistolBrace=true)
     WeaponProfiles(15)=(WeaponClassName=KFWeap_GrenadeLauncher_M79,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Barrel,MuzzleSocket=MuzzleFlash,bFirearm=true,bLaserUsesBoreRotation=true)
@@ -5464,7 +6007,7 @@ defaultproperties
     WeaponProfiles(21)=(WeaponClassName=KFWeap_Flame_Flamethrower,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true)
     WeaponProfiles(22)=(WeaponClassName=KFWeap_Rifle_M14EBR,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,LaserSocket=LaserSight,bFirearm=true)
     WeaponProfiles(23)=(WeaponClassName=KFWeap_Pistol_AF2011,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true,bOneHanded=true,bPistolBrace=true)
-    WeaponProfiles(24)=(WeaponClassName=KFWeap_Blunt_Pulverizer,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_PumpActionHandle,MuzzleSocket=MuzzleFlash,bPhysicalMelee=true,MeleeHeadStart=(X=-13,Y=0,Z=39.5),MeleeHeadEnd=(X=7,Y=0,Z=39.5),MeleeRadius=7)
+    WeaponProfiles(24)=(WeaponClassName=KFWeap_Blunt_Pulverizer,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_PumpActionHandle,MuzzleSocket=MuzzleFlash,bPhysicalMelee=true,MeleeHeadStart=(X=-20.6,Y=-0.2,Z=38.8),MeleeHeadEnd=(X=11.5,Y=-0.4,Z=39.1),MeleeRadius=4.6)
     WeaponProfiles(25)=(WeaponClassName=KFWeap_Pistol_Flare,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true,bOneHanded=true,bPistolBrace=true,bUseSharedPistolBrace=true)
     WeaponProfiles(26)=(WeaponClassName=KFWeap_Pistol_HRGWinterbite,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true,bOneHanded=true,bPistolBrace=true,bUseSharedPistolBrace=true)
     WeaponProfiles(27)=(WeaponClassName=KFWeap_Pistol_G18C,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true,bOneHanded=true,bPistolBrace=true,AlternateKind=1,PrimaryModeLabel="AUTO",AlternateModeLabel="SEMI")
@@ -5476,7 +6019,7 @@ defaultproperties
     // (BASH_FIREMODE); the trigger keeps firing sawblades. Capsule from
     // tools/re/measure_melee_head.py bladedpistol.
     WeaponProfiles(32)=(WeaponClassName=KFWeap_Pistol_Bladed,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true,bOneHanded=true,bPistolBrace=true,bPhysicalMelee=true,MeleeHeadStart=(X=26.4,Y=0.5,Z=6.3),MeleeHeadEnd=(X=49,Y=-0.7,Z=6.6),MeleeRadius=5.1)
-    WeaponProfiles(33)=(WeaponClassName=KFWeap_Pistol_Blunderbuss,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true,bOneHanded=true,bPistolBrace=true,AlternateKind=2)
+    WeaponProfiles(33)=(WeaponClassName=KFWeap_Pistol_Blunderbuss,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true,bOneHanded=true,bPistolBrace=true,AlternateKind=2,bForegripSupport=true)
     WeaponProfiles(34)=(WeaponClassName=KFWeap_Pistol_HRGScorcher,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true,bOneHanded=true,bPistolBrace=true,AlternateKind=2)
     WeaponProfiles(35)=(WeaponClassName=KFWeap_Shotgun_HRG_Kaboomstick,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Barrel,MuzzleSocket=MuzzleFlashLeft,SecondaryMuzzleSocket=MuzzleFlashRight,bFirearm=true,AlternateKind=2)
     WeaponProfiles(36)=(WeaponClassName=KFWeap_AssaultRifle_FNFal,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,MuzzleSocket=MuzzleFlash,bFirearm=true,AlternateKind=1,PrimaryModeLabel="AUTO",AlternateModeLabel="SEMI")
@@ -5566,28 +6109,28 @@ defaultproperties
     // (shield on the off arm) are one-handed; all perk knives share the Commando knife anims.
     // Offline Idle measurement: left wrist is 16.6 units lower than the right
     // below the Krampus Axe head. Seat the primary hand at that lower butt grip.
-    WeaponProfiles(104)=(WeaponClassName=KFWeap_Edged_AbominationAxe,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,bPhysicalLowerHandlePrimary=true,MeleeHeadStart=(X=33.5,Y=-0.7,Z=55),MeleeHeadEnd=(X=-29.6,Y=-0.1,Z=64),MeleeRadius=11.4)
-    WeaponProfiles(105)=(WeaponClassName=KFWeap_Edged_Scythe,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=1.8,Y=0,Z=69.2),MeleeHeadEnd=(X=-59,Y=0,Z=70.9),MeleeRadius=5)
+    WeaponProfiles(104)=(WeaponClassName=KFWeap_Edged_AbominationAxe,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,bPhysicalLowerHandlePrimary=true,MeleeHeadStart=(X=-30,Y=0.4,Z=51.4),MeleeHeadEnd=(X=33.6,Y=0.3,Z=51.4),MeleeRadius=12)
+    WeaponProfiles(105)=(WeaponClassName=KFWeap_Edged_Scythe,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=-43.9,Y=0,Z=36),MeleeHeadEnd=(X=-6.8,Y=0,Z=-40.5),MeleeRadius=8.6)
     // Fire Axe Idle puts the left wrist at Z=-33.3 and right at Z=11.4 while
     // the head is Z=40-42. Its lower left butt grip is the physical primary.
-    WeaponProfiles(106)=(WeaponClassName=KFWeap_Edged_FireAxe,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,bPhysicalLowerHandlePrimary=true,MeleeHeadStart=(X=-14.1,Y=0,Z=42),MeleeHeadEnd=(X=14.4,Y=0,Z=40),MeleeRadius=5.3)
-    WeaponProfiles(107)=(WeaponClassName=KFWeap_Blunt_MedicBat,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=1.2,Y=0,Z=37),MeleeHeadEnd=(X=-1.1,Y=0,Z=65.8),MeleeRadius=5.9)
-    WeaponProfiles(108)=(WeaponClassName=KFWeap_Edged_IonThruster,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=0.1,Y=0,Z=86.8),MeleeHeadEnd=(X=-0.1,Y=0,Z=123),MeleeRadius=3)
-    WeaponProfiles(109)=(WeaponClassName=KFWeap_Edged_Katana,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=0,Y=4.9,Z=51),MeleeHeadEnd=(X=0,Y=14.7,Z=90),MeleeRadius=3)
-    WeaponProfiles(110)=(WeaponClassName=KFWeap_Blunt_ChainBat,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=-0.1,Y=0.8,Z=45.5),MeleeHeadEnd=(X=0,Y=-0.5,Z=82.5),MeleeRadius=6)
-    WeaponProfiles(111)=(WeaponClassName=KFWeap_Edged_Zweihander,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=0.1,Y=0,Z=72.1),MeleeHeadEnd=(X=-0.1,Y=0,Z=130.8),MeleeRadius=3)
-    WeaponProfiles(112)=(WeaponClassName=KFWeap_Blunt_PowerGloves,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,bPhysicalDualGauntlets=true,MeleeHeadStart=(X=21.9,Y=11.8,Z=-5.1),MeleeHeadEnd=(X=23.2,Y=-7.9,Z=9.7),MeleeRadius=7.1)
-    WeaponProfiles(113)=(WeaponClassName=KFWeap_Blunt_MaceAndShield,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=0,Y=0,Z=48.6),MeleeHeadEnd=(X=0,Y=0,Z=85.8),MeleeRadius=7.4)
-    WeaponProfiles(114)=(WeaponClassName=KFWeap_Knife_Commando,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=-1,Y=0,Z=15),MeleeHeadEnd=(X=0.9,Y=0,Z=27.2),MeleeRadius=3)
-    WeaponProfiles(115)=(WeaponClassName=KFWeap_Knife_Gunslinger,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=-0.6,Y=0,Z=19.7),MeleeHeadEnd=(X=0.9,Y=0,Z=30.3),MeleeRadius=3)
-    WeaponProfiles(116)=(WeaponClassName=KFWeap_Knife_Firebug,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=2.1,Y=0,Z=10.6),MeleeHeadEnd=(X=6.7,Y=0,Z=17.9),MeleeRadius=3)
-    WeaponProfiles(117)=(WeaponClassName=KFWeap_Knife_Survivalist,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=-2.4,Y=0,Z=17.4),MeleeHeadEnd=(X=2.4,Y=0,Z=26.3),MeleeRadius=3)
-    WeaponProfiles(118)=(WeaponClassName=KFWeap_Knife_Sharpshooter,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=-1.8,Y=0,Z=23.3),MeleeHeadEnd=(X=6.9,Y=0,Z=40.3),MeleeRadius=3)
-    WeaponProfiles(119)=(WeaponClassName=KFWeap_Knife_Berserker,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=1.1,Y=0,Z=16.9),MeleeHeadEnd=(X=-1.5,Y=0,Z=29.5),MeleeRadius=3)
-    WeaponProfiles(120)=(WeaponClassName=KFWeap_Knife_Support,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=-1.3,Y=0,Z=16.1),MeleeHeadEnd=(X=-1,Y=0,Z=29.1),MeleeRadius=3)
-    WeaponProfiles(121)=(WeaponClassName=KFWeap_Knife_FieldMedic,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=0.3,Y=0,Z=14),MeleeHeadEnd=(X=0,Y=0,Z=22.5),MeleeRadius=3)
-    WeaponProfiles(122)=(WeaponClassName=KFWeap_Knife_SWAT,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=-1.2,Y=0.1,Z=11),MeleeHeadEnd=(X=-0.6,Y=0.1,Z=20),MeleeRadius=3)
-    WeaponProfiles(123)=(WeaponClassName=KFWeap_Knife_Demolitionist,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=0,Y=0,Z=16.2),MeleeHeadEnd=(X=2.1,Y=0,Z=29.4),MeleeRadius=3)
+    WeaponProfiles(106)=(WeaponClassName=KFWeap_Edged_FireAxe,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,bPhysicalLowerHandlePrimary=true,MeleeHeadStart=(X=-14.2,Y=0,Z=40.7),MeleeHeadEnd=(X=14.5,Y=0,Z=40.7),MeleeRadius=5.1)
+    WeaponProfiles(107)=(WeaponClassName=KFWeap_Blunt_MedicBat,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=-1.5,Y=0,Z=25.9),MeleeHeadEnd=(X=-0.5,Y=0,Z=54.1),MeleeRadius=5.4)
+    WeaponProfiles(108)=(WeaponClassName=KFWeap_Edged_IonThruster,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=0,Y=0,Z=33.5),MeleeHeadEnd=(X=-0.8,Y=0,Z=123),MeleeRadius=1.5)
+    WeaponProfiles(109)=(WeaponClassName=KFWeap_Edged_Katana,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=0,Y=-0.6,Z=10.5),MeleeHeadEnd=(X=0,Y=-15.4,Z=89.5),MeleeRadius=4.5)
+    WeaponProfiles(110)=(WeaponClassName=KFWeap_Blunt_ChainBat,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=-0.1,Y=-0.7,Z=48.8),MeleeHeadEnd=(X=0,Y=0.5,Z=81.2),MeleeRadius=5.8)
+    WeaponProfiles(111)=(WeaponClassName=KFWeap_Edged_Zweihander,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bPhysicalMelee=true,MeleeHeadStart=(X=-0.2,Y=0,Z=38.5),MeleeHeadEnd=(X=0,Y=0,Z=130.5),MeleeRadius=2.9)
+    WeaponProfiles(112)=(WeaponClassName=KFWeap_Blunt_PowerGloves,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,bPhysicalDualGauntlets=true,MeleeHeadStart=(X=25,Y=-8.3,Z=3.4),MeleeHeadEnd=(X=25,Y=8.3,Z=3.4),MeleeRadius=5.7)
+    WeaponProfiles(113)=(WeaponClassName=KFWeap_Blunt_MaceAndShield,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=0,Y=-0.3,Z=63.3),MeleeHeadEnd=(X=0,Y=0.3,Z=82),MeleeRadius=7)
+    WeaponProfiles(114)=(WeaponClassName=KFWeap_Knife_Commando,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=-0.2,Y=0,Z=7.5),MeleeHeadEnd=(X=0.1,Y=0,Z=27.1),MeleeRadius=2.5)
+    WeaponProfiles(115)=(WeaponClassName=KFWeap_Knife_Gunslinger,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=-0.3,Y=0,Z=6),MeleeHeadEnd=(X=-0.7,Y=0,Z=30.5),MeleeRadius=3.6)
+    WeaponProfiles(116)=(WeaponClassName=KFWeap_Knife_Firebug,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=0.7,Y=0,Z=8),MeleeHeadEnd=(X=6.4,Y=0,Z=17),MeleeRadius=3)
+    WeaponProfiles(117)=(WeaponClassName=KFWeap_Knife_Survivalist,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=0.5,Y=0,Z=9),MeleeHeadEnd=(X=2.5,Y=0,Z=26.1),MeleeRadius=3.6)
+    WeaponProfiles(118)=(WeaponClassName=KFWeap_Knife_Sharpshooter,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=1.1,Y=0,Z=6),MeleeHeadEnd=(X=6.3,Y=0,Z=40.5),MeleeRadius=5)
+    WeaponProfiles(119)=(WeaponClassName=KFWeap_Knife_Berserker,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=0.1,Y=0,Z=7),MeleeHeadEnd=(X=-2,Y=0,Z=29),MeleeRadius=3.7)
+    WeaponProfiles(120)=(WeaponClassName=KFWeap_Knife_Support,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=-0.3,Y=0,Z=10),MeleeHeadEnd=(X=-1.4,Y=0,Z=29),MeleeRadius=3.3)
+    WeaponProfiles(121)=(WeaponClassName=KFWeap_Knife_FieldMedic,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=-0.2,Y=-0.1,Z=10),MeleeHeadEnd=(X=-0.3,Y=0,Z=22.1),MeleeRadius=1.5)
+    WeaponProfiles(122)=(WeaponClassName=KFWeap_Knife_SWAT,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=0.3,Y=-0.1,Z=5.5),MeleeHeadEnd=(X=-1,Y=-0.1,Z=20),MeleeRadius=2.8)
+    WeaponProfiles(123)=(WeaponClassName=KFWeap_Knife_Demolitionist,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,MeleeHeadStart=(X=-1,Y=-0.2,Z=10.5),MeleeHeadEnd=(X=2,Y=0,Z=29),MeleeRadius=2.7)
     // Deployables: squeeze, swing and release the trigger to throw from the hand (VRDeployableHold); X/A + trigger detonates (SecondaryFireMode 5).
     WeaponProfiles(124)=(WeaponClassName=KFWeap_Thrown_C4,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,AlternateKind=2)
     WeaponProfiles(125)=(WeaponClassName=KFWeap_HRG_Warthog,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,AlternateKind=2)
@@ -5606,7 +6149,7 @@ defaultproperties
     WeaponProfiles(132)=(WeaponClassName=BreacherRipcord,RootBone=RC_Root,IdleAnimation=Idle,bFirearm=true,bOneHanded=true,bWristEquipment=true)
     // HRG Blast Brawlers: button-driven stock melee (as Crovel). The stock
     // attack fires the shotgun blast and spends a shell; empty trigger reloads.
-    WeaponProfiles(48)=(WeaponClassName=KFWeap_HRG_BlastBrawlers,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,bPhysicalDualGauntlets=true,MeleeHeadStart=(X=23.1,Y=13,Z=-4.1),MeleeHeadEnd=(X=28.1,Y=-8.7,Z=9.1),MeleeRadius=7.6)
+    WeaponProfiles(48)=(WeaponClassName=KFWeap_HRG_BlastBrawlers,RootBone=RW_Weapon,IdleAnimation=Idle,SupportBone=RW_Weapon,bOneHanded=true,bPhysicalMelee=true,bPhysicalDualGauntlets=true,MeleeHeadStart=(X=29.6,Y=-9.5,Z=4.3),MeleeHeadEnd=(X=29.6,Y=9.4,Z=4.6),MeleeRadius=5.5)
     // Frost Fang: physical blade swings (stock bash damage/freeze); the trigger
     // keeps the stock shotgun. bFirearm prevents physical-melee input from
     // suppressing that shot; bPhysicalMelee retains the blade and guard.
@@ -5640,17 +6183,21 @@ defaultproperties
     UseBindIndex=-1
     FloatingHandsMesh=SkeletalMesh'KF2VRHands.VRFloatingHands'
     FloatingHandsMaterial=MaterialInstanceConstant'CHR_1P_Arms_MAT.CHR_Master_1stP_Arms_MIC'
-    RubPeriod=1.0
+    RubPeriod=2.0
     RubIntensity=0.8
-    RubMinSpeed=12.5
-    RubMaxSpeed=150
+    RubMinSpeed=25
+    RubMaxSpeed=300
     GhostMinGap=1.5
     GhostMinAngle=6
     GhostFadeRate=12
     GhostVisibility=0.35
     SupportSlideRate=20
+    PrimarySlideStill=35
+    PrimarySlideMove=25
+    SlideSnap=4
     SupportSlideMinGap=10
     SupportSlideHeadGap=4
+    ScytheSlideFar=55
     Hands(0)=(SupportOwner=-1)
     Hands(1)=(SupportOwner=-1)
     TickGroup=TG_PreAsyncWork

@@ -37,6 +37,7 @@ function CorrectInsert(VRInteractiveReload O)
     local quat Q, BarrelQ, SeatQ, EndQ;
     local array<vector> Positions;
     local array<quat> Rotations;
+    local bool bHandful;
     if (!Supports(O.Gun) || O.CylinderInsertFrame != 'RW_Barrel'
         || O.RefMesh == None || O.InsertPath.Length != 17) return;
     Seq = AnimNodeSequence(O.RefMesh.FindAnimNode('VRReloadReference'));
@@ -53,7 +54,20 @@ function CorrectInsert(VRInteractiveReload O)
     if (Seq.AnimSeq == None) { O.Bridge.DetachComponent(O.RefMesh); return; }
     EndTime = Seq.AnimSeq.SequenceLength;
     BestTime = O.InsertEndTime; BestScore = 100000;
-    for (I = 0; I <= 128; ++I)
+    // The Doomstick's elite handful (R58) is pushed in as a row, locked, then
+    // swapped onto the four chamber bones in one frame. Searching on past the
+    // lock would run the path through that swap; end at the lock and blend
+    // the last samples onto the chamber instead.
+    bHandful = IsHandful(O);
+    if (bHandful)
+    {
+        O.PoseRef(Seq, BestTime);
+        O.RefRelative('RW_Barrel', Barrel, BarrelQ);
+        O.RefRelative(O.SpareBone, P, Q);
+        BestScore = VSize(QuatRotateVector(QuatInvert(BarrelQ), P - Barrel) - Seat);
+        if (BestScore > 15) { O.Bridge.DetachComponent(O.RefMesh); return; }
+    }
+    for (I = 0; I <= 128 && !bHandful; ++I)
     {
         T = O.InsertEndTime + (EndTime - O.InsertEndTime) * float(I) / 128;
         O.PoseRef(Seq, T);
@@ -66,7 +80,7 @@ function CorrectInsert(VRInteractiveReload O)
         if (Score < BestScore) { BestScore = Score; BestTime = T; }
         if (VSize(P - Seat) <= 0.75 && Match >= 0.999) break;
     }
-    if (BestScore > 8) { O.Bridge.DetachComponent(O.RefMesh); return; }
+    if (!bHandful && BestScore > 8) { O.Bridge.DetachComponent(O.RefMesh); return; }
     for (I = 0; I <= 16; ++I)
     {
         O.PoseRef(Seq, O.InsertTime + (BestTime - O.InsertTime) * float(I) / 16);
@@ -90,6 +104,13 @@ function CorrectInsert(VRInteractiveReload O)
     O.InsertEndTime = BestTime;
     O.EntryLocal = Positions[0]; O.EntryLocalQ = Rotations[0];
     O.SeatLocal = Seat; O.SeatLocalQ = SeatQ;
+}
+
+// R58: the Doomstick carries its elite clip's four-shell handful.
+static function bool IsHandful(VRInteractiveReload O)
+{
+    return O != None && O.Gun != None && O.Gun.Class == class'KFWeap_Shotgun_ElephantGun'
+        && InStr(Caps(string(O.InsertAnim)), "ELITE") >= 0;
 }
 
 function Hide()
@@ -149,7 +170,9 @@ function Begin(VRInteractiveReload O)
     local int I, J, First;
     local float T;
     local vector Anchor, P, Barrel, Seat[4];
-    local quat AnchorQ, Q, BarrelQ;
+    local quat AnchorQ, Q, BarrelQ, SeatQ[4];
+    local float Blend;
+    local bool bHandful;
     Clear(); Owner = O;
     if (!Supports(O.Gun) || O.BreakAction.Gun != O.Gun || !O.bInsertSampled || !O.EnsureRefMesh()) return;
     First = O.BreakAction.SeatedShells;
@@ -166,6 +189,7 @@ function Begin(VRInteractiveReload O)
     {
         O.RefRelative(O.BreakAction.ShellBone(First + J), P, Q);
         Seat[J] = QuatRotateVector(QuatInvert(BarrelQ), P - Barrel);
+        SeatQ[J] = QuatProduct(QuatInvert(BarrelQ), Q);
     }
     Seq.SetAnim(O.InsertAnim);
     O.PoseRef(Seq, O.InsertEndTime);
@@ -177,7 +201,8 @@ function Begin(VRInteractiveReload O)
         if (VSize(QuatRotateVector(QuatInvert(BarrelQ), P - Barrel) - Seat[J]) > 0.75) break;
         ++SeatCount;
     }
-    // Ordinary Doomstick and Dragon's Blaze loading use two separate pairs. Carry only the
+    // The Dragon's Blaze's ordinary loading uses two separate pairs (the
+    // Doomstick samples its elite four-shell handful, R58). Carry only the
     // group that this gesture can seat, rather than showing a phantom second
     // pair whose bones are already waiting at another point in the clip.
     // Endpoint coincidence cannot establish group membership: after the
@@ -185,6 +210,11 @@ function Begin(VRInteractiveReload O)
     if ((O.Gun.Class == class'KFWeap_Shotgun_ElephantGun'
         || O.Gun.Class == class'KFWeap_HRG_Dragonbreath')
         && InStr(Caps(string(O.InsertAnim)), "ELITE") < 0) SeatCount = Min(SeatCount, 2);
+    // R58: the whole handful seats at once. Its row only meets the chamber
+    // layout after the stock swap, so the end frames blend each partner onto
+    // its own chamber, relative to the lead shell's seat.
+    bHandful = IsHandful(O);
+    if (bHandful) SeatCount = Count;
     Count = SeatCount;
     // Frame zero is the actual carry grip. The remaining frames follow the
     // same insertion interval as the leading shell and drawn loading hand.
@@ -198,6 +228,14 @@ function Begin(VRInteractiveReload O)
             O.RefRelative(O.BreakAction.ShellBone(First + J), P, Q);
             Frame.Position[J] = QuatRotateVector(QuatInvert(AnchorQ), P - Anchor);
             Frame.Rotation[J] = QuatProduct(QuatInvert(AnchorQ), Q);
+            if (bHandful && I >= 14)
+            {
+                Blend = class'VRReloadHandPose'.static.Smooth(float(I - 13) / 4);
+                Frame.Position[J] = Frame.Position[J] * (1 - Blend)
+                    + QuatRotateVector(QuatInvert(SeatQ[0]), Seat[J] - Seat[0]) * Blend;
+                Frame.Rotation[J] = QuatSlerp(Frame.Rotation[J],
+                    QuatProduct(QuatInvert(SeatQ[0]), SeatQ[J]), Blend, true);
+            }
         }
         Frames.AddItem(Frame);
     }

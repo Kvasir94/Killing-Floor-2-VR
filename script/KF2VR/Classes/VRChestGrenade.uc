@@ -22,6 +22,8 @@ var VRThrowRelease Thrower;
 var int NearChestMask;
 var float NearSince[2];
 var rotator Torso;
+// Body yaw at the last held sample: a snap turn shows as a jump here (R69).
+var int LastTorsoYaw;
 var float LastTime;
 // The preview releases immediately; only the matching authority refusal cues later.
 var int ReleaseRequest, ReleaseHand, ReleaseCalibration, ReleaseRoomSpace;
@@ -368,7 +370,7 @@ function bool TakeGrenade(int Hand)
     RefreshGripPose();
     CaptureEpoch = Bridge.NativeCalibrationEpoch;
     LastPosition = Bridge.PalmPosition(Hand); LastPawnPosition = Bridge.Human.Location;
-    LastTime = Bridge.WorldInfo.RealTimeSeconds; Samples = 0; ThrowVelocity = vect(0,0,0);
+    LastTime = Bridge.WorldInfo.RealTimeSeconds; Samples = 0; ThrowVelocity = vect(0,0,0); LastTorsoYaw = Bridge.BodyYaw().Yaw;
     if (Thrower == None)
     {
         Thrower = new(self) class'VRThrowRelease';
@@ -688,10 +690,23 @@ function Update(float Delta)
     UpdateChestProximity();
     if (HoldingHand < 0) return;
     Now = Bridge.WorldInfo.RealTimeSeconds; Elapsed = Now - LastTime;
-    if (!HeldContextValid() || Elapsed < 0 || Elapsed > 0.1)
+    if (!HeldContextValid() || Elapsed < 0)
     { CancelHand(HoldingHand); return; }
     if (Elapsed <= 0) return;
     Position = Bridge.PalmPosition(HoldingHand);
+    // R69: a long frame or a snap turn keeps the grenade in the hand. The
+    // throw history restarts from this sample, so the gap cannot launch it;
+    // a release before three fresh samples puts it back, as a short grab does.
+    if (Elapsed > 0.1 || Abs(NormalizeRotAxis(Torso.Yaw - LastTorsoYaw)) > 1820)
+    {
+        ThrowVelocity = vect(0,0,0); Samples = 0;
+        if (Thrower != None) Thrower.Reset(HoldingHand);
+        LastPosition = Position; LastPawnPosition = Bridge.Human.Location; LastTime = Now;
+        LastTorsoYaw = Torso.Yaw;
+        PlaceHeldPreview(HoldingHand);
+        if (InputOwner.GripReleased(HoldingHand)) CancelHand(HoldingHand);
+        return;
+    }
     // Positions and RealTimeSeconds are sampled together. Pawn.Velocity is
     // game-time based and cannot cancel locomotion during Zed Time/Focus.
     Velocity = (Position - LastPosition - (Bridge.Human.Location - LastPawnPosition)) / Elapsed;
@@ -702,6 +717,7 @@ function Update(float Delta)
     ThrowVelocity = Velocity * 0.65 + ThrowVelocity * 0.35;
     if (Thrower != None) Thrower.Add(HoldingHand, Velocity, Now);
     LastPosition = Position; LastPawnPosition = Bridge.Human.Location; LastTime = Now; ++Samples;
+    LastTorsoYaw = Torso.Yaw;
     PlaceHeldPreview(HoldingHand);
     if (InputOwner.GripReleased(HoldingHand))
     {

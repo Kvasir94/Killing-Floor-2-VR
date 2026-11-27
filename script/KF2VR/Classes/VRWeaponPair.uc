@@ -839,10 +839,17 @@ function bool Ready()
     if (WorldInfo.NetMode == NM_DedicatedServer || bPreparedWorldMerge)
         return Members[0] != None && Members[1] != None && Members[0].MagazineCapacity[0] > 0
             && Members[1].MagazineCapacity[0] > 0;
+    // Ask for any missing first-person content rather than waiting on a load
+    // nobody started (#221): a dual waiting here is refused by later draws.
+    if (!StockItem.WeaponContentLoaded) StockItem.Class.static.TriggerAsyncContentLoad(StockItem.Class);
     if (!StockItem.WeaponContentLoaded || StockItem.MySkelMesh == None) return false;
     for (I = 0; I < 2; ++I)
+    {
+        if (Members[I] != None && !Members[I].bDeleteMe && !Members[I].WeaponContentLoaded)
+            Members[I].Class.static.TriggerAsyncContentLoad(Members[I].Class);
         if (Members[I] == None || Members[I].bDeleteMe || !Members[I].WeaponContentLoaded
             || Members[I].MySkelMesh == None) return false;
+    }
     return true;
 }
 

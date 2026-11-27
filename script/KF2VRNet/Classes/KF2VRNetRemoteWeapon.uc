@@ -16,6 +16,8 @@ var private KF2VRNetPumpVisual PumpVisual;
 var private bool bPhysicalPlayback;
 var bool bFirstPersonMesh;
 var int SharedProfile;
+// Melee spec M26: the Scythe mode shown (0 not yet, 1 folded, 2 unfolded).
+var private byte ShownScytheMode;
 
 simulated function ReleaseAttachment()
 {
@@ -23,6 +25,7 @@ simulated function ReleaseAttachment()
     bPresentationReady = false;
     bPhysicalPlayback = false;
     bFirstPersonMesh = false;
+    ShownScytheMode = 0;
     if (PumpVisual != None) PumpVisual.Shutdown();
     PumpVisual = None;
     if (Attachment != None)
@@ -145,6 +148,41 @@ simulated function UpdateActions(NetWeaponVisual Visual, bool bFreshBinding, boo
     Previous = Visual;
 }
 
+// Melee spec M26: a remote Scythe shows its owner's fold, read from the
+// pawn's stock WeaponSpecialAction (0 folded, 1 unfolded), which the server
+// sets when the owner folds it; a change after the first sounds as stock's.
+simulated function ShowScytheFold()
+{
+    local KFPawn P;
+    local byte Mode;
+    P = PoseOwner != None ? PoseOwner.TargetPawn : None;
+    if (P == None || Attachment.WeapAnimNode == None) return;
+    Mode = P.WeaponSpecialAction == 1 ? 2 : 1;
+    if (Mode == ShownScytheMode) return;
+    Attachment.WeapAnimNode.SetAnim(Mode == 2 ? 'idle_unfolded' : 'idle_folded');
+    Attachment.WeapAnimNode.SetPosition(0, false);
+    if (ShownScytheMode != 0)
+        Attachment.PlaySoundBase(Mode == 2 ? class'VRScytheFold'.default.UnfoldSound : class'VRScytheFold'.default.FoldSound, true);
+    ShownScytheMode = Mode;
+}
+
+// The spawned attachment is not the pawn's own, so stock SetMeshLightingChannels
+// never reaches it, and the shared 1P mesh starts with no Indoor/Outdoor
+// channel at all. KF2's deferred light mask packs only those two, so the
+// remote gun rendered black. Follow the holder's pawn channel (#115).
+simulated function LightLikeOwner()
+{
+    local LightingChannelContainer Channels;
+    local MeshComponent M;
+    M = Attachment.WeapMesh;
+    if (PoseOwner != None && PoseOwner.TargetPawn != None && PoseOwner.TargetPawn.PawnLightingChannel.bInitialized)
+        Channels = PoseOwner.TargetPawn.PawnLightingChannel;
+    if (!Channels.Indoor && !Channels.Outdoor) { Channels.Indoor = true; Channels.Outdoor = true; }
+    Channels.Dynamic = true; Channels.bInitialized = true;
+    if (M.LightingChannels.Indoor != Channels.Indoor || M.LightingChannels.Outdoor != Channels.Outdoor
+        || !M.LightingChannels.Dynamic) M.SetLightingChannels(Channels);
+}
+
 simulated function bool UpdateVisual(NetWeaponVisual Visual, vector Muzzle, rotator Aim, bool bVisible, optional int PumpCode, optional array<NetMechanismPart> Mechanisms, optional bool bUseRoot)
 {
     local SkeletalMeshComponent Component;
@@ -173,6 +211,7 @@ simulated function bool UpdateVisual(NetWeaponVisual Visual, vector Muzzle, rota
         else if (AppliedSkin > 0) Attachment.SetWeaponSkin(AppliedSkin);
     }
     Attachment.WeapMesh.SetHidden(!bVisible);
+    LightLikeOwner();
     if (!bVisible)
     {
         if (PumpVisual != None) PumpVisual.Update(0, false);
@@ -188,6 +227,7 @@ simulated function bool UpdateVisual(NetWeaponVisual Visual, vector Muzzle, rota
             && (Mechanisms[I].Flags & 4) != 0) { bPhysical = true; break; }
     if (bMelee) Previous = Visual;
     else UpdateActions(Visual, bChanged, bPhysical);
+    if (bMelee && bFirstPersonMesh && Visual.WeaponClass == class'KFWeap_Edged_Scythe') ShowScytheFold();
     Attachment.WeapMesh.ForceSkelUpdate(); Attachment.WeapMesh.ForceUpdate(true);
     PresentationRootBone = 'RW_Weapon';
     if (bRootFrame)

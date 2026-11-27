@@ -94,5 +94,31 @@ int main() {
     r.Realtime(1,2,0,true); r.Realtime(1,2,1,false);
     Check(!r.BeginCase(1,2,2),"stopped readiness cannot be rescued by new case");
     Check(!Load(r,"invalid") && !r.BeginCase(1,2,1),"failed parse cannot begin a suite");
+    // Held carrier tape (scripted runners): the last sample repeats, earlier ones still advance.
+    Check(Load(r,Row(2,1,0)+Row(1,0,1)),"load held tape");
+    r.HoldLast(true);
+    for (unsigned i=0;i<2;++i) { f=r.Next(1,2); Check(f.handLeft.triggerAxis==1,"held tape plays its first row"); }
+    for (unsigned i=0;i<1000;++i) {
+        f=r.Next(1,2);
+        Check(f.actionsSynced && f.headPoseValid && f.handRight.triggerAxis==1 && f.handLeft.triggerAxis==0 && !r.Finished(),
+            "held tape repeats its last row past its length");
+    }
+    Check(f.poseSampleId==1002,"held tape keeps a monotonic sample identity");
+    f=r.Next(1,3); Check(!f.actionsSynced && r.Finished(),"pawn replacement still stops a held tape");
+    Check(Load(r,Row(1,0,1)),"load held real-time tape");
+    r.HoldLast(true);
+    r.Realtime(1,2,0,false);
+    for (unsigned i=0;i<500;++i) {
+        f=r.Realtime(1,2,1+i*.02,true);
+        Check(f.actionsSynced && f.handRight.triggerAxis==1 && !r.Finished(),"held real-time tape outlasts its one tick");
+    }
+    f=r.Realtime(1,2,20,false); Check(!f.actionsSynced && r.Finished(),"lost readiness still stops a held tape");
+    Check(Load(r,Row(1,0,1)),"load resets hold");
+    r.Next(1,2); f=r.Next(1,2); Check(!f.actionsSynced && r.Finished(),"an unheld tape still ends");
+    Check(Load(r,Row(1,0,1)+Row(1,1,0)) && r.BeginCase(1,2,1),"load held suite tape");
+    r.HoldLast(true);
+    for (unsigned i=0;i<10;++i) r.Next(1,2);
+    Check(r.BeginCase(1,2,2),"a held tape can start the next case");
+    f=r.Next(1,2); Check(f.handRight.triggerAxis==1,"next case rewinds a held tape");
     std::cout<<"ReplayInput sequence, availability, ownership, EOF, readiness, pacing and parser checks passed\n";
 }

@@ -298,7 +298,14 @@ function Update()
         Owner.Pulse(1 << OffHand(), 0.2, 0.02);
     }
     if (!Down) { bEngaged = false; Motion.Reset(); return; }
-    if (!Motion.Check(LocalHandPosition(), Owner.Now())) { CancelHand(OffHand()); return; }
+    if (!Motion.Check(LocalHandPosition(), Owner.Now()))
+    {
+        // R69: a frame gap or a jump keeps the grip; rebase it at the current
+        // amount so only travel after the gap moves the part.
+        if (!Motion.Begin(LocalHandPosition(), Owner.Now())) { CancelHand(OffHand()); return; }
+        Cycle.GrabOffset = P - Cycle.ContactLocal(Amount);
+        return;
+    }
     Next = Cycle.Project(P - Cycle.GrabOffset);
     if (VSize(P - Cycle.GrabOffset - Cycle.ContactLocal(Next)) * GunScale() > Radius * 4)
     { CancelHand(OffHand()); return; }
@@ -335,9 +342,12 @@ function UpdateDump()
     }
     Owner.PauseStock();
     Time = Owner.Now(); DT = Time - LastDumpTime; Q = RootQ();
-    Match = Abs(Q.X*LastDumpQ.X + Q.Y*LastDumpQ.Y + Q.Z*LastDumpQ.Z + Q.W*LastDumpQ.W);
+    // R69: measured as tilt only (about 20 degrees, as the old match), so a
+    // snap or smooth turn is not a discontinuity; a gap or a tilt jump still
+    // disarms, so no dump comes from a sample it cannot trust.
+    Match = class'VRReloadMotionGuard'.static.TiltStep(Q, LastDumpQ);
     if (!Owner.InputOwner.ContextValid() || (Bridge.NativeValidMask & (1 << GunHand)) == 0
-        || LastDumpTime <= 0 || DT <= 0 || DT > 0.1 || Match < 0.985)
+        || LastDumpTime <= 0 || DT <= 0 || DT > 0.1 || Match > 0.35)
         bDumpTiltArmed = false;
     else
     {

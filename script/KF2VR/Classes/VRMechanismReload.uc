@@ -345,7 +345,14 @@ function UpdateHand()
         return;
     }
     // Validate before interpreting either a release or a terminal stroke.
-    if (!Motion.Check(LocalPosition, Owner.Now())) { CancelHand(OffHand()); return; }
+    if (!Motion.Check(LocalPosition, Owner.Now()))
+    {
+        // R69: a frame gap or a jump keeps the grip; rebase it at the current
+        // amount so only travel after the gap moves the part.
+        if (!Motion.Begin(LocalPosition, Owner.Now())) { CancelHand(OffHand()); return; }
+        GrabOffset = LocalPosition / GunScale() - Path.ContactLocal(Amount);
+        return;
+    }
     if (!Grip) { bEngaged = false; Motion.Reset(); return; }
     Amount = Path.Project(LocalPosition / GunScale() - GrabOffset);
     if (VSize(LocalPosition / GunScale() - GrabOffset - Path.ContactLocal(Amount)) * GunScale() > Radius * 1.5)

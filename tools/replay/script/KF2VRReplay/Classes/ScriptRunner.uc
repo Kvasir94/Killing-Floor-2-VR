@@ -18,6 +18,9 @@ struct HandMotion
     var quat FromQ;
     var float Started, Duration, Speed, Tolerance, Deadline;
     var int Line;
+    // A move onto a hip reload's anchors (reload.step hip) ends once the gun
+    // is seated there: the same anchors then name the next step's points.
+    var bool bHipStep;
 };
 
 struct Watch { var string Probe, Op, Value; var int Line; };
@@ -64,6 +67,13 @@ var float TraceEvery, TraceNext, TraceUntil;
 var int TraceLine;
 var string Signature[2];
 var array<string> PendingShots;
+// Checks that already took a failure capture in this case (line, kind and
+// probe): a check that fails again, every tick or every loop pass, is logged
+// each time but captured once.
+var array<string> FailShotKeys;
+// The last pickup.<hand> fallback noted (case, gun and hand), so a tracked
+// move notes it once.
+var string PickupNoteKey;
 var bool bOpStarted;
 var array<int> LoopCounts;
 // Values saved by `snap`, compared as @name.
@@ -72,9 +82,26 @@ var string SetupBlocker;
 var bool bStartupShellClosed;
 // Ammo ledger per hand: the settled ammo/reserve before a reload, checked
 // against the ammunition rulings (PHYSICAL_RELOAD_SPEC R4-R6) when it ends.
-struct LedgerState { var KFWeapon Gun; var int Ammo, Reserve; var bool bOpen, bKeep, bLose, bRecover, bEmptyOk, bRackOnly; var string Family; var int OtherAmmo, OutLow; };
+// bWasOut: the load left the gun during this reload (a magazine, or a
+// container such as the Bladed Pistol's), so it is judged by the magazine
+// rules whatever its catalog family.
+struct LedgerState { var KFWeapon Gun; var int Ammo, Reserve; var bool bOpen, bKeep, bLose, bRecover, bEmptyOk, bRackOnly, bJoint, bWasOut; var string Family; var int OtherAmmo, OutLow, Recovered; };
 var LedgerState Ledgers[2];
 var float LedgerSettleAt[2];
+// Paired pistols drawing on one shared reserve with both reloads open at once
+// are judged together: what both guns and the reserve hold at the end against
+// what they held before, less the rounds the drops lost (JointBase - JointLost).
+var int JointBase, JointLost, JointPending;
+// select / wheel: the hand's weapon wheel driven through the player's input.
+var int WheelPhase, WheelRow, WheelFlips, WheelPage;
+var float WheelPhaseAt;
+var vector WheelFrom, WheelDelta;
+var string CaseWeapon;
+// camera: an outside viewpoint for captures (the eye otherwise).
+var DynamicCameraActor ShotCamera;
+var string CameraMode;
+var float CameraDistance;
+var array<PrimitiveComponent> CameraShown, CameraHidden;
 var float ReadyAt, IngressLostAt;
 var vector StartLocation, StrokeOffset, CarryFrom, GotoStand;
 var bool bCarryReady;
@@ -85,6 +112,16 @@ var VRActionPath StrokePath;
 var vector StrokeRootAt;
 var quat StrokeRootQ, StrokeWristQ, StrokeStartQ;
 var float StrokeScale, StrokeStart, StrokeLast;
+var DynamicSMActor_Spawnable ZoomTarget;
+// Live control (tools/replay/live.py): a `live` op keeps the runner alive once
+// the cursor runs out and takes further ops over LiveLink while the game runs.
+var LiveLink Link;
+var bool bLive, bLiveReady, bPaused;
+var int LivePort, LiveClient;
+var float LinkTriedAt, LinkLostAt, PausedAt;
+var vector PausedStick[2];
+var array<string> LiveBatch;
+var string LiveBatchId;
 
 simulated event PostBeginPlay()
 {
@@ -134,6 +171,45 @@ function rotator RotatorField(string Op, string Key)
 
 // ---- state access ---------------------------------------------------------
 
+// opticset (cost A/B runs, #212): change that hand's optic capture and
+// reattach it so the render probe takes the new settings.
+function bool OpticSetOp(string Op)
+{
+    local VRM14Scope Scope;
+    local TWSceneCapture2DDPGComponent C;
+    Scope = OpticOf(HandOf(Field(Op, "hand")));
+    if (Scope == None || Scope.Capture == None)
+    { Verdict(LineOf(Op), "opticset", Field(Op, "hand"), "none", "==", "an optic", false); return true; }
+    C = Scope.Capture;
+    if (Field(Op, "view") != "") C.ViewMode = ESceneCaptureViewMode(int(Field(Op, "view")));
+    if (Field(Op, "fog") != "") C.bEnableFog = Field(Op, "fog") == "1";
+    if (Field(Op, "prepass") != "") C.bSkipRenderingDepthPrepass = Field(Op, "prepass") != "1";
+    if (Field(Op, "far") != "") C.MaxViewDistanceOverride = float(Field(Op, "far"));
+    if (Field(Op, "size") != "")
+    {
+        Scope.Target = class'TextureRenderTarget2D'.static.Create(int(Field(Op, "size")), int(Field(Op, "size")), PF_FloatRGBA);
+        Scope.Target.TargetGamma = 1.0;
+        C.SetCaptureParameters(Scope.Target);
+        Scope.Lens.SetTextureParameterValue('ScopeTextureTarget', Scope.Target);
+    }
+    if (Field(Op, "fps") != "") C.SetFrameRate(float(Field(Op, "fps")));
+    if (Field(Op, "every") != "") Scope.CaptureInterval = int(Field(Op, "every"));
+    C.ForceUpdate(false);
+    Note(LineOf(Op), "opticset view=" $ int(C.ViewMode) @ "fog=" $ C.bEnableFog @ "skipPrepass=" $ C.bSkipRenderingDepthPrepass
+        @ "far=" $ C.MaxViewDistanceOverride @ "size=" $ Scope.Target.SizeX @ "fps=" $ C.FrameRate @ "every=" $ Scope.CaptureInterval);
+    return true;
+}
+
+// The physical optic of the gun in that hand: its presenter's, else the root bridge's.
+function VRM14Scope OpticOf(int H)
+{
+    local VRWeaponRuntime R;
+    R = Held(H);
+    if (R != None && R.Presenter != None && R.Presenter.M14Scope != None) return R.Presenter.M14Scope;
+    if (B.M14Scope != None && B.M14Scope.Weapon == Gun(H)) return B.M14Scope;
+    return None;
+}
+
 function VRWeaponRuntime Held(int H)
 {
     if (B == None || B.HandInventory == None) return None;
@@ -160,10 +236,46 @@ function int HandOf(string Token)
     return -1;
 }
 
+// Where that hand's palm takes this dropped gun: its own catch grip
+// (VRWorldDropGun.GripContacts: the trigger grip, or a pump gun's fore-end).
+// A grip the game does not accept a palm at (VRWorldDropGun.GripRoleAt) is
+// out of a player's reach too: on a grounded gun it can lie on the side the
+// gun rests on, under the floor's surface. Then the palm goes to the gun's
+// ground circle a little above the floor, the pickup zone a player uses, and
+// the run notes it once per gun and hand.
+function vector PickupPalm(VRWorldDropGun P, int H)
+{
+    local vector Grip, Other, Ground;
+    local string Key;
+    if (!P.GripContacts(H, Grip, Other)) Grip = P.GrabPosition();
+    else if (class'VRWorldDropGun'.static.SupportCatch(P.InventoryClass)) Grip = Other;
+    if (!P.bGrounded || P.GripRoleAt(Grip, H, true) >= 0) return Grip;
+    Ground = P.GroundPosition + vect(0,0,3);
+    Key = CaseNumber $ ":" $ P.Name $ ":" $ H;
+    if (PickupNoteKey != Key)
+    {
+        PickupNoteKey = Key;
+        Note(0, "pickup-grip-refused hand=" $ H @ "gun=" $ P.InventoryClass.Name
+            @ "grip_z=" $ Grip.Z @ "ground_z=" $ P.GroundPosition.Z
+            @ "grip_ground_trace=" $ BoolText(FastTrace(Grip, P.GroundPosition + vect(0,0,6)))
+            @ "ground_ok=" $ BoolText(P.GripRoleAt(Ground, H, true) >= 0));
+    }
+    return Ground;
+}
+
+function string GripGap(VRWorldDropGun P, int H, bool bHeight)
+{
+    local vector Grip, Other;
+    if (P == None || !P.GripContacts(H, Grip, Other)) return "none";
+    if (class'VRWorldDropGun'.static.SupportCatch(P.InventoryClass)) Grip = Other;
+    return string(bHeight ? Grip.Z - (P.GroundPosition.Z - 1) : VSize(B.PalmPosition(H) - Grip));
+}
+
 // Anchor tokens: head, body, wrist.L, pouch.L, L.bone.NAME, L.part.mag|well|action.
 function bool Resolve(string Anchor, out vector At, out quat Q)
 {
     local rotator ViewRot;
+    local VRM14Scope Scope;
     local array<string> Parts;
     local int H, Part;
     local KFWeapon W;
@@ -241,13 +353,23 @@ function bool Resolve(string Anchor, out vector At, out quat Q)
         H = HandOf(Parts[1]);
         A = Nearest("VRWorldDropGun");
         if (H < 0 || VRWorldDropGun(A) == None) return false;
-        if (!VRWorldDropGun(A).GripContacts(H, At, Other))
-            At = VRWorldDropGun(A).GrabPosition();
-        else if (class'VRWorldDropGun'.static.SupportCatch(VRWorldDropGun(A).InventoryClass)) At = Other;
+        At = PickupPalm(VRWorldDropGun(A), H);
         At -= B.PalmPosition(H) - B.Hands[H].Position;
         return true;
     }
     if (Parts[0] == "wrist") { H = HandOf(Parts[1]); if (H < 0) return false; At = B.Hands[H].Position; return true; }
+    // recovered.<hand>: the centre of the recovered magazine that hand carries
+    // (the point VRInteractiveReload admits near the well). Its world actor
+    // stays hidden where it lay while the carry moves only the prop.
+    if (Parts[0] == "recovered")
+    {
+        H = HandOf(Parts[1]);
+        if (H < 0 || Reloads() == None || Reloads().Recovery == None || !Reloads().Recovery.OwnsHand(H)
+            || Reloads().Recovery.Dropped == None) return false;
+        At = Reloads().Recovery.Dropped.Props[Reloads().Recovery.Carries[H].Slot].Position;
+        Q = Reloads().Recovery.Dropped.Props[Reloads().Recovery.Carries[H].Slot].Rotation;
+        return true;
+    }
     if (Parts[0] == "pouch")
     {   // The production acquisition centre (belt offset included), not the bare anchor.
         H = HandOf(Parts[1]);
@@ -274,7 +396,19 @@ function bool Resolve(string Anchor, out vector At, out quat Q)
         if (Parts[1] == "contact") At = Reloads().BodyContactPoint();
         // While inserting, the natural frame is the wrist rotation that
         // presents the ammunition at the guide's entry orientation (align).
-        if (Step == "insert") Q = Reloads().InsertWristQuat();
+        // A rock-in well's straight entry (R60) keeps its own orientation
+        // once the guide took it there.
+        if (Step == "insert")
+            Q = (Reloads().bStraightEntry && Reloads().InsertGuide.bCaptured)
+                ? Reloads().StraightWristQuat() : Reloads().InsertWristQuat();
+        // reload.straight: a rock-in well's straight entry and its upright
+        // orientation (R60); absent where the well has none.
+        if (Parts[1] == "straight")
+        {
+            if (Step != "insert" || Reloads().StraightStart <= 0) return false;
+            At = Reloads().StraightTarget();
+            Q = Reloads().StraightWristQuat();
+        }
         return true;
     }
     if (Parts[0] == "nearest")
@@ -300,7 +434,8 @@ function bool Resolve(string Anchor, out vector At, out quat Q)
     // the eyepiece to the eye.
     if (W != None && Parts.Length == 2 && Parts[1] == "scope")
     {
-        if (B.M14Scope != None && B.M14Scope.Weapon == W && B.M14Scope.GetLensPose(At, ViewRot))
+        Scope = OpticOf(H);
+        if (Scope != None && Scope.Weapon == W && Scope.GetLensPose(At, ViewRot))
         { Q = QuatFromRotator(ViewRot); return true; }
         // The lens object binds only when the scope renders (VR); offline,
         // use the scope or sight bone it is authored on.
@@ -324,6 +459,29 @@ function bool Resolve(string Anchor, out vector At, out quat Q)
     return class'VRReloadMotionGuard'.static.ValidPosition(At);
 }
 
+function string CurrentStep()
+{
+    local vector Target, Held;
+    local string Step;
+    ReloadStep(Target, Held, Step);
+    return Step;
+}
+
+// That hand's open, unseated hip reload: the hip loader and the gun point
+// that must reach it.
+function bool HipStep(int H, out vector Target, out vector Held)
+{
+    local VRCylinderSession S;
+    local quat Q;
+    if (Reloads() == None) return false;
+    S = Reloads().DualCylinders[H];
+    if (S == None || S.Gun == None || S.Gun != Gun(H) || !S.bOpened || S.bSeated) return false;
+    S.HipLoader(Target, Q);
+    Held = S.bMagazine ? S.Gun.MySkelMesh.GetBoneLocation(S.LoadedBone) : S.SeatTarget(Q);
+    return class'VRReloadMotionGuard'.static.ValidPosition(Target)
+        && class'VRReloadMotionGuard'.static.ValidPosition(Held);
+}
+
 // The active physical reload's next step for its off hand, from the same
 // VRInteractiveReload.RingStep the hint rings use.
 function bool ReloadStep(out vector Target, out vector Held, out string Step)
@@ -336,6 +494,12 @@ function bool ReloadStep(out vector Target, out vector Held, out string Step)
     L = Reloads();
     Step = "none";
     if (L == None) return false;
+    // A one-handed hip reload (VRCylinderSession, the dual families): once its
+    // action stands open, the gun hand brings the gun's load point (the
+    // magazine bone, or the open cylinder's seat) to the hip loader, the same
+    // two points VRCylinderSession.Tick tests with AtHipSeat. The right hand's
+    // session first, as for a session-less action below.
+    if (HipStep(1, Target, Held) || HipStep(0, Target, Held)) { Step = "hip"; return true; }
     // Before a session exists, an action that waits for the hand (a belt
     // cover, a bolt with hand cycling, a button-opened cylinder still swinging)
     // is the first step: work it at its own contact.
@@ -364,6 +528,17 @@ function bool ReloadStep(out vector Target, out vector Held, out string Step)
             }
         }
         return false;
+    }
+    // The seated box's belt is a separate hand operation. RingStep only
+    // exposes the cover and carried box, so follow its production leading
+    // round explicitly and put the palm on it for a fresh squeeze.
+    if (L.BreakAction != None && L.BreakAction.Gun == L.Gun && L.BreakAction.BeltPath != None
+        && L.BreakAction.bBoxSeated && !L.BreakAction.bBeltSeated)
+    {
+        Held = B.Hands[L.OffHand()].Position;
+        Target = L.BreakAction.BeltLeadRound() - (B.PalmPosition(L.OffHand()) - Held);
+        Step = "belt";
+        return true;
     }
     Kind = L.RingStep(Held, Target);
     // A path action (bolt, belt cover) the session waits on a hand to open:
@@ -431,6 +606,17 @@ function bool WorkedStroke(KFWeapon W, float S, out vector At, out float Progres
         Progress = L.Secondary.Amount;
         return true;
     }
+    // A held belt follows the leading round, not the mirrored stock wrist.
+    // Keep Stroke's acquired wrist offset while moving that round along the
+    // production path. Only authored tracking moves; no belt/ammo state writes.
+    if (L.BreakAction != None && L.BreakAction.Gun == W && L.BreakAction.BeltPath != None
+        && L.BreakAction.bBeltEngaged)
+    {
+        At = L.BreakAction.RootPos() + QuatRotateVector(L.BreakAction.RootQ(),
+            L.BreakAction.BeltPath.RoundAt(S) * L.BreakAction.GunScale());
+        Progress = L.BreakAction.BeltAmount;
+        return true;
+    }
     if (L.ActionStroke(W, S, At, Progress)) return true;
     // An idle bolt that a hand opens (the M99, a free-cycled Mosin): its
     // opening contact, closed, until gripping it binds the action.
@@ -452,13 +638,114 @@ function KFCheatManager Cheats()
     return KFCheatManager(B.PC.CheatManager);
 }
 
+// attacksides <Class>: for the nearest pawn of that class, log which arm
+// strikes at every melee impact of every attack clip its PawnAnimInfo lists,
+// as VRAttackSampler measures it (#210). One KF2VR_ATTACKSIDE line per impact;
+// tools/replay/attack_sides.py turns them into the table in docs/re.
+function bool AttackSidesOp(string Op)
+{
+    local KFPawn_Monster M;
+    local VRAttackSampler S;
+    local int A, V, C, J, Count;
+    M = KFPawn_Monster(Nearest(Field(Op, "cls")));
+    if (M == None || M.PawnAnimInfo == None)
+    { Verdict(LineOf(Op), "attacksides", Field(Op, "cls"), "none", "==", "pawn", false); return true; }
+    S = class'VRAttackSampler'.static.Get(WorldInfo);
+    for (A = 0; A < M.PawnAnimInfo.Attacks.Length; ++A)
+        for (V = 0; V < M.PawnAnimInfo.Attacks[A].Anims.Length; ++V)
+        {
+            C = S.Measure(M, M.PawnAnimInfo.Attacks[A].Anims[V]);
+            if (C < 0) continue;
+            if (S.Cache[C].Impacts.Length == 0)
+                `log("KF2VR_ATTACKSIDE zed=" $ M.Class.Name @ "tag=" $ M.PawnAnimInfo.Attacks[A].Tag @ "clip=" $ S.Cache[C].Clip @ "impact=-1 sides=" $ S.Cache[C].Sides);
+            for (J = 0; J < S.Cache[C].Impacts.Length; ++J)
+            {
+                `log("KF2VR_ATTACKSIDE zed=" $ M.Class.Name @ "tag=" $ M.PawnAnimInfo.Attacks[A].Tag @ "clip=" $ S.Cache[C].Clip
+                    @ "impact=" $ J @ "time=" $ S.Cache[C].Impacts[J].Time @ "duration=" $ S.Cache[C].Impacts[J].Duration
+                    @ "left=" $ int(S.Cache[C].Impacts[J].LeftSpeed) @ "right=" $ int(S.Cache[C].Impacts[J].RightSpeed)
+                    @ "sides=" $ S.Cache[C].Impacts[J].Sides);
+                ++Count;
+            }
+        }
+    Note(LineOf(Op), "attacksides pawn=" $ M.Class.Name @ "impacts=" $ Count);
+    return true;
+}
+// hurt <Class> zone <zone> [damage N] [dt <path>]: test setup, one stock
+// TakeDamage hit on a hit zone of the nearest pawn of that class, as a shot
+// there would land (standalone).
+function bool HurtZoneOp(string Op)
+{
+    local KFPawn_Monster M;
+    local class<DamageType> DT;
+    local TraceHitInfo HitInfo;
+    local ImpactInfo Impact;
+    local int Zone;
+    M = KFPawn_Monster(Nearest(Field(Op, "cls")));
+    DT = class<DamageType>(DynamicLoadObject(Field(Op, "dt"), class'Class', true));
+    if (M == None || DT == None || B.Human == None)
+    { Verdict(LineOf(Op), "hurt", Field(Op, "cls"), "none", "==", "pawn and damage type", false); return true; }
+    Zone = M.HitZones.Find('ZoneName', name(Field(Op, "zone")));
+    if (Zone == INDEX_NONE) { Verdict(LineOf(Op), "hurt", Field(Op, "zone"), "none", "==", "zone", false); return true; }
+    HitInfo.BoneName = M.HitZones[Zone].ZoneName;
+    HitInfo.HitComponent = M.Mesh;
+    M.TakeDamage(int(Field(Op, "n", "30")), B.PC, M.Mesh.GetBoneLocation(M.HitZones[Zone].BoneName), vect(0,0,0), DT, HitInfo, B.Human);
+    Note(LineOf(Op), "hurt pawn=" $ M.Class.Name @ "zone=" $ M.HitZones[Zone].ZoneName @ "gore_health=" $ M.HitZones[Zone].GoreHealth @ "health=" $ M.Health);
+    // headshot: the impact also goes to the perk's own head-shot counter, as
+    // the firing weapon reports it (Rack 'em Up / Rhythm Method, #224).
+    if (Field(Op, "perkhit") == "1" && B.PC.GetPerk() != None)
+    {
+        Impact.HitActor = M;
+        Impact.HitLocation = M.Mesh.GetBoneLocation(M.HitZones[Zone].BoneName);
+        Impact.HitInfo = HitInfo;
+        B.PC.GetPerk().UpdatePerkHeadShots(Impact, DT, 1);
+        Note(LineOf(Op), "headshot perk=" $ B.PC.GetPerk().Class.Name @ "combo=" $ B.PC.GetPerk().GetIsHeadShotComboActive());
+    }
+    return true;
+}
 // spawn <zed> [dist D]: the stock SpawnZed cheat in front of the player.
+// target (scope zoom checks, #212): a static grid board Dist UU ahead of the
+// eye, square to the view, Size UU wide. Dist 0 removes it.
+function bool TargetOp(string Op)
+{
+    local vector Ahead;
+    local rotator View;
+    local float Size;
+    local MaterialInterface BoardMaterial;
+    if (ZoomTarget != None) { ZoomTarget.Destroy(); ZoomTarget = None; }
+    if (float(Field(Op, "dist")) <= 0) { Note(LineOf(Op), "target off"); return true; }
+    View = Demo.DemoController.Rotation;
+    View.Pitch = 0;
+    Ahead = B.HeadPosition + vector(View) * float(Field(Op, "dist"));
+    ZoomTarget = Spawn(class'DynamicSMActor_Spawnable', , , Ahead, View);
+    if (ZoomTarget == None) { Verdict(LineOf(Op), "target", "spawn", "none", "==", "board", false); return true; }
+    ZoomTarget.StaticMeshComponent.SetStaticMesh(StaticMesh'EngineMeshes.Cube');
+    // A detailed stock texture (the M14's atlas) gives fine features at any
+    // magnification; the world grid is the fallback.
+    BoardMaterial = MaterialInterface(DynamicLoadObject("WEP_1P_M14EBR_MAT_TWO.Wep_1stP_M14EBR_MIC", class'MaterialInterface', true));
+    if (BoardMaterial == None) BoardMaterial = Material'EngineMaterials.WorldGridMaterial';
+    ZoomTarget.StaticMeshComponent.SetMaterial(0, BoardMaterial);
+    Size = float(Field(Op, "size"));
+    // EngineMeshes.Cube is 256 UU on a side: a 1 UU thick board, Size square.
+    ZoomTarget.SetDrawScale3D(vect(1,0,0) / 256 + vect(0,1,1) * Size / 256);
+    Note(LineOf(Op), "target at=" $ Ahead @ "size=" $ Size @ "bounds=" $ ZoomTarget.StaticMeshComponent.Bounds.BoxExtent);
+    return true;
+}
+
 function bool SpawnZedOp(string Op)
 {
     local KFPawn Zed;
+    local class<KFPawn_Monster> Exact;
     local rotator View, Turned;
     local int Try;
     if (Cheats() == None) { Verdict(LineOf(Op), "spawn", "cheats", "none", "==", "available", false); return true; }
+    // cls: the exact class (kfs maps the friendly names), so a run never gets
+    // the random elite stand-in the stock name lookup rolls; zed is the stock
+    // SpawnZed prefix, used when no class is named.
+    if (Field(Op, "cls") != "")
+    {
+        Exact = class<KFPawn_Monster>(DynamicLoadObject("KFGameContent." $ Field(Op, "cls"), class'Class', true));
+        if (Exact == None) { Verdict(LineOf(Op), "spawn", Field(Op, "cls"), "unknown", "==", "a zed class", false); return true; }
+    }
     // yaw turns the spawn direction away from the view (clear of the
     // practice dummies) for this one spawn.
     // A spot that encroaches (a wall, a dummy) refuses the spawn: try the
@@ -468,12 +755,113 @@ function bool SpawnZedOp(string Op)
     {
         Turned = View;
         Turned.Yaw += int((float(Field(Op, "yaw", "0")) + (Try == 0 ? 0 : ((Try % 2 == 1) ? 1 : -1) * 40 * ((Try + 1) / 2))) * 182.0444);
+        if (Exact != None)
+        {
+            Turned.Pitch = 0; Turned.Roll = 0;
+            Zed = SpawnExactZed(self, B.Human, Exact, Turned, float(Field(Op, "dist", "300")));
+            continue;
+        }
         B.PC.SetRotation(Turned);
         Zed = Cheats().SpawnZed(Field(Op, "zed"), float(Field(Op, "dist", "300")));
     }
     B.PC.SetRotation(View);
-    if (Zed == None) Verdict(LineOf(Op), "spawn", Field(Op, "zed"), "none", "==", "spawned", false);
-    else Note(LineOf(Op), "spawned zed=" $ Zed.Class.Name @ "dist=" $ VSize(Zed.Location - B.Human.Location));
+    if (Zed == None) { Verdict(LineOf(Op), "spawn", Field(Op, "cls", Field(Op, "zed")), "none", "==", "spawned", false); return true; }
+    if (Field(Op, "hostile") == "1") MakeHostile(KFPawn_Monster(Zed), B.Human);
+    Note(LineOf(Op), "spawned zed=" $ Zed.Class.Name @ "dist=" $ VSize(Zed.Location - B.Human.Location)
+        @ "hostile=" $ (Field(Op, "hostile") == "1") @ "controller=" $ (Zed.Controller != None ? string(Zed.Controller.Class.Name) : "none"));
+    return true;
+}
+
+// The stock SpawnZed steps (KFCheatManager.SpawnZed) for one exact class,
+// Dist UU ahead of the player along View, facing back at it.
+static function KFPawn_Monster SpawnExactZed(Actor Spawner, Pawn Player, class<KFPawn_Monster> C, rotator View, float Dist)
+{
+    local KFPawn_Monster M;
+    local rotator Facing;
+    if (Spawner == None || Player == None || C == None) return None;
+    Facing.Yaw = View.Yaw + 32768;
+    M = Spawner.Spawn(C,,, Player.Location + Dist * vector(View) + vect(0,0,15), Facing,, false);
+    if (M == None) return None;
+    M.bDebug_SpawnedThroughCheat = true;
+    M.SetPhysics(PHYS_Falling);
+    if (KFGameInfo(Spawner.WorldInfo.Game) != None) KFGameInfo(Spawner.WorldInfo.Game).SetMonsterDefaults(M);
+    return M;
+}
+
+// hostile: the Zed's own AI on the Zed team, hunting the player, as the
+// stock SpawnAI cheat and VRPracticeRange's attacker give it.
+static function MakeHostile(KFPawn_Monster M, Pawn Player)
+{
+    local KFAIController AI;
+    if (M == None) return;
+    if (M.Controller == None) M.SpawnDefaultController();
+    AI = KFAIController(M.Controller);
+    if (AI == None) return;
+    AI.SetTeam(1);
+    if (Player != None) AI.SetEnemy(Player);
+}
+
+// damage on|off: the player takes hits or not. Replays run in practice mode,
+// which makes the player invulnerable; its own switch keeps the practice
+// range's restore on exit right (VRPracticeRange.SetInvulnerable).
+function SetDamage(bool bOn)
+{
+    if (Demo != None && Demo.PracticeRange != None && Demo.PracticeRange.bActive) Demo.PracticeRange.SetInvulnerable(!bOn);
+    else if (B.PC != None) B.PC.bGodMode = !bOn;
+}
+
+function bool DamageOp(string Op)
+{
+    SetDamage(Field(Op, "on") == "1");
+    Note(LineOf(Op), "damage " $ (Field(Op, "on") == "1" ? "on" : "off") @ "god=" $ Probe("god") @ "health=" $ Probe("health"));
+    return true;
+}
+
+// hitch <ms>: stall the game thread once for that long, as a frame hitch or a
+// load spike does; the next frame's delta carries the whole gap (R68, #30).
+// Wall clock from GetSystemTime; each spin is native string work, so the
+// loop stays far below the script runaway limit.
+function int WallMs()
+{
+    local int Y, Mo, DW, D, H, Mi, S, Ms;
+    GetSystemTime(Y, Mo, DW, D, H, Mi, S, Ms);
+    return ((H * 60 + Mi) * 60 + S) * 1000 + Ms;
+}
+
+function bool HitchOp(string Op)
+{
+    local int Target, Start, Cur, Spins;
+    local string Burn;
+    Target = Clamp(int(Field(Op, "ms", "150")), 1, 5000);
+    Burn = "abcdefghij";
+    while (Len(Burn) < 4000) Burn $= Burn;
+    Start = WallMs(); Cur = Start;
+    while (Cur - Start < Target && Spins < 900000)
+    {
+        Burn = Repl(Burn, "a", "b", true);
+        Burn = Repl(Burn, "b", "a", true);
+        Cur = WallMs();
+        if (Cur < Start) Cur += 86400000;
+        ++Spins;
+    }
+    Note(LineOf(Op), "hitch ms=" $ Target @ "stalled=" $ (Cur - Start) @ "spins=" $ Spins);
+    return true;
+}
+
+// skill <index> on|off: test setup for perk-skill behaviour (a tactical
+// reload's elite clips): switch the current perk's PerkSkills entry directly,
+// as its saved build would. Standalone only; the perk's own level gate stays.
+function bool SkillOp(string Op)
+{
+    local KFPerk Perk;
+    local int I;
+    Perk = B.PC != None ? B.PC.GetPerk() : None;
+    I = int(Field(Op, "index"));
+    if (Perk == None || I < 0 || I >= Perk.PerkSkills.Length)
+    { Verdict(LineOf(Op), "skill", Field(Op, "index"), "none", "==", "a perk skill", false); return true; }
+    Perk.PerkSkills[I].bActive = Field(Op, "on") == "1";
+    Note(LineOf(Op), "skill perk=" $ Perk.Class.Name @ "index=" $ I @ "name=" $ Perk.PerkSkills[I].Name
+        @ "active=" $ Perk.PerkSkills[I].bActive);
     return true;
 }
 
@@ -594,6 +982,70 @@ function string GravityTarget(int H)
     return A == None ? "none" : string(A.Class.Name);
 }
 
+// Why this hand's gravity grab does not take the nearest dropped magazine: the
+// first VRGravityPull gate it fails (HandFree, Consider, CatchPathAvailable),
+// or "ok". Read-only triage for a magazine that never highlights.
+function string GravityWhy(int H)
+{
+    local VRGravityPull P;
+    local VRWorldDropMagazine M, Best;
+    local vector Palm, Center, Dir;
+    local float Dist, BestDist;
+    if (B.HandInventory == None || B.HandInventory.GravityPull == None) return "no-pull";
+    P = B.HandInventory.GravityPull;
+    Palm = B.PalmPosition(H);
+    BestDist = 1000000000.0;
+    foreach B.DynamicActors(class'VRWorldDropMagazine', M)
+        if (!M.bDeleteMe && VSize(M.Location - Palm) < BestDist) { Best = M; BestDist = VSize(M.Location - Palm); }
+    if (Best == None) return "no-magazine";
+    if (!P.Enabled()) return "disabled";
+    if (P.GripDown(H)) return "grip-down";
+    if (!P.HandFree(H)) return "hand-not-free";
+    if (P.SqueezeReservedNearby(H)) return "squeeze-reserved";
+    if (Best.PayloadKind == 1) return "loose-rounds";
+    if (!P.TargetEligible(Best, None)) return "ineligible";
+    if (!P.CatchPathAvailable(Best)) return "no-catch-path";
+    Center = P.TargetCenter(Best, None);
+    Dist = VSize(Center - Palm);
+    if (Dist > P.Range) return "too-far:" $ int(Dist);
+    if (Dist < P.MinRange) return "too-near:" $ int(Dist);
+    Dir = P.Aim(H);
+    if ((Normal(Center - (Palm - Dir * P.ConeOffset)) Dot Dir) <= P.ConeDot) return "cone";
+    if (!P.InView(Center)) return "view";
+    if (!P.Visible(Center, Palm)) return "occluded";
+    return "ok";
+}
+
+// Why a grip by this hand would not take the nearest dropped magazine: the
+// first VRMagazineRecovery.TryGrab gate it fails, or "ok". Read-only triage.
+function string RecoverWhy(int H)
+{
+    local VRMagazineRecovery Rec;
+    local VRWorldDropMagazine M, Best;
+    local vector Palm;
+    local float BestDist;
+    if (Reloads() == None || Reloads().Recovery == None) return "no-recovery";
+    Rec = Reloads().Recovery;
+    Palm = B.PalmPosition(H);
+    BestDist = 1000000000.0;
+    foreach B.DynamicActors(class'VRWorldDropMagazine', M)
+        if (!M.bDeleteMe && VSize(M.Location - Palm) < BestDist) { Best = M; BestDist = VSize(M.Location - Palm); }
+    if (Best == None) return "no-magazine";
+    if (!Rec.ContextValid(H)) return "context";
+    if (!B.bRecoverMagazineAmmo) return "recover-off";
+    if (Rec.OwnsHand(H))
+        return "carrying:fresh=" $ int(Rec.Carries[H].bRequireFresh) $ ",claimed=" $ int(Rec.Carries[H].bClaimed)
+            $ ",guide=" $ int(Rec.Carries[H].bGuide) $ ",request=" $ Rec.Carries[H].Request
+            $ ",session=" $ int(Reloads().bRecoveredMagazineSession);
+    if (!Rec.RawHandFree(H)) return "hand-not-free";
+    if (!Best.CanPickupBy(B.Human)) return "not-pickable";
+    if (Best.RemovalToken <= 0) return "no-token";
+    if (Best.Rounds <= 0) return "empty";
+    if (!Best.NearHand(Palm, class'VRInteractiveReload'.default.PocketReach)) return "not-near:" $ int(BestDist);
+    if (Rec.CompatibleOwnedFamily(Best.Family, true) == None) return "no-gun";
+    return "ok";
+}
+
 function VRCompoundBowInput Bow()
 {
     if (B.HandInventory == None || B.HandInventory.Input == None) return None;
@@ -629,6 +1081,8 @@ function string CarryOf(int H)
     local VRInteractiveReload L;
     L = Reloads();
     if (L != None && L.bActive && L.HandMode == 1 && L.OffHand() == H) return "magazine";
+    // A floor or gravity-grabbed magazine is held by the recovery carry.
+    if (L != None && L.Recovery != None && L.Recovery.OwnsHand(H)) return "magazine";
     if (B.HandInventory != None && B.HandInventory.GravityPull != None && B.HandInventory.GravityPull.OwnsHand(H)) return "gravity";
     if (B.HandInventory != None && B.HandInventory.ZedGrab != None && B.HandInventory.ZedGrab.IsHolding(H)) return "zed";
     if (B.HandInventory != None && B.HandInventory.Input != None && B.HandInventory.Input.Grenade != None
@@ -716,10 +1170,52 @@ function bool BladeCentre(VRWeaponPresenter P, KFWeapon W, out vector At, out qu
     return true;
 }
 
+// A setting as the live bridge holds it. `getall` lists every bridge
+// instance's value ("N) VRHandsBridge <path>.VRHandsBridge_0.Key = Value");
+// take this bridge's line. ConsoleCommand must not write to the log, or it
+// returns nothing (the old probe's blank values). `get` (the class default,
+// i.e. the launch config) is the fallback.
+function string SettingProbe(string Setting)
+{
+    local array<string> Lines;
+    local string Text, Wanted, All;
+    local int I, At, Equals;
+    Text = ConsoleCommand("getall VRHandsBridge " $ Setting, false);
+    All = Text;
+    ParseStringIntoArray(Repl(Text, Chr(13), ""), Lines, Chr(10), true);
+    Wanted = "." $ B.Name $ "." $ Setting;
+    for (I = 0; I < Lines.Length; ++I)
+    {
+        At = InStr(Lines[I], Wanted);
+        if (At < 0) continue;
+        Equals = InStr(Mid(Lines[I], At), " = ");
+        if (Equals >= 0) return Repl(Trimmed(Mid(Lines[I], At + Equals + 3)), " ", "_");
+    }
+    Text = Trimmed(ConsoleCommand("get KF2VR.VRHandsBridge " $ Setting, false));
+    if (Text != "") return Repl(Text, " ", "_");
+    return "unknown(" $ Left(Repl(Repl(All, Chr(10), "/"), " ", "_"), 120) $ ")";
+}
+
 function string Trimmed(string S)
 {
     while (Len(S) > 0 && (Right(S, 1) == Chr(10) || Right(S, 1) == Chr(13) || Right(S, 1) == " ")) S = Left(S, Len(S) - 1);
     return S;
+}
+
+// Local presentation props (VRDroppedMagazines): spent cases, ejected live
+// rounds, and magazines that never became a world pickup. A prop that is only
+// a hand's local copy of a world magazine (WorldProp set) is not counted twice.
+// The fastest horizontal speed of a loose (released, not held) dropped
+// magazine: a toss reads hundreds of UU/s just after release, a drop ~0.
+function float LooseMagSpeed(VRDroppedMagazines D)
+{
+    local int I;
+    local float Best;
+    if (D == None) return 0;
+    for (I = 0; I < ArrayCount(D.Props); ++I)
+        if (D.Props[I].bLive && !D.Props[I].bLeased)
+            Best = FMax(Best, VSize(D.Props[I].Velocity * vect(1,1,0)));
+    return Best;
 }
 
 function int LiveProps(VRDroppedMagazines D, out int Rounds)
@@ -727,23 +1223,43 @@ function int LiveProps(VRDroppedMagazines D, out int Rounds)
     local int I, N;
     if (D == None) return 0;
     for (I = 0; I < ArrayCount(D.Props); ++I)
-        if (D.Props[I].bLive) { ++N; Rounds += D.Props[I].Rounds; }
+        if (D.Props[I].bLive && D.Props[I].WorldProp == None) { ++N; Rounds += D.Props[I].Rounds; }
     return N;
 }
 
+// World reload props (VRWorldDropMagazine) lying loose, not in a hand:
+// magazines (and dosh clips) when bLoose is false, loose live rounds when true.
+function int WorldProps(bool bLoose, out int Rounds)
+{
+    local VRWorldDropMagazine M;
+    local int N;
+    foreach DynamicActors(class'VRWorldDropMagazine', M)
+    {
+        if (M.bDeleteMe || M.Carrier != None || (M.PayloadKind == 1) != bLoose) continue;
+        ++N; Rounds += M.Rounds;
+    }
+    return N;
+}
+
+// props.mags / props.mag_rounds: dropped magazines lying loose (the
+// green-ringed world pickups, plus any purely local drop) and the rounds they
+// still carry; props.rounds: loose live rounds; props.cases: spent cases.
 function string PropsProbe(string Kind)
 {
     local VRInteractiveReload L;
     local int Rounds, N;
     L = Reloads();
-    if (L == None) return "0";
     switch (Kind)
     {
-    case "mags": return string(LiveProps(L.Dropped, Rounds));
-    case "mag_rounds": LiveProps(L.Dropped, Rounds); return string(Rounds);
-    case "rounds": return string(L.LiveRounds == None ? 0 : LiveProps(L.LiveRounds.Props, Rounds));
+    case "mags": return string(WorldProps(false, Rounds) + (L == None ? 0 : LiveProps(L.Dropped, Rounds)));
+    case "mag_speed": return L == None ? "0" : string(FMax(LooseMagSpeed(L.Dropped), L.Recovery == None ? 0.0 : LooseMagSpeed(L.Recovery.Dropped)));
+    case "mag_rounds":
+        WorldProps(false, Rounds);
+        if (L != None) LiveProps(L.Dropped, Rounds);
+        return string(Rounds);
+    case "rounds": return string(WorldProps(true, Rounds) + ((L == None || L.LiveRounds == None) ? 0 : LiveProps(L.LiveRounds.Props, Rounds)));
     case "cases":
-        if (L.RevolverRounds != None) N = LiveProps(L.RevolverRounds.Props, Rounds) + LiveProps(L.RevolverRounds.RhinoProps, Rounds);
+        if (L != None && L.RevolverRounds != None) N = LiveProps(L.RevolverRounds.Props, Rounds) + LiveProps(L.RevolverRounds.RhinoProps, Rounds);
         return string(N);
     }
     return "unknown";
@@ -907,14 +1423,41 @@ function vector ActionStrokePoint(KFWeapon W, float S)
     return At;
 }
 
+// The actor's and its directly owned actors' visible meshes (a remote gun is
+// an attachment actor owned by its KF2VRNetRemoteWeapon).
+function string LightingText(Actor A)
+{
+    local PrimitiveComponent C;
+    local Actor Part;
+    local string S;
+    foreach DynamicActors(class'Actor', Part)
+    {
+        if (Part != A && Part.Owner != A) continue;
+        foreach Part.AllOwnedComponents(class'PrimitiveComponent', C)
+        {
+            if (C.HiddenGame || MeshComponent(C) == None) continue;
+            if (S != "") S $= "+";
+            S $= string(C.Class.Name) $ ":" $ (C.LightingChannels.Indoor ? "I" : "")
+                $ (C.LightingChannels.Outdoor ? "O" : "") $ (C.LightingChannels.Dynamic ? "D" : "");
+        }
+    }
+    return S == "" ? "none" : S;
+}
+
+// An Alive_ prefix on the class (nearest(Alive_KFPawn_ZedClot_Alpha)) skips
+// dead pawns, so a run that kills Zeds keeps aiming at a living one.
 function Actor Nearest(string ClassName)
 {
     local Actor A, Best;
     local float D, BestD;
+    local bool bAlive;
+    bAlive = Left(ClassName, 6) == "Alive_";
+    if (bAlive) ClassName = Mid(ClassName, 6);
     BestD = 1000000000.0;
     foreach DynamicActors(class'Actor', A)
     {
         if (A.bDeleteMe || !A.IsA(name(ClassName)) || A == B.Human) continue;
+        if (bAlive && Pawn(A) != None && (Pawn(A).Health <= 0 || Pawn(A).bPlayedDeath)) continue;
         D = VSize(A.Location - B.HeadPosition);
         if (D < BestD) { BestD = D; Best = A; }
     }
@@ -984,8 +1527,10 @@ function string Probe(string Key)
     // dropped (magazines, loose live rounds, spent cases) and the rounds the
     // dropped magazines carry.
     if (Left(Key, 6) == "props.") return PropsProbe(Mid(Key, 6));
-    // setting.<Key>: a live VRHandsBridge setting, read back through `get`.
-    if (Left(Key, 8) == "setting.") return Trimmed(ConsoleCommand("get KF2VR.VRHandsBridge " $ Mid(Key, 8)));
+    // setting.<Key>: the live bridge's own value of a VRHandsBridge setting.
+    if (Left(Key, 8) == "setting.") return SettingProbe(Mid(Key, 8));
+    // god: the player takes no damage (practice mode or `damage off`).
+    if (Key == "god") return B.PC == None ? "none" : BoolText(B.PC.bGodMode);
     if (Key == "reload.step2") { Step2(Target2, Value2); return Value2; }
     // xp / perk_level: the current perk's experience and level, as stock
     // reads them (KFPlayerController.GetPerkXP); xp.<KFPerk_...> for any perk.
@@ -1002,9 +1547,18 @@ function string Probe(string Key)
         return (B.PC == None || KFPlayerReplicationInfo(B.PC.PlayerReplicationInfo) == None
             || KFPlayerReplicationInfo(B.PC.PlayerReplicationInfo).CurrentPerkClass == None)
             ? "none" : string(KFPlayerReplicationInfo(B.PC.PlayerReplicationInfo).CurrentPerkClass.Name);
+    // count(Class): live actors of that class; count(Alive_Class) skips dead
+    // pawns, the same filter as nearest(Alive_Class).
     if (Parts.Length == 2 && Parts[0] == "count")
     {
-        foreach DynamicActors(class'Actor', A) if (A.IsA(name(Parts[1]))) ++N;
+        Field1 = Parts[1];
+        if (Left(Field1, 6) == "Alive_") Field1 = Mid(Field1, 6);
+        foreach DynamicActors(class'Actor', A)
+        {
+            if (A.bDeleteMe || !A.IsA(name(Field1))) continue;
+            if (Field1 != Parts[1] && Pawn(A) != None && (Pawn(A).Health <= 0 || Pawn(A).bPlayedDeath)) continue;
+            ++N;
+        }
         return string(N);
     }
     if (Key == "reload.step") { ReloadStep(At, Other, Field1); return Field1; }
@@ -1048,6 +1602,10 @@ function string Probe(string Key)
         case "speed": return string(VSize(A.Velocity));
         case "class": return string(A.Class.Name);
         case "hidden": return BoolText(A.bHidden);
+        // Visible primitives and their light channels (I indoor, O outdoor,
+        // D dynamic): KF2's deferred pass lights only I/O, so a visible part
+        // with neither renders black (#115).
+        case "lighting": return LightingText(A);
         case "health": return Pawn(A) == None ? "none" : string(Pawn(A).Health);
         // Dismembered hit zones (stock HitZones[].bPlayedInjury), and whether
         // the pawn has switched to its gore mesh.
@@ -1058,6 +1616,23 @@ function string Probe(string Key)
         // A door's weld and whether it stands open (KFDoorActor).
         case "weld": return KFDoorActor(A) == None ? "none" : string(KFDoorActor(A).WeldIntegrity);
         case "open": return KFDoorActor(A) == None ? "none" : BoolText(KFDoorActor(A).bIsDoorOpen);
+        // Whether the gravity grab may take it (VRGravityPullChannel.Eligibility):
+        // 0 yes, 1 not pullable or not this player's, 2 returning, claimed or
+        // hidden, 3 more than the player can carry.
+        case "pull": return string(class'VRGravityPullChannel'.static.Eligibility(A, B.Human, true));
+        // A world gun or magazine on its way back to its owner by itself.
+        case "returning": return VRWorldDropGun(A) == None ? "none" : BoolText(VRWorldDropGun(A).bReturning);
+        // A dropped gun's pickup zone at each palm now (VRWorldDropGun.GripRoleAt:
+        // 0 the trigger grip or ground circle, 1 the support grip, -1 none), and
+        // each palm's distance to that hand's own catch grip.
+        case "zone_l": return VRWorldDropGun(A) == None ? "none" : string(VRWorldDropGun(A).GripRoleAt(B.PalmPosition(0), 0, true));
+        case "zone_r": return VRWorldDropGun(A) == None ? "none" : string(VRWorldDropGun(A).GripRoleAt(B.PalmPosition(1), 1, true));
+        case "grip_l": return GripGap(VRWorldDropGun(A), 0, false);
+        case "grip_r": return GripGap(VRWorldDropGun(A), 1, false);
+        // That catch grip's height above the floor under the gun (its ground circle).
+        case "grip_z_l": return GripGap(VRWorldDropGun(A), 0, true);
+        case "grip_z_r": return GripGap(VRWorldDropGun(A), 1, true);
+        case "grounded": return VRWorldDropGun(A) == None ? "none" : BoolText(VRWorldDropGun(A).bGrounded);
         }
         return "unknown";
     }
@@ -1093,16 +1668,37 @@ function string Probe(string Key)
     case "stage2": return (L != None && L.Secondary != None && L.Secondary.bActive && L.Secondary.Gun == W) ? string(L.Secondary.Stage) : "none";
     // The gravity grab's locked target (else its candidate) for this hand.
     case "gravity": return GravityTarget(H);
+    case "gravity_why": return GravityWhy(H);
+    case "recover_why": return RecoverWhy(H);
     case "supports":   // the gun this hand is supporting (two-handed hold), or none
         R = B.HandInventory.Registry.GetSupport(H);
         return (R == None || R.Item == None) ? "none" : string(R.Item.Class.Name);
     case "grip": return BoolText(B.Hands[H].bGrip);
+    // The physical optic (VRM14Scope) on this hand's gun: 1 while its capture
+    // renders, 0 while suspended, -1 with none bound. optic_eye: the eye's
+    // distance behind the lens and its offset from the lens axis, in UU.
+    case "optic": return OpticOf(H) == None ? "-1" : string(int(OpticOf(H).bActive));
+    case "optic_eye": return OpticOf(H) == None ? "none" : OpticOf(H).EyeDistance @ OpticOf(H).EyeOffset;
     case "trigger": return BoolText(B.Hands[H].bTrigger);
+    // The hand's weapon wheel (VRHandSelector): open or closed, every entry it
+    // lists (page:class, #1 for a stock dual's second member, (occupied) when
+    // the other hand holds it), the hovered entry's label and the game's
+    // message under the wheel (a refusal such as DRAW REFUSED).
+    case "wheel": return (B.HandInventory.Input.IsSelectorOpen(H) && Wheel(H) != None) ? "open" : "closed";
+    case "wheel_items": return WheelItems(H);
+    case "wheel_hover":
+        if (Wheel(H) == None || !B.HandInventory.Input.IsSelectorOpen(H) || Wheel(H).HoverRow < 0) return "none";
+        return Repl(Wheel(H).RowLabel(H, Wheel(H).HoverRow), " ", "_");
+    case "wheel_msg": return B.HandInventory.Input.SelectionMessage[H] == "" ? "none" : Repl(B.HandInventory.Input.SelectionMessage[H], " ", "_");
     }
     if (W == None) return "none";
     switch (Field1)
     {
     case "ammo": return string(W.AmmoCount[0]);
+    // A knife or the Katana's reverse grip (#227): its phase (0 forward, 1
+    // turning in, 2 reversed, 3 turning back) and the turn in degrees.
+    case "reverse": return (R == None || R.Presenter == None) ? "none" : string(R.Presenter.ReversePhase);
+    case "reverse_deg": return (R == None || R.Presenter == None) ? "none" : string(int(R.Presenter.ReverseAngle));
     case "capacity": return string(W.MagazineCapacity[0]);
     // Secondary (underbarrel / alt) ammunition.
     case "ammo2": return string(W.AmmoCount[1]);
@@ -1112,6 +1708,16 @@ function string Probe(string Key)
     case "pump": return BoolText(class'VRManualPump'.static.Supported(W)
         && class'VRPumpCatalog'.static.CycleOnlyIndex(class'VRWeaponDropState'.static.FamilyFor(W.Class)) < 0);
     case "action": return string(ActionProgress(W));
+    // The separate belt-lay stage, read from the production action owner.
+    case "belt_progress":
+        return (L != None && L.BreakAction != None && L.BreakAction.Gun == W && L.BreakAction.BeltPath != None)
+            ? string(L.BreakAction.BeltAmount) : "none";
+    case "belt_engaged":
+        return BoolText(L != None && L.BreakAction != None && L.BreakAction.Gun == W
+            && L.BreakAction.BeltPath != None && L.BreakAction.bBeltEngaged);
+    case "belt_seated":
+        return BoolText(L != None && L.BreakAction != None && L.BreakAction.Gun == W
+            && L.BreakAction.BeltPath != None && L.BreakAction.bBeltSeated);
     // A reload is under way (physical session, magazine out, stock reload) or
     // there is nothing to load: the gun is full or the reserve is empty.
     case "ready_to_load":
@@ -1143,10 +1749,12 @@ function string Probe(string Key)
     case "needs_cycle": return BoolText(L != None && L.ManualAction != None && L.ManualAction.Gun == W && L.ManualAction.bNeedsPump);
     case "needs_pump": return BoolText(L != None && L.Pump != None && L.Pump.Gun == W && L.Pump.bNeedsPump);
     case "pump_pull": return (L != None && L.Pump != None && L.Pump.Gun == W) ? string(L.Pump.Pull / FMax(L.Pump.Travel, 0.001)) : "none";
-    // The crossbow's cocking (R32): -1 pump back, string loose; 0 forward on
-    // the string; 1 cocked. "none" for any other gun.
+    // The crossbows' string (R63): 0 forward, rising to 1 (cocked) as the
+    // guided bolt is pushed home. "none" for any other gun.
     case "cock": return (W != None && class'VRCrossbowCocking'.static.Supported(W) && R != None)
         ? string(R.CrossbowCockProgress) : "none";
+    // The insert guide (VRReloadInsertGuide) for an insert that never captures.
+    case "guide": return GuideText(W);
     case "pump_engaged": return BoolText(L != None && L.Pump != None && L.Pump.Gun == W && L.Pump.bEngaged);
     case "family":
         Field2 = class'ReplayCatalog'.static.Row(0, B, W.Class);
@@ -1205,19 +1813,33 @@ function bool Compare(string Value, string Op, string Expected)
 
 function Note(int Line, string Text)
 {
-    `log("KF2VR_SCRIPT line=" $ Line @ "t=" $ (WorldInfo.RealTimeSeconds - SpawnedAt) @ Text);
+    Say("line=" $ Line @ "t=" $ (WorldInfo.RealTimeSeconds - SpawnedAt) @ Text);
+}
+
+// Every KF2VR_SCRIPT log line; a live session also gets it over the link.
+function Say(string Text)
+{
+    `log("KF2VR_SCRIPT" @ Text);
+    if (Link != None) Link.Say("NOTE" @ Text);
 }
 
 function string PoseText()
 {
     local int H;
     local string S, Side;
+    local KFWeapon W;
+    local vector At;
+    local quat Q;
     for (H = 0; H < 2; ++H)
     {
         Side = H == 0 ? "L" : "R";
         S @= Side $ "goal=" $ Wrist[H] @ Side $ "wrist=" $ B.Hands[H].Position @ Side $ "held=" $ Probe(Side $ ".held");
+        // A held melee weapon's head centre (R.blade), to read the blade's
+        // direction from the wrist in a pose.
+        W = Gun(H);
+        if (W != None && Held(H) != None && BladeCentre(Held(H).Presenter, W, At, Q)) S @= Side $ "blade=" $ At;
     }
-    return S @ "head=" $ B.HeadPosition @ "headRot=" $ B.NativeHeadRotation;
+    return S @ "head=" $ B.HeadPosition @ "headRot=" $ B.NativeHeadRotation @ "camera=" $ (CameraMode == "" ? "eye" : CameraMode);
 }
 
 function Shot(int Line, string EventName, bool bPose)
@@ -1237,6 +1859,7 @@ function Shot(int Line, string EventName, bool bPose)
     `log("KF2VR_REPLAY_CAPTURE caseIndex=" $ Page @ "index=" $ Index @ "name=" $ CaptureName
         @ "event=" $ EventName @ "time=" $ WorldInfo.RealTimeSeconds
         @ "eventTime=" $ WorldInfo.RealTimeSeconds @ "deferred=False");
+    if (Link != None) Link.Say("CAPTURE name=" $ CaptureName @ "event=" $ EventName);
     PC.ConsoleCommand("bugscreenshot " $ CaptureName);
     LastCaptureAt = WorldInfo.RealTimeSeconds;
 }
@@ -1246,14 +1869,18 @@ function Verdict(int Line, string Kind, string ProbeName, string Value, string O
     ++Checks;
     if (!Passed) ++Failures;
     Note(Line, "check=" $ Kind @ "probe=" $ ProbeName @ "value=" $ Value @ "op=" $ Op @ "expected=" $ Expected @ "passed=" $ BoolText(Passed));
-    if (!Passed) PendingShots.AddItem("fail-line" $ Line);
+    if (!Passed && FailShotKeys.Find(Line $ ":" $ Kind $ ":" $ ProbeName) == INDEX_NONE)
+    {
+        FailShotKeys.AddItem(Line $ ":" $ Kind $ ":" $ ProbeName);
+        PendingShots.AddItem("fail-line" $ Line);
+    }
 }
 
 // Closes the running case with its own verdict.
 function EndCase(string Reason)
 {
     if (CaseNumber == 0) return;
-    `log("KF2VR_SCRIPT case-end n=" $ CaseNumber @ "label=" $ CaseLabel @ "reason=" $ Reason
+    Say("case-end n=" $ CaseNumber @ "label=" $ CaseLabel @ "reason=" $ Reason
         @ "passed=" $ BoolText(Failures == CaseFailures && Reason == "end")
         @ "checks=" $ (Checks - CaseChecks) @ "failures=" $ (Failures - CaseFailures));
     CaseNumber = 0;
@@ -1261,15 +1888,21 @@ function EndCase(string Reason)
 
 // A case that cannot continue (a timed-out wait, a refused draw) skips to the
 // next case op rather than ending the whole session.
+// In a live session the failed statement's remaining ops are dropped instead
+// and the runner waits for the tester; before it, a following `live` op is
+// where an aborted script continues.
 function AbortCase(string Reason)
 {
     local int I;
-    if (CaseNumber == 0) { Finish(Reason); return; }
+    local bool bCase;
+    if (bLive) { Note(0, "live-abort reason=" $ Reason); LiveDrop(Cursor + 1, Reason); return; }
+    bCase = CaseNumber != 0;
     ++Failures;
-    EndCase(Reason);
+    if (bCase) EndCase(Reason);
     for (I = Cursor + 1; I < Ops.Length; ++I)
-        if (Verb(Ops[I]) == "case") { Cursor = I - 1; return; }
-    Finish("end-after-abort");
+        if (Verb(Ops[I]) == "case" || Verb(Ops[I]) == "live") { Cursor = I - 1; return; }
+    if (!bCase) --Failures;   // Finish's own reason fails the run
+    Finish(bCase ? "end-after-abort" : Reason);
 }
 
 // What a finished case left behind that would contaminate the next one, or "".
@@ -1307,7 +1940,7 @@ function bool StartCase(string Op, float Elapsed)
         if (Dirty != "" && Elapsed < 2.0) return false;
         if (Dirty != "")
         {
-            `log("KF2VR_SCRIPT case-dirty after=" $ LastCase @ "before=" $ Field(Op, "n") @ "left=" $ Dirty);
+            Say("case-dirty after=" $ LastCase @ "before=" $ Field(Op, "n") @ "left=" $ Dirty);
             Finish("dirty-before-case-" $ Field(Op, "n"));
             return true;
         }
@@ -1322,6 +1955,8 @@ function bool StartCase(string Op, float Elapsed)
         if (B.HandInventory.Input.IsSelectorOpen(H)) B.HandInventory.Input.CloseSelector(H);
     }
     TriggerMask = 0; GripMask = 0; Head = rot(0,0,0); HeadFrom = Head; HeadTo = Head; HeadDuration = 0;
+    RestoreCamera();
+    JointPending = 0;
     Watches.Length = 0; PendingShots.Length = 0;
     SnapNames.Length = 0; SnapValues.Length = 0;
     Ledgers[0].bOpen = false; Ledgers[1].bOpen = false; Ledgers[0].Gun = None; Ledgers[1].Gun = None;
@@ -1347,8 +1982,8 @@ function PlaceAtStart()
     local vector Before, Shift;
     local int H;
     local array<string> Parts;
-    local vector At;
-    local rotator View;
+    local vector At, Eye;
+    local rotator View, Turn;
     if (B.Human == None || B.PC == None || StartSpot == "keep") return;
     if (StartSpot == "" || StartSpot == "first")
     {
@@ -1370,12 +2005,24 @@ function PlaceAtStart()
     // Carry every stored hand goal with the pawn: native drops a goal more
     // than 250 UU from the eye.
     Shift = B.Human.Location - Before;
+    // The eye, head and body frame are the native side's, published once a
+    // frame: until its next update they still read the old spawn and facing.
+    // Its body frame takes the view's yaw when the run reports ready (the
+    // first placement), so turn the stored goals with it, and carry what this
+    // tick still reads (a case's ready pose is built from them) to where the
+    // next update puts it. Later placements keep that body yaw: Turn is zero.
+    Turn.Yaw = NormalizeRotAxis(View.Yaw - B.BodyRotation.Yaw);
+    Eye = B.HeadPosition + Shift;
     for (H = 0; H < 2; ++H)
     {
-        Wrist[H] += Shift;
+        Wrist[H] = Eye + QuatRotateVector(QuatFromRotator(Turn), Wrist[H] + Shift - Eye);
+        WristRotation[H].Yaw += Turn.Yaw;
         Motion[H].From += Shift;
         Motion[H].LockedAt += Shift;
     }
+    B.HeadPosition = Eye;
+    B.NativeHeadRotation.Yaw += Turn.Yaw;
+    B.BodyRotation.Yaw = View.Yaw;
     CarryFrom = B.Human.Location;
     B.ReloadCaseLeftPosition = Wrist[0]; B.ReloadCaseRightPosition = Wrist[1];
     B.PC.SetRotation(View);
@@ -1390,7 +2037,9 @@ function bool BeginCase(string Op)
     CaseStall = float(Field(Op, "stall", "25"));
     StallSince = WorldInfo.RealTimeSeconds; StallState = "";
     CaseFailures = Failures; CaseChecks = Checks;
-    `log("KF2VR_SCRIPT case n=" $ CaseNumber @ "label=" $ CaseLabel @ "weapon=" $ Field(Op, "weapon", "-"));
+    FailShotKeys.Length = 0;
+    CaseWeapon = Field(Op, "weapon", "-");
+    Say("case n=" $ CaseNumber @ "label=" $ CaseLabel @ "weapon=" $ CaseWeapon);
     return true;
 }
 
@@ -1400,11 +2049,12 @@ function Finish(string Reason)
     if (bDone) return;
     EndCase(Reason);
     bDone = true;
+    RestoreCamera();
     for (H = 0; H < 2; ++H) Motion[H].Kind = 0;
     B.ReloadCaseTriggerMask = 0; B.ReloadCaseGripMask = 0;
     B.ReloadCaseLeftButtons = 0; B.ReloadCaseRightButtons = 0;
     B.ReloadCaseEnabled = -1;
-    `log("KF2VR_SCRIPT phase=complete passed=" $ BoolText(Failures == 0 && Reason == "end") @ "reason=" $ Reason
+    Say("phase=complete passed=" $ BoolText(Failures == 0 && Reason == "end") @ "reason=" $ Reason
         @ "checks=" $ Checks @ "failures=" $ Failures @ "captures=" $ CaptureCount);
     if (Demo != None && Demo.DemoController != None) Demo.DemoController.ConsoleCommand("quit");
 }
@@ -1416,7 +2066,7 @@ function bool Waiting(string Reason)
 {
     if (Reason != SetupBlocker)
     {
-        `log("KF2VR_SCRIPT phase=waiting for=" $ Reason @ "t=" $ (WorldInfo.RealTimeSeconds - SpawnedAt));
+        Say("phase=waiting for=" $ Reason @ "t=" $ (WorldInfo.RealTimeSeconds - SpawnedAt));
         if (B != None && Demo != None && Demo.DemoController != None) Shot(0, "waiting", false);
     }
     SetupBlocker = Reason;
@@ -1439,7 +2089,7 @@ function bool Setup()
     if (!bStartupShellClosed && B.MenuSession() != None && B.MenuSession().NativeShellActive != 0 && B.MenuSession().LivingView())
     {
         B.MenuSession().ToggleMenu(); bStartupShellClosed = true;
-        `log("KF2VR_SCRIPT phase=setup action=close-startup-shell");
+        Say("phase=setup action=close-startup-shell");
         return false;
     }
     if (!B.HandInventory.Input.ContextValid())
@@ -1460,7 +2110,7 @@ function bool Setup()
     B.NativeReplayReady = 1;
     bInputEnabled = true;
     LoopCounts.Length = Ops.Length;
-    `log("KF2VR_SCRIPT phase=ready ops=" $ Ops.Length @ "autoshot=" $ BoolText(bAutoShot));
+    Say("phase=ready ops=" $ Ops.Length @ "autoshot=" $ BoolText(bAutoShot));
     return true;
 }
 
@@ -1485,6 +2135,7 @@ function StartMotion(string Op)
     M.Started = WorldInfo.RealTimeSeconds; M.Duration = FMax(0.0, float(Field(Op, "over", "0")));
     M.Speed = float(Field(Op, "speed", "60")); M.Tolerance = float(Field(Op, "tol", "1.5"));
     M.Deadline = M.Started + float(Field(Op, "timeout", "8"));
+    M.bHipStep = (Left(M.Anchor, 7) == "reload." || Left(M.Point, 7) == "reload.") && CurrentStep() == "hip";
     if (Verb(Op) == "pose") M.Kind = 1;
     else if (Verb(Op) == "move") M.Kind = 2;
     else if (Verb(Op) == "nudge") M.Kind = 3;
@@ -1529,6 +2180,8 @@ function bool StepMotion(int H, float DT)
         if (Alpha >= 1) { Motion[H].Kind = 0; return true; }
         return false;
     }
+    if (Motion[H].bHipStep && CurrentStep() != "hip")
+    { Note(Motion[H].Line, "anchor=" $ Motion[H].Anchor @ "ended=step-changed"); Motion[H].Kind = 0; return true; }
     if (Motion[H].bLocked) { At = Motion[H].LockedAt; Q = Motion[H].LockedQ; }
     else if (!Target(Motion[H], At, Q))
     {
@@ -1606,17 +2259,12 @@ function bool WalkTo(string Op, float Elapsed)
     if (Distance <= float(Field(Op, "tol", "20")))
     {
         Stick[MoveHand] = vect(0,0,0);
-        // face: turn with the other stick until the view points at the target.
+        // face: turn until the view points at the target.
         if (Field(Op, "face") == "1")
         {
-            Forward = vector(B.PC.Rotation); Forward.Z = 0; Forward = Normal(Forward);
-            Right = Forward cross vect(0,0,-1);
             Delta = FaceAt - B.Human.Location; Delta.Z = 0;
             Distance = VSize(Delta);
-            Delta = Normal(Delta);
-            if (Distance > 1 && (Delta dot Forward) < 0.985 && Elapsed <= float(Field(Op, "timeout", "8")))
-            { Stick[1 - MoveHand].X = (Delta dot Right) >= 0 ? 0.6 : -0.6; return false; }
-            Stick[1 - MoveHand] = vect(0,0,0);
+            if (!FaceToward(Delta, MoveHand, Elapsed <= float(Field(Op, "timeout", "8")))) return false;
             // Facing means level too: the head goal keeps any earlier pitch,
             // and the view follows it (a view left pitched at the floor).
             Head.Pitch = 0; Head.Roll = 0; HeadFrom = Head; HeadTo = Head; HeadDuration = 0;
@@ -1664,6 +2312,51 @@ function bool WalkTo(string Op, float Elapsed)
     return false;
 }
 
+// The active reload's insert guide, from the fields its last Update left
+// (gun-local UU): whether it captured, its slide progress, and for the last
+// sample the depth left to the seat along the entry-to-seat axis, the miss
+// sideways from that axis, the distance to the entry point, the entry path's
+// length, and the axis match of the last uncaptured sample's rotation with
+// the entry orientation against CaptureDot (the guide also accepts the
+// authored path rotation, which is not kept). "none" without a reload.
+function string GuideText(KFWeapon W)
+{
+    local VRInteractiveReload I;
+    local VRReloadInsertGuide G;
+    local vector Entry, Axis, Offset;
+    local quat EntryQ;
+    local float Remaining;
+    I = Reloads();
+    if (W == None || I == None || !I.bActive || I.Gun != W || I.InsertGuide == None) return "none";
+    G = I.InsertGuide;
+    Entry = I.bStraightEntry ? I.StraightEntryLocal : I.EntryLocal;
+    EntryQ = I.bStraightEntry ? I.StraightEntryLocalQ : I.EntryLocalQ;
+    Axis = I.SeatLocal - Entry;
+    if (VSize(Axis) < 0.1) return "captured=" $ BoolText(G.bCaptured) @ "axis=none";
+    Offset = I.SeatLocal - G.LastPosition;
+    Remaining = Offset dot Normal(Axis);
+    return "captured=" $ BoolText(G.bCaptured) @ "progress=" $ G.Progress
+        @ "remaining=" $ Remaining @ "lateral=" $ VSize(Offset - Normal(Axis) * Remaining)
+        @ "to_entry=" $ VSize(G.LastPosition - Entry) @ "entry_len=" $ VSize(Axis)
+        @ "match=" $ G.RotationMatch(G.ApproachRotation, EntryQ) @ "capture_dot=" $ G.CaptureDot
+        @ "axial=" $ BoolText(G.bAxialOnly) @ "swept=" $ BoolText(G.bSweptCapture)
+        @ "straight=" $ BoolText(I.bStraightEntry);
+}
+
+// One step of goto's face: turn with the turn stick (the hand that does not
+// walk) until the view points along Delta (2D). True once facing, or when
+// bInTime is false (the op's timeout has passed).
+function bool FaceToward(vector Delta, int MoveHand, bool bInTime)
+{
+    local vector Forward, Right;
+    Forward = vector(B.PC.Rotation); Forward.Z = 0; Forward = Normal(Forward);
+    Right = Forward cross vect(0,0,-1);
+    if (VSize(Delta) > 1 && (Normal(Delta) dot Forward) < 0.985 && bInTime)
+    { Stick[1 - MoveHand].X = (Normal(Delta) dot Right) >= 0 ? 0.6 : -0.6; return false; }
+    Stick[1 - MoveHand] = vect(0,0,0);
+    return true;
+}
+
 function SetButton(int H, string Button, bool bDown)
 {
     local int Bit, Mask;
@@ -1680,6 +2373,272 @@ function SetButton(int H, string Button, bool bDown)
     Buttons[H] = bDown ? (Buttons[H] | Mask) : (Buttons[H] & ~Mask);
 }
 
+// ---- an outside camera ------------------------------------------------------
+// camera front|side|left|behind|over [dist D] [body]: the flat view (and so
+// every capture) watches the player from outside, aimed at the chest, until
+// `camera eye`. Tracking is untouched: the view target is a camera actor that
+// follows the body. The hands and guns the player sees (owner-only meshes)
+// are made visible to it, and the stock third-person body is hidden unless
+// `body` asks for it, since only the first-person rig follows tracking.
+function ShowForCamera(PrimitiveComponent C, bool bBody)
+{
+    if (C == None) return;
+    if (C.bOnlyOwnerSee && CameraShown.Find(C) < 0) { CameraShown.AddItem(C); C.SetOnlyOwnerSee(false); }
+    if (!bBody && C.bOwnerNoSee && !C.HiddenGame && CameraHidden.Find(C) < 0) { CameraHidden.AddItem(C); C.SetHidden(true); }
+}
+
+function PlaceCamera()
+{
+    local vector X, Y, Z, Focus, At, HitAt, HitNormal;
+    if (ShotCamera == None || B.Human == None) return;
+    GetAxes(B.BodyYaw(), X, Y, Z);
+    Focus = B.HeadPosition - Z * 30;
+    switch (CameraMode)
+    {
+    case "front": At = Focus + X * CameraDistance + Z * 15; break;
+    case "side": At = Focus + Y * CameraDistance + Z * 10; break;
+    case "left": At = Focus - Y * CameraDistance + Z * 10; break;
+    case "behind": At = Focus - X * CameraDistance + Z * 30; break;
+    case "over": At = Focus + Z * CameraDistance + X * 25; break;
+    }
+    // Stay in front of a wall or snow bank between the body and the spot.
+    if (Trace(HitAt, HitNormal, At, Focus, false, vect(4,4,4)) != None)
+        At = Focus + Normal(At - Focus) * FMax(VSize(HitAt - Focus) - 8, 20);
+    ShotCamera.SetLocation(At);
+    ShotCamera.SetRotation(rotator(Focus - At));
+}
+
+function RestoreCamera()
+{
+    local int I;
+    for (I = 0; I < CameraShown.Length; ++I) if (CameraShown[I] != None) CameraShown[I].SetOnlyOwnerSee(true);
+    for (I = 0; I < CameraHidden.Length; ++I) if (CameraHidden[I] != None) CameraHidden[I].SetHidden(false);
+    CameraShown.Length = 0; CameraHidden.Length = 0;
+    if (CameraMode != "" && B != None && B.PC != None && B.PC.Pawn != None) B.PC.SetViewTarget(B.PC.Pawn);
+    CameraMode = "";
+}
+
+function bool CameraOp(string Op)
+{
+    local Actor A;
+    local PrimitiveComponent C;
+    local int H;
+    local bool bBody;
+    if (Field(Op, "mode") == "eye")
+    {
+        RestoreCamera();
+        Note(LineOf(Op), "camera eye target=" $ (B.PC.GetViewTarget() != None ? string(B.PC.GetViewTarget().Name) : "none"));
+        return true;
+    }
+    if (ShotCamera == None)
+    {
+        ShotCamera = Spawn(class'DynamicCameraActor');
+        if (ShotCamera == None) { Verdict(LineOf(Op), "camera", Field(Op, "mode"), "none", "==", "a camera", false); return true; }
+        ShotCamera.bConstrainAspectRatio = false;
+        ShotCamera.FOVAngle = 70;
+    }
+    CameraMode = Field(Op, "mode"); CameraDistance = float(Field(Op, "dist", "150"));
+    bBody = Field(Op, "body") == "1";
+    // What the eye sees of the hands and guns, from wherever the camera is.
+    foreach B.Human.AllOwnedComponents(class'PrimitiveComponent', C) ShowForCamera(C, bBody);
+    for (H = 0; H < 2; ++H)
+        if (Gun(H) != None) foreach Gun(H).AllOwnedComponents(class'PrimitiveComponent', C) ShowForCamera(C, bBody);
+    foreach B.ChildActors(class'Actor', A)
+        foreach A.AllOwnedComponents(class'PrimitiveComponent', C) ShowForCamera(C, bBody);
+    foreach B.AllOwnedComponents(class'PrimitiveComponent', C) ShowForCamera(C, bBody);
+    PlaceCamera();
+    B.PC.SetViewTarget(ShotCamera);
+    Note(LineOf(Op), "camera mode=" $ CameraMode @ "dist=" $ CameraDistance @ "shown=" $ CameraShown.Length
+        @ "hidden=" $ CameraHidden.Length @ "target=" $ (B.PC.GetViewTarget() != None ? string(B.PC.GetViewTarget().Name) : "none"));
+    return true;
+}
+
+// ---- the weapon wheel -------------------------------------------------------
+// select <hand> <weapon> and wheel <hand> open|close drive the hand's weapon
+// wheel (VRHandSelector, run by VRDualHandInput.UpdateUpperButtons) through
+// the same input a player gives it: hold Y/B until it opens, move the hand
+// toward the entry's sector (the wheel's cursor is the hand's travel from
+// where it opened), then release and squeeze the grip to confirm. Nothing is
+// granted: the wheel lists what the player carries. The one shortcut is
+// closing a wheel left open after a refusal, which a player would do by hand.
+
+function VRHandSelector Wheel(int H)
+{
+    if (H < 0 || B.HandInventory == None || B.HandInventory.Input == None) return None;
+    return B.HandInventory.Input.Selectors[H];
+}
+
+function string WheelItems(int H)
+{
+    local VRHandSelector S;
+    local KFWeapon W;
+    local string Out;
+    local int I;
+    S = Wheel(H);
+    if (S == None) return "none";
+    S.RefreshChoices();
+    for (I = 0; I < S.Choices.Length; ++I)
+    {
+        W = S.Choices[I].Item;
+        Out $= (I > 0 ? "," : "") $ (I / S.WeaponsPerPage() + 1) $ ":" $ (W == None ? "none" : string(W.Class.Name))
+            $ (S.Choices[I].StockMember != 0 ? "#" $ S.Choices[I].StockMember : "")
+            $ ((W != None && !S.Available(W, H)) ? "(occupied)" : "");
+    }
+    return Out == "" ? "empty" : Out;
+}
+
+// The row on the wheel's current page for a pick: 0 for the open hand, a
+// weapon row by exact class, then a pair member or single of the named dual,
+// then by label; -1 when it is not on this page.
+function int WheelRowFor(VRHandSelector S, int H, string Pick)
+{
+    local int Row;
+    local KFWeapon W;
+    local VRWeaponPair Pair;
+    local string Wanted;
+    if (Pick ~= "hand") return 0;
+    Wanted = Pick;
+    while (InStr(Wanted, ".") >= 0) Wanted = Mid(Wanted, InStr(Wanted, ".") + 1);
+    for (Row = 1; Row <= S.WeaponRows(); ++Row)
+    {
+        W = S.RowItem(Row);
+        if (W != None && string(W.Class.Name) ~= Wanted) return Row;
+    }
+    for (Row = 1; Row <= S.WeaponRows(); ++Row)
+    {
+        W = S.RowItem(Row);
+        if (W == None) continue;
+        Pair = class'VRWeaponPair'.static.ForMember(W);
+        if (Pair != None && Pair.StockItem != None && string(Pair.StockItem.Class.Name) ~= Wanted) return Row;
+        if (KFWeap_DualBase(W) != None && KFWeap_DualBase(W).SingleClass != None
+            && string(KFWeap_DualBase(W).SingleClass.Name) ~= Wanted) return Row;
+    }
+    for (Row = 1; Row <= S.WeaponRows(); ++Row)
+        if (InStr(Caps(S.RowLabel(H, Row)), Caps(Wanted)) >= 0) return Row;
+    return -1;
+}
+
+function bool WheelFail(string Op, int H, string Why, string Detail)
+{
+    local bool bExpected;
+    bExpected = Field(Op, "refused") == "1";
+    Note(LineOf(Op), "wheel-" $ Why @ "hand=" $ H @ "pick=" $ Field(Op, "pick") @ "msg=" $ Probe((H == 0 ? "L" : "R") $ ".wheel_msg")
+        @ Detail @ "items=" $ WheelItems(H));
+    Verdict(LineOf(Op), "select", Field(Op, "pick"), Why $ ":" $ Probe((H == 0 ? "L" : "R") $ ".wheel_msg"), "==",
+        bExpected ? "refused" : "drawn", bExpected && Why == "refused");
+    SetButton(H, "secondary", false);
+    if (B.HandInventory.Input.IsSelectorOpen(H)) B.HandInventory.Input.CloseSelector(H);
+    return true;
+}
+
+function bool SelectOp(string Op)
+{
+    local VRDualHandInput In;
+    local VRHandSelector S;
+    local VRWeaponRuntime R;
+    local int H;
+    local float Now, Angle, Alpha;
+    local string Act, Pick;
+    H = HandOf(Field(Op, "hand"));
+    In = B.HandInventory.Input;
+    Act = Field(Op, "act", "pick"); Pick = Field(Op, "pick");
+    Now = WorldInfo.RealTimeSeconds;
+    if (!bOpStarted) { WheelPhase = 0; WheelFlips = 0; WheelPhaseAt = Now; Motion[H].Kind = 0; }
+    S = Wheel(H);
+    if (WheelPhase >= 2 && WheelPhase <= 5 && (S == None || !In.IsSelectorOpen(H)) && !(WheelPhase == 5 && S != None))
+        return WheelFail(Op, H, "closed-early", "phase=" $ WheelPhase);
+    switch (WheelPhase)
+    {
+    case 0:
+        if (Act == "close")
+        {
+            if (!In.IsSelectorOpen(H)) { Note(LineOf(Op), "wheel closed already hand=" $ H); return true; }
+            // A Y/B press on an open wheel shuts it.
+            SetButton(H, "secondary", true); WheelPhase = 10; WheelPhaseAt = Now; return false;
+        }
+        if (In.IsSelectorOpen(H) && S != None) { WheelPhase = 2; WheelPhaseAt = Now - 1; return false; }
+        SetButton(H, "secondary", true); WheelPhase = 1; WheelPhaseAt = Now;
+        return false;
+    case 1:   // held Y/B opens the wheel after UPPER_HOLD_SECONDS
+        S = Wheel(H);
+        if (In.IsSelectorOpen(H) && S != None)
+        {
+            SetButton(H, "secondary", false);
+            Note(LineOf(Op), "wheel open hand=" $ H @ "after=" $ (Now - WheelPhaseAt) @ "entries=" $ S.Choices.Length @ "pages=" $ S.PageCount());
+            if (Act == "open") return true;
+            WheelPhase = 2; WheelPhaseAt = Now; return false;
+        }
+        if (Now - WheelPhaseAt < 1.5) return false;
+        return WheelFail(Op, H, "did-not-open", "reload_owns_hand=" $ (Reloads() != None && Reloads().OwnsHand(H))
+            @ "world_grab=" $ B.HandInventory.HasWorldGrab(H) @ "valid=" $ B.NativeValidMask);
+    case 2:   // aim the hand at the entry's sector, from where the wheel opened
+        if (Now - WheelPhaseAt < 0.15) return false;
+        WheelRow = WheelRowFor(S, H, Pick);
+        if (WheelRow < 0 && S.Paged() && WheelFlips < S.PageCount()) WheelRow = class'VRHandSelector'.const.NextPageRow;
+        if (WheelRow < 0) return WheelFail(Op, H, "not-listed", "page=" $ (S.Page + 1) $ "/" $ S.PageCount());
+        WheelPage = S.Page;
+        Angle = S.RowSector(WheelRow) * 2 * Pi / S.RadialCount();
+        // ReadSelection: the sector is Atan2(right, up) of the cursor, the
+        // hand's travel since the wheel opened; 20 UU clears its dead zone.
+        WheelDelta = B.Human.Location + S.OpeningHandPosition + (S.AxisRight * Sin(Angle) + S.AxisUp * Cos(Angle)) * 20
+            - B.Hands[H].Position;
+        WheelFrom = Wrist[H];
+        WheelPhase = 3; WheelPhaseAt = Now;
+        return false;
+    case 3:
+        Alpha = FMin(1.0, (Now - WheelPhaseAt) / 0.25);
+        Wrist[H] = WheelFrom + WheelDelta * Alpha * Alpha * (3 - 2 * Alpha);
+        if (Alpha < 1) return false;
+        if (S.HoverHand == H && S.HoverRow == WheelRow) { SetButton(H, "grip", false); WheelPhase = 4; WheelPhaseAt = Now; return false; }
+        if (Now - WheelPhaseAt < 1.75) return false;
+        return WheelFail(Op, H, "no-hover", "hover=" $ S.HoverRow @ "want=" $ WheelRow @ "cursor=" $ S.CursorX $ "," $ S.CursorY);
+    case 4:   // an open grip arms the confirm (VRDualHandInput bSelectorTriggerArmed)
+        if (Now - WheelPhaseAt < 0.15) return false;
+        SetButton(H, "grip", true); WheelPhase = 5; WheelPhaseAt = Now;
+        return false;
+    case 5:   // the squeeze commits: the wheel closes, turns its page, or says no
+        if (WheelRow == class'VRHandSelector'.const.NextPageRow)
+        {
+            if (S.Page == WheelPage && Now - WheelPhaseAt < 0.5) return false;
+            ++WheelFlips;
+            Note(LineOf(Op), "wheel page=" $ (S.Page + 1) $ "/" $ S.PageCount());
+            WheelPhase = 2; WheelPhaseAt = Now;
+            return false;
+        }
+        if (!In.IsSelectorOpen(H))
+        {
+            Note(LineOf(Op), "wheel committed hand=" $ H @ "pick=" $ Pick);
+            WheelPhase = 6; WheelPhaseAt = Now;
+            return false;
+        }
+        if (Now - WheelPhaseAt < 0.4) return false;
+        return WheelFail(Op, H, "refused", "");
+    case 6:   // the drawn gun settles in the hand (or the hand is empty)
+        R = Held(H);
+        if (Pick ~= "hand" ? R == None
+            : (R != None && R.IsCurrent() && R.Item != None && R.Item.IsInState('Active') && R.NativePoseReady == 1
+               && B.HandInventory.PendingPairConversion == None && B.HandInventory.TransferItem == None))
+        {
+            if (Field(Op, "refused") == "1") Verdict(LineOf(Op), "select", Pick, "drawn", "==", "refused", false);
+            else Note(LineOf(Op), "selected hand=" $ H @ "held=" $ Probe((H == 0 ? "L" : "R") $ ".held"));
+            return true;
+        }
+        if (Now - WheelPhaseAt < float(Field(Op, "timeout", "10"))) return false;
+        Verdict(LineOf(Op), "select", Pick, DrawState(H), "==", "drawn", false);
+        return true;
+    case 10:
+        if (Now - WheelPhaseAt < 0.1) return false;
+        SetButton(H, "secondary", false); WheelPhase = 11; WheelPhaseAt = Now;
+        return false;
+    case 11:
+        if (!In.IsSelectorOpen(H)) { Note(LineOf(Op), "wheel closed hand=" $ H); return true; }
+        if (Now - WheelPhaseAt < 1.0) return false;
+        Verdict(LineOf(Op), "wheel", "close", "open", "==", "closed", false);
+        return true;
+    }
+    return true;
+}
+
 function bool Draw(string Op)
 {
     local class<KFWeapon> C;
@@ -1689,8 +2648,17 @@ function bool Draw(string Op)
     local int H;
     H = HandOf(Field(Op, "hand"));
     C = Registry.FindWeapon(Field(Op, "weapon"));
+    // Stock duals have no authored profile of their own (their members do),
+    // so the registry lists only the singles. Load the stock class directly
+    // (any KFWeap_DualBase, KFWeap_Pistol_ChiappaRhinoDual included).
+    if (C == None)
+    {
+        C = class<KFWeapon>(DynamicLoadObject(Field(Op, "weapon"), class'Class', true));
+        if (C != None && !ClassIsChildOf(C, class'KFWeap_DualBase')) C = None;
+    }
     Manager = KFInventoryManager(B.Human.InvManager);
-    if (C == None || Manager == None || H < 0) return false;
+    if (C == None || Manager == None || H < 0)
+    { Note(0, "draw-refused step=lookup weapon=" $ Field(Op, "weapon")); return false; }
     // Every draw is a fresh gun at its default load: an earlier case (or the
     // starter loadout) must not hand its ammo or mechanism state forward.
     for (I = Manager.InventoryChain; I != None; I = I.Inventory)
@@ -1705,12 +2673,20 @@ function bool Draw(string Op)
     Manager.MaxCarryBlocks = Max(Manager.MaxCarryBlocks, Manager.CurrentCarryBlocks + C.static.GetDefaultModifiedWeightValue(0));
     W = KFWeapon(Manager.CreateInventory(C, true));
     if (W != None) Granted.AddItem(W);
-    if (W == None) return false;
+    // Say which step refused, so a refused draw is not a guess (#221).
+    if (W == None) { Note(0, "draw-refused step=create weapon=" $ C.Name); return false; }
     B.HandInventory.ReleaseHand(H);
     // A drawn gun is held the way a player holds it: grip down on that hand
     // (hold-to-grip scripts release it explicitly to drop or throw).
     SetButton(H, "grip", true);
-    return B.HandInventory.Draw(H, W);
+    // A dual fills both hands once its pair is made. With hold-to-grip the
+    // second member lands in the other hand and falls straight out of an open
+    // one: hold that grip too, as a player taking both guns would.
+    if (!B.bToggleGrip && KFWeap_DualBase(W) != None) SetButton(1 - H, "grip", true);
+    if (B.HandInventory.Draw(H, W)) return true;
+    Note(0, "draw-refused step=inventory weapon=" $ C.Name @ "pendingPair=" $ (B.HandInventory.PendingPairConversion != None)
+        @ "supported=" $ B.Supported(W) @ "loaded=" $ W.WeaponContentLoaded @ "state=" $ W.GetStateName());
+    return false;
 }
 
 function string DrawState(int H)
@@ -1748,6 +2724,7 @@ function bool RunOp(string Op, float DT)
     local vector LookAt;
     local quat LookQ;
     local float Elapsed;
+    local VRWeaponRuntime R;
     V = Verb(Op); Line = LineOf(Op);
     Elapsed = WorldInfo.RealTimeSeconds - OpStarted;
     H = HandOf(Field(Op, "hand"));
@@ -1814,6 +2791,14 @@ function bool RunOp(string Op, float DT)
     case "console": Note(Line, "console=" $ Field(Op, "text")); Demo.DemoController.ConsoleCommand(Field(Op, "text")); return true;
     case "mark": Note(Line, "mark=" $ Field(Op, "name")); return true;
     case "spawn": return SpawnZedOp(Op);
+    case "damage": return DamageOp(Op);
+    case "hitch": return HitchOp(Op);
+    case "select": return SelectOp(Op);
+    case "camera": return CameraOp(Op);
+    case "target": return TargetOp(Op);
+    case "hurt": return HurtZoneOp(Op);
+    case "headshot": return HurtZoneOp(Op);
+    case "attacksides": return AttackSidesOp(Op);
     case "setammo":    // test setup: a hand's magazine and reserve counts, primary and secondary
         W = Gun(HandOf(Field(Op, "hand")));
         if (W == None) { Verdict(Line, "setammo", Field(Op, "hand"), "none", "==", "a gun", false); return true; }
@@ -1823,9 +2808,24 @@ function bool RunOp(string Op, float DT)
         if (Field(Op, "reserve2") != "") W.SpareAmmoCount[1] = int(Field(Op, "reserve2"));
         Note(Line, "setammo ammo=" $ W.AmmoCount[0] $ "+" $ W.SpareAmmoCount[0] @ "ammo2=" $ W.AmmoCount[1] $ "+" $ W.SpareAmmoCount[1]);
         return true;
+    case "opticset": return OpticSetOp(Op);
     case "aim":    // point the hand's controller axis (the gravity grab's aim) at an anchor
         if (!Resolve(Field(Op, "a"), Value3, Unused3)) { Verdict(Line, "anchor", Field(Op, "a"), "unresolved", "==", "resolved", false); return true; }
         H = HandOf(Field(Op, "hand"));
+        // `bore`: steer so the held gun's published shot (its runtime's fire
+        // origin and base aim, what the native shot hooks use) points at the
+        // anchor; a pistol's bore sits well below the controller axis.
+        R = Held(H);
+        if (Field(Op, "bore") == "1")
+        {
+            if (R == None || R.Item == None)
+            { Verdict(Line, "aim", "bore", "none", "==", "a held gun", false); return true; }
+            WristRotation[H] = QuatToRotator(QuatProduct(QuatFindBetween(vector(R.AimBaseRotation),
+                Normal(Value3 - R.FireLocation)), QuatFromRotator(WristRotation[H])));
+            if (Elapsed < 0.5) return false;
+            Note(Line, "aim bore dot=" $ (Normal(Value3 - R.FireLocation) dot vector(R.AimBaseRotation)));
+            return true;
+        }
         // The bridge's controller rotation differs from the wrist goal by the
         // calibrated grip/aim offset: measure that live and steer the goal so
         // the controller axis (VRGravityPull.Aim) from the palm hits the target.
@@ -1844,6 +2844,7 @@ function bool RunOp(string Op, float DT)
         Note(Line, "dosh added=" $ Field(Op, "n") @ "now=" $ Probe("dosh"));
         return true;
     case "perk": return PerkOp(Op);
+    case "skill": return SkillOp(Op);
     case "buy": return BuyOp(Op);
     case "trader": return TraderOp(Op);
     case "emptyreload": Ledgers[HandOf(Field(Op, "hand"))].bEmptyOk = true; return true;
@@ -1869,7 +2870,9 @@ function bool RunOp(string Op, float DT)
             Verdict(Line, "loop", Field(Op, "probe"), Probe(Field(Op, "probe")), Field(Op, "op"), Field(Op, "v"), false);
             LoopCounts[Cursor] = 0; return true;
         }
-        Cursor = int(Field(Op, "to")) - 1; // the sequencer advances past this op
+        // the sequencer advances past this op; live batches jump relative (back=)
+        if (Field(Op, "back") != "") Cursor -= int(Field(Op, "back")) + 1;
+        else Cursor = int(Field(Op, "to")) - 1;
         return true;
     case "catalog":  // every registered weapon's reload facts, for runner-side selection
         for (H = 0; H < Registry.Weapons.Length; ++H)
@@ -1879,8 +2882,15 @@ function bool RunOp(string Op, float DT)
     case "case": return StartCase(Op, Elapsed);
     case "end":
         // In a session, `end` closes this case; the last one ends the launch.
-        for (H = Cursor + 1; H < Ops.Length; ++H) if (Verb(Ops[H]) == "case") { EndCase("end"); return true; }
+        // A live session keeps running past the script's own end; a live `end` quits.
+        if (!bLive)
+            for (H = Cursor + 1; H < Ops.Length; ++H) if (Verb(Ops[H]) == "case" || Verb(Ops[H]) == "live") { EndCase("end"); return true; }
         Finish("end"); return true;
+    case "live": return LiveOp(Op, Elapsed);
+    case "livedone":   // the end of one live statement batch
+        Note(Line, "live-done id=" $ Field(Op, "id"));
+        if (Link != None) Link.Say("DONE id=" $ Field(Op, "id"));
+        return true;
     }
     Verdict(Line, "op", V, "unknown", "==", "known", false);
     return true;
@@ -1892,6 +2902,12 @@ function string FamilyOf(KFWeapon W)
     Row = class'ReplayCatalog'.static.Row(0, B, W.Class);
     Row = Mid(Row, InStr(Row, "family=") + 7);
     return Left(Row, InStr(Row, " "));
+}
+
+// Items whose primary charge refills by itself, with no reload or reserve.
+function bool SelfRecharging(KFWeapon W)
+{
+    return KFWeap_HealerBase(W) != None || KFWeap_Welder(W) != None;
 }
 
 // Expected end state of a finished reload under the ammunition rules:
@@ -1906,8 +2922,18 @@ function Ledger(int H)
     local KFWeapon W;
     local VRWeaponRuntime R;
     local bool bReloading;
-    local int Kept, Removed, Capacity, Gained, ExpectAmmo, ExpectReserve, Available;
+    local int Kept, Removed, Capacity, Gained, ExpectAmmo, ExpectReserve, Available, Spent, Total;
+    local KFWeapon Other;
     W = Gun(H); R = Held(H);
+    // A weapon change (or an empty hand) mid-reload ends that reload's
+    // ledger unjudged: the counts belong to the gun that left the hand.
+    if (Ledgers[H].bOpen && (W == None || R == None || Ledgers[H].Gun != W))
+    {
+        Note(0, "ledger-void hand=" $ H @ "reason=weapon-change from=" $ (Ledgers[H].Gun != None ? string(Ledgers[H].Gun.Class.Name) : "none")
+            @ "to=" $ (W != None ? string(W.Class.Name) : "none"));
+        Ledgers[H].bOpen = false;
+        if (Ledgers[H].bJoint) { JointPending = 0; Ledgers[0].bJoint = false; Ledgers[1].bJoint = false; }
+    }
     if (W == None || R == None) { Ledgers[H].bOpen = false; Ledgers[H].Gun = None; return; }
     // A stock reload (weapon state Reloading) counts too: one that plays and
     // pays nothing is a defect (#109) whatever drives it.
@@ -1915,8 +2941,10 @@ function Ledger(int H)
     if (!Ledgers[H].bOpen)
     {
         if (!bReloading || Ledgers[H].Gun != W)
-        {   // settled: nothing may add rounds outside a reload; remember the counts
-            if (Ledgers[H].Gun == W && ReserveOf(W) == Ledgers[H].Reserve)
+        {   // settled: nothing may add rounds outside a reload; remember the counts.
+            // The Syringe and the Welder refill their own charge over time
+            // (stock HealRechargePerSecond, RechargeAmmo): not a minted round.
+            if (Ledgers[H].Gun == W && ReserveOf(W) == Ledgers[H].Reserve && !SelfRecharging(W))
             {
                 if (W.AmmoCount[0] > Ledgers[H].Ammo)
                     Verdict(0, "minted", (H == 0 ? "L" : "R") $ ".ammo",
@@ -1934,15 +2962,44 @@ function Ledger(int H)
         // member's load, so its own reload's draw is not counted against this one.
         Ledgers[H].OtherAmmo = PairedOther(W, H) != None ? PairedOther(W, H).AmmoCount[0] : 0;
         Ledgers[H].OutLow = Ledgers[H].Ammo;
+        Ledgers[H].Recovered = 0;
+        Ledgers[H].bWasOut = R.MagazineOut();
         Ledgers[H].bKeep = B.bKeepChamberedRound; Ledgers[H].bLose = B.bLoseReloadAmmo;
         Ledgers[H].bRecover = B.bRecoverMagazineAmmo; Ledgers[H].Family = FamilyOf(W);
+        Ledgers[H].bJoint = false;
+        // The other member of a shared-reserve pair is mid-reload too: neither
+        // reload's reserve can be told apart from the other's, so the pair is
+        // judged as one (what was in both guns and the reserve before either
+        // opened, less what the drops lose).
+        Other = PairedOther(W, H);
+        if (Other != None && Ledgers[1 - H].bOpen && Ledgers[1 - H].Gun == Other && JointPending == 0)
+        {
+            Ledgers[H].bJoint = true; Ledgers[1 - H].bJoint = true;
+            JointBase = Ledgers[1 - H].Ammo + Ledgers[H].Ammo + Ledgers[1 - H].Reserve;
+            JointLost = 0; JointPending = 2;
+        }
         Note(0, "ledger-open hand=" $ H @ "gun=" $ W.Class.Name @ "family=" $ Ledgers[H].Family
             @ "ammo=" $ Ledgers[H].Ammo @ "reserve=" $ Ledgers[H].Reserve
-            @ "keep=" $ Ledgers[H].bKeep @ "lose=" $ Ledgers[H].bLose @ "recover=" $ Ledgers[H].bRecover);
+            @ "keep=" $ Ledgers[H].bKeep @ "lose=" $ Ledgers[H].bLose @ "recover=" $ Ledgers[H].bRecover
+            @ "joint=" $ Ledgers[H].bJoint);
         return;
     }
     // A chamber shot fired while the magazine is out spends the kept round.
-    if (bReloading && R.MagazineOut()) Ledgers[H].OutLow = Min(Ledgers[H].OutLow, W.AmmoCount[0]);
+    if (bReloading && R.MagazineOut())
+    {
+        Ledgers[H].OutLow = Min(Ledgers[H].OutLow, W.AmmoCount[0]);
+        Ledgers[H].bWasOut = true;
+    }
+    // A recovered magazine (floor or gravity grab) carried to this gun brings
+    // its own rounds instead of a fresh one from the reserve; a pouch carry
+    // that replaces it brings a fresh one again.
+    if (bReloading && Reloads() != None && Reloads().bActive && Reloads().Gun == W)
+    {
+        if (Reloads().bRecoveredMagazineSession && Reloads().Recovery != None
+            && Reloads().Recovery.OwnsHand(Reloads().OffHand()))
+            Ledgers[H].Recovered = Reloads().Recovery.Carries[Reloads().OffHand()].Remaining;
+        else if (Reloads().HandMode == 1 && !Reloads().bRecoveredMagazineSession) Ledgers[H].Recovered = 0;
+    }
     if (bReloading) return;
     // The Doshinegun's reserve is the score (VRPouchAmmo.Reserve). A network
     // owner sees the server's debit by PRI replication, a moment after the
@@ -1960,19 +3017,35 @@ function Ledger(int H)
         Verdict(0, "ledger", (H == 0 ? "L" : "R") $ ".rack-only", string(W.AmmoCount[0] + ReserveOf(W)), "<=",
             string(Ledgers[H].Ammo + Ledgers[H].Reserve), W.AmmoCount[0] + ReserveOf(W) <= Ledgers[H].Ammo + Ledgers[H].Reserve);
     }
-    else if (Ledgers[H].Family == "detachable")
+    else if (Ledgers[H].Family == "detachable" || Ledgers[H].bWasOut)
     {
         Kept = (Ledgers[H].bKeep && R.TracksMagazineFeed()) ? Min(Ledgers[H].Ammo, R.ChamberRounds()) : 0;
         Removed = Ledgers[H].Ammo - Kept;
-        Kept = Min(Kept, Ledgers[H].OutLow);
+        Spent = Kept - Min(Kept, Ledgers[H].OutLow);
+        Kept -= Spent;
         Capacity = W.MagazineCapacity[0];
         Available = Ledgers[H].Reserve + (Ledgers[H].bLose ? 0 : Removed);
         ExpectAmmo = Kept + Min(Capacity, Available);
         ExpectReserve = Available - Min(Capacity, Available);
+        if (Ledgers[H].Recovered > 0)
+        {   // the recovered magazine seated with its own rounds; the reserve pays nothing
+            ExpectAmmo = Kept + Ledgers[H].Recovered;
+            ExpectReserve = Available;
+        }
         if (PairedOther(W, H) != None) ExpectReserve -= Max(0, PairedOther(W, H).AmmoCount[0] - Ledgers[H].OtherAmmo);
+        // empty-reload: this reload may also end with nothing seated (a lost
+        // authority reply that expires, #43): the gun keeps only its kept
+        // round and the reserve pays nothing.
+        if (Ledgers[H].bEmptyOk && Ledgers[H].Recovered <= 0 && W.AmmoCount[0] == Kept
+            && ReserveOf(W) == Ledgers[H].Reserve + (Ledgers[H].bLose ? 0 : Removed))
+        {
+            ExpectAmmo = Kept; ExpectReserve = ReserveOf(W);
+            Note(0, "ledger-unseated hand=" $ H @ "ammo=" $ Kept @ "reserve=" $ ExpectReserve);
+        }
         Verdict(0, "ledger", (H == 0 ? "L" : "R") $ ".ammo", string(W.AmmoCount[0]), "==", string(ExpectAmmo),
             W.AmmoCount[0] == ExpectAmmo);
-        Verdict(0, "ledger", (H == 0 ? "L" : "R") $ ".reserve", string(ReserveOf(W)), "==", string(ExpectReserve),
+        if (Ledgers[H].bJoint) JointLost += (Ledgers[H].bLose ? Removed : 0) + Spent;
+        else Verdict(0, "ledger", (H == 0 ? "L" : "R") $ ".reserve", string(ReserveOf(W)), "==", string(ExpectReserve),
             ReserveOf(W) == ExpectReserve);
     }
     else
@@ -1981,10 +3054,23 @@ function Ledger(int H)
         // empty-reload: a deliberate close with nothing loaded (#81) adds nothing.
         if (Gained <= 0 && Ledgers[H].Reserve > 0 && W.AmmoCount[0] < W.MagazineCapacity[0] && !Ledgers[H].bEmptyOk)
             Verdict(0, "ledger", (H == 0 ? "L" : "R") $ ".reload-added", string(Gained), ">", "0", false);
-        Verdict(0, "ledger", (H == 0 ? "L" : "R") $ ".paid", string(Ledgers[H].Reserve - ReserveOf(W)),
-            Gained >= 0 ? "==" : ">=", string(Max(Gained, 0)),
-            Gained >= 0 ? Ledgers[H].Reserve - ReserveOf(W) == Gained
-                        : W.AmmoCount[0] + ReserveOf(W) <= Ledgers[H].Ammo + Ledgers[H].Reserve);
+        if (!Ledgers[H].bJoint)
+            Verdict(0, "ledger", (H == 0 ? "L" : "R") $ ".paid", string(Ledgers[H].Reserve - ReserveOf(W)),
+                Gained >= 0 ? "==" : ">=", string(Max(Gained, 0)),
+                Gained >= 0 ? Ledgers[H].Reserve - ReserveOf(W) == Gained
+                            : W.AmmoCount[0] + ReserveOf(W) <= Ledgers[H].Ammo + Ledgers[H].Reserve);
+    }
+    // The second of two overlapping paired reloads closes the pair's books:
+    // detachable magazines conserve every round but the ones the drops lost;
+    // other families may lose dumped rounds, never gain any.
+    if (Ledgers[H].bJoint && --JointPending <= 0)
+    {
+        Other = PairedOther(W, H);
+        Total = W.AmmoCount[0] + (Other != None ? Other.AmmoCount[0] : 0) + ReserveOf(W);
+        Verdict(0, "ledger", "pair.total", string(Total), (Ledgers[H].Family == "detachable" || Ledgers[H].bWasOut) ? "==" : "<=",
+            string(JointBase - JointLost),
+            (Ledgers[H].Family == "detachable" || Ledgers[H].bWasOut) ? Total == JointBase - JointLost : Total <= JointBase - JointLost);
+        Ledgers[0].bJoint = false; Ledgers[1].bJoint = false; JointPending = 0;
     }
     Ledgers[H].Gun = W; Ledgers[H].Ammo = W.AmmoCount[0]; Ledgers[H].Reserve = ReserveOf(W);
     Ledgers[H].bEmptyOk = false;
@@ -2015,6 +3101,204 @@ function AutoShots()
     }
 }
 
+// ---- live control (tools/replay/live.py) ----------------------------------
+// A `live` op (port= and client= filled in by live.py) dials the session
+// broker and keeps the runner alive at the end of Ops. Each statement batch
+// arrives as BEGIN id / OP <compiled op>... / COMMIT id and is appended to
+// Ops with a closing livedone marker, so it runs through the ordinary
+// sequencer. PROBE, STATUS, PAUSE, RESUME, ABORT and QUIT answer at once.
+
+function bool LiveOp(string Op, float Elapsed)
+{
+    if (!bOpStarted)
+    {
+        if (int(Field(Op, "port", "0")) <= 0)
+        {
+            Note(LineOf(Op), "live skipped: no port (start the session with tools/replay/live.py)");
+            return true;
+        }
+        LivePort = int(Field(Op, "port")); LiveClient = int(Field(Op, "client", "1"));
+        // The tester sets the pace from here: no case deadline or stall.
+        bLive = true; CaseDeadline = 0; CaseStall = 0;
+        if (Link == None) OpenLink();
+    }
+    if (Link != None && Link.bOpened)
+    {
+        bLiveReady = true; LinkLostAt = 0;
+        Note(LineOf(Op), "live ready port=" $ LivePort @ "client=" $ LiveClient @ "cursor=" $ Cursor);
+        Link.Say("READY client=" $ LiveClient);
+        return true;
+    }
+    if (Elapsed < 60.0) return false;
+    Note(LineOf(Op), "live link never opened port=" $ LivePort);
+    ++Failures; Finish("live-connect-failed");
+    return true;
+}
+
+function OpenLink()
+{
+    if (Link != None) Link.Destroy();
+    Link = Spawn(class'LiveLink', self);
+    LinkTriedAt = WorldInfo.RealTimeSeconds;
+    if (Link != None) Link.Connect(self, LivePort, LiveClient);
+}
+
+function LinkOpened()
+{
+    LinkLostAt = 0;
+    Note(0, "live link open port=" $ LivePort @ "client=" $ LiveClient);
+}
+
+// Keeps the link up. Once live, a broker gone for good (live.py's session
+// process died) ends the run, so the game never idles unattended.
+function LiveTick(float Now)
+{
+    if (Link != None && Link.bOpened) { LinkLostAt = 0; return; }
+    if (LinkLostAt == 0) LinkLostAt = Now;
+    if (Now - LinkTriedAt > 3.0) OpenLink();
+    if (bLiveReady && Now - LinkLostAt > 45.0)
+    {
+        Note(0, "live link lost for=" $ (Now - LinkLostAt));
+        ++Failures; Finish("live-link-lost");
+    }
+}
+
+function LiveLine(string Line)
+{
+    local string Kind, Rest;
+    local int At;
+    At = InStr(Line, " ");
+    Kind = At < 0 ? Line : Left(Line, At);
+    Rest = At < 0 ? "" : Mid(Line, At + 1);
+    switch (Kind)
+    {
+    case "BEGIN": LiveBatch.Length = 0; LiveBatchId = Rest; return;
+    case "OP": LiveBatch.AddItem(Rest); return;
+    case "COMMIT": LiveCommit(Rest); return;
+    case "PROBE": LiveProbe(Rest); return;
+    case "STATUS": Link.Say(LiveStatus(Rest)); return;
+    case "PAUSE": LivePause(Rest, true); return;
+    case "RESUME": LivePause(Rest, false); return;
+    case "ABORT": LiveAbort(Rest); return;
+    case "QUIT":
+        Link.Say("QUITTING id=" $ Rest);
+        if (!bDone) { Note(0, "live quit id=" $ Rest); Finish("end"); }
+        return;
+    }
+    Link.Say("ERROR id=- reason=unknown-" $ Kind);
+}
+
+function LiveCommit(string Id)
+{
+    local int I, At;
+    if (bDone || Id != LiveBatchId)
+    {
+        Link.Say("ERROR id=" $ Id @ "reason=" $ (bDone ? "finished" : "batch-mismatch"));
+        return;
+    }
+    At = Ops.Length;
+    for (I = 0; I < LiveBatch.Length; ++I) Ops.AddItem(LiveBatch[I]);
+    Ops.AddItem((LiveBatch.Length > 0 ? string(LineOf(LiveBatch[LiveBatch.Length - 1])) : "0") $ "|livedone|id=" $ Id);
+    LoopCounts.Length = Ops.Length;
+    Link.Say("QUEUED id=" $ Id @ "at=" $ At @ "ops=" $ LiveBatch.Length @ "cursor=" $ Cursor @ "live=" $ BoolText(bLive));
+    LiveBatch.Length = 0; LiveBatchId = "";
+}
+
+// Probe values now, whatever op is running.
+function LiveProbe(string Rest)
+{
+    local array<string> Names;
+    local string Id, Text;
+    local int I, At;
+    At = InStr(Rest, " ");
+    Id = At < 0 ? Rest : Left(Rest, At);
+    if (At >= 0) ParseStringIntoArray(Mid(Rest, At + 1), Names, ",", true);
+    Text = "PROBE id=" $ Id;
+    if (!bReady || bDone) Text $= Chr(9) $ "error=" $ (bDone ? "finished" : "not-ready");
+    else for (I = 0; I < Names.Length; ++I) Text $= Chr(9) $ Names[I] $ "=" $ Probe(Names[I]);
+    Link.Say(Text);
+}
+
+function string LiveStatus(string Id)
+{
+    local string S, T;
+    T = Chr(9);
+    S = "STATUS id=" $ Id $ T $ "live=" $ BoolText(bLive) $ T $ "ready=" $ BoolText(bReady) $ T $ "paused=" $ BoolText(bPaused)
+        $ T $ "done=" $ BoolText(bDone) $ T $ "cursor=" $ Cursor $ T $ "ops=" $ Ops.Length
+        $ T $ "pending=" $ (Cursor < Ops.Length ? Ops[Cursor] : "idle")
+        $ T $ "op_seconds=" $ (Cursor < Ops.Length ? (bPaused ? PausedAt : WorldInfo.RealTimeSeconds) - OpStarted : 0.0)
+        $ T $ "case=" $ CaseNumber $ T $ "checks=" $ Checks $ T $ "failures=" $ Failures $ T $ "captures=" $ CaptureCount;
+    if (bReady && !bDone)
+        S $= T $ "L.held=" $ Probe("L.held") $ T $ "R.held=" $ Probe("R.held") $ T $ "L.ammo=" $ Probe("L.ammo")
+            $ T $ "R.ammo=" $ Probe("R.ammo") $ T $ "reload.step=" $ Probe("reload.step")
+            $ T $ "motion=" $ Motion[0].Kind $ "," $ Motion[1].Kind $ T $ "trigger_mask=" $ TriggerMask $ T $ "grip_mask=" $ GripMask;
+    return S;
+}
+
+// Pause freezes the cursor and the hand goals where they stand; sticks rest
+// so the pawn does not walk on. Resume shifts every timer by the pause.
+function LivePause(string Id, bool bOn)
+{
+    local int H;
+    local float Gap;
+    if (bOn && !bPaused)
+    {
+        bPaused = true; PausedAt = WorldInfo.RealTimeSeconds;
+        for (H = 0; H < 2; ++H) { PausedStick[H] = Stick[H]; Stick[H] = vect(0,0,0); }
+        Note(0, "live paused cursor=" $ Cursor);
+    }
+    else if (!bOn && bPaused)
+    {
+        Gap = WorldInfo.RealTimeSeconds - PausedAt;
+        bPaused = false;
+        OpStarted += Gap; HeadStarted += Gap;
+        for (H = 0; H < 2; ++H) { Motion[H].Started += Gap; Motion[H].Deadline += Gap; Stick[H] = PausedStick[H]; }
+        Note(0, "live resumed after=" $ Gap @ "cursor=" $ Cursor);
+    }
+    Link.Say((bOn ? "PAUSED" : "RESUMED") $ " id=" $ Id @ "cursor=" $ Cursor);
+}
+
+// Drops the ops from index From on, reporting each dropped batch as aborted,
+// and stops what the hands and sticks were doing. Grips stay held, so held
+// guns stay in hand; trigger and face buttons are released.
+function int LiveDrop(int From, string Reason)
+{
+    local int I, H, Count;
+    for (I = From; I < Ops.Length; ++I)
+        if (Verb(Ops[I]) == "livedone")
+        {
+            ++Count;
+            if (Link != None) Link.Say("DONE id=" $ Field(Ops[I], "id") @ "aborted=" $ Reason);
+        }
+    if (From < Ops.Length) { Ops.Length = From; LoopCounts.Length = From; }
+    for (H = 0; H < 2; ++H)
+    {
+        Motion[H].Kind = 0; Stick[H] = vect(0,0,0); PausedStick[H] = vect(0,0,0);
+        SetButton(H, "trigger", false); SetButton(H, "primary", false); SetButton(H, "secondary", false);
+        SetButton(H, "stick", false); SetButton(H, "menu", false);
+    }
+    HeadFrom = Head; HeadTo = Head; HeadDuration = 0;
+    TraceProbes.Length = 0;
+    return Count;
+}
+
+function LiveAbort(string Id)
+{
+    local int I, Count;
+    if (bLive) Count = LiveDrop(Cursor, "abort");
+    else
+    {   // Still in the script: skip the rest of it to the live op.
+        for (I = Cursor; I < Ops.Length; ++I) if (Verb(Ops[I]) == "live") break;
+        Count = LiveDrop(Min(I + 1, Ops.Length), "abort");
+        Cursor = Min(I, Ops.Length);
+    }
+    bPaused = false; bOpStarted = false; OpStarted = WorldInfo.RealTimeSeconds;
+    // Grips stay as they were (a held gun stays in hand); say so, so a tester
+    // knows to `release both grip` when the hands should be empty.
+    Note(0, "live aborted batches=" $ Count @ "cursor=" $ Cursor @ "grip_mask=" $ GripMask);
+    Link.Say("ABORTED id=" $ Id @ "batches=" $ Count @ "cursor=" $ Cursor @ "grips_held=" $ GripMask);
+}
+
 simulated event Tick(float DT)
 {
     local string TraceText;
@@ -2026,7 +3310,7 @@ simulated event Tick(float DT)
     Now = WorldInfo.RealTimeSeconds;
     if (!bReady)
     {
-        if (Now - SpawnedAt > (SetupTimeoutSeconds > 0 ? SetupTimeoutSeconds : 120.0)) { `log("KF2VR_SCRIPT phase=complete passed=false reason=setup-timeout-" $ SetupBlocker); bDone = true; return; }
+        if (Now - SpawnedAt > (SetupTimeoutSeconds > 0 ? SetupTimeoutSeconds : 120.0)) { Say("phase=complete passed=false reason=setup-timeout-" $ SetupBlocker); bDone = true; return; }
         bReady = Setup();
         LastTick = Now;
         if (!bReady) return;
@@ -2072,8 +3356,11 @@ simulated event Tick(float DT)
             Verdict(Watches[H].Line, "watch", Watches[H].Probe, Probe(Watches[H].Probe), Watches[H].Op, Watches[H].Value, false);
             Watches.Remove(H, 1); --H; // report a watch once, not every frame
         }
+    if (bLive) LiveTick(Now);
     // One gun cannot stall a session: a case past its own deadline fails and
-    // the session moves on to the next case.
+    // the session moves on to the next case. A live session has neither
+    // deadline nor stall (it idles for the tester); a pause holds both.
+    if (bPaused && CaseDeadline > 0) { CaseDeadline += DT; StallSince = Now; }
     if (CaseNumber != 0 && CaseDeadline > 0 && Now > CaseDeadline)
     {
         Note(0, "check=case-timeout probe=case value=" $ CaseNumber @ "op=<= expected=deadline passed=false");
@@ -2093,14 +3380,18 @@ simulated event Tick(float DT)
         }
     }
     // Sequence: run ops until one has to wait. Bounded so a script cannot spin a frame.
-    while (!bDone && Cursor < Ops.Length && Guard++ < 64)
+    while (!bDone && !bPaused && Cursor < Ops.Length && Guard++ < 64)
     {
         if (!RunOp(Ops[Cursor], DT)) { bOpStarted = true; break; }
         ++Cursor; bOpStarted = false; OpStarted = Now;
     }
+    // Idle at the end of Ops (live): the next appended op starts its clock
+    // when it arrives, not when the previous batch ended.
+    if (Cursor >= Ops.Length) OpStarted = Now;
     // End only once queued captures are taken and the last one has had time
     // to land: a shot just before `end` otherwise catches the teardown.
-    if (!bDone && Cursor >= Ops.Length && PendingShots.Length == 0 && Now - LastCaptureAt >= 1.5) Finish("end");
+    // A live session idles at the end of Ops instead, waiting for more.
+    if (!bDone && !bLive && Cursor >= Ops.Length && PendingShots.Length == 0 && Now - LastCaptureAt >= 1.5) Finish("end");
     // The hands travel with the body: a walk or a stick turn's move carries
     // every stored goal (native drops a goal more than 250 UU from the eye).
     if (B.Human != None)
@@ -2114,7 +3405,13 @@ simulated event Tick(float DT)
             }
         CarryFrom = B.Human.Location; bCarryReady = true;
     }
-    for (H = 0; H < 2; ++H) StepMotion(H, DT);
+    if (!bPaused) for (H = 0; H < 2; ++H) StepMotion(H, DT);
+    // An outside camera follows the body and stays the view target.
+    if (CameraMode != "" && ShotCamera != None)
+    {
+        PlaceCamera();
+        if (B.PC.GetViewTarget() != ShotCamera) B.PC.SetViewTarget(ShotCamera);
+    }
     AutoShots();
     if (bReady && !bDone) { Ledger(0); Ledger(1); }
     if (PendingShots.Length > 0 && Now - LastCaptureAt >= 0.55) { Shot(0, PendingShots[0], true); PendingShots.Remove(0, 1); }

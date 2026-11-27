@@ -78,6 +78,8 @@ inline constexpr Range functions[]{
     {0x94e140, 0x94fc30, 0x169}, // VelocityScale (DLSS object motion)
     {0x34a3c0, 0x34ac30, 0x58d}, // TileMaxBlur (DLSS object motion)
     {0x34ad20, 0x34b590, 0x274}, // LegacyBlur (DLSS object motion)
+    {0x306ed0, 0x3079b0, 0x8a5}, // SkinScattering (single-pass)
+    {0x30ae40, 0x30b9b0, 0x90}, // SkinScatteringParams (single-pass)
 };
 // Globals cross-referenced by uniquely matched functions; settings table/string
 // additionally verified directly in both PE images. No assumed global delta.
@@ -113,6 +115,8 @@ inline constexpr Range globals[]{
     {0x1ec2388, 0x2013388, 1}, // view gate on (single-pass)
     {0x2225590, 0x2377de0, 1}, // foreground velocity flag (object motion)
     {0x21f6ed0, 0x2349710, 1}, // RHI pointer (object motion)
+    {0x2222a7c, 0x23752cc, 1}, // scene buffer size X (single-pass skin scattering)
+    {0x2222a80, 0x23752d0, 1}, // scene buffer size Y (single-pass skin scattering)
 };
 constexpr std::uintptr_t Translate(Store store, std::uintptr_t steam) noexcept {
     if (store==Store::Steam) return steam;

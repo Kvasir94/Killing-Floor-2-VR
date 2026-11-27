@@ -244,7 +244,14 @@ function Complete()
         Runtime.AutomaticReload.bStockCompleted = true;
     }
     if (Physical && Owner.bActive && Owner.Gun == W && Owner.ActionKind == 2 && Owner.RigSample != None)
-    { TailAnim = Owner.InsertAnim; TailTime = Owner.RigSample.SeatTime; }
+    {
+        // Resume where the stock canister has come to rest, not at its ammo
+        // notify: the plateau guns (Bouncer, Reconstructor) are still carrying
+        // the canister in after the notify, and playing from there showed the
+        // seated canister being inserted a second time (#216).
+        TailAnim = Owner.InsertAnim;
+        TailTime = FMax(Owner.RigSample.SeatTime, Owner.RigSample.InsertEndTime);
+    }
     if (W.Role < ROLE_Authority && W.IsInState('Reloading'))
     {
         W.ClearTimer('ReloadAmmoTimer'); W.ClearTimer('ReloadStatusTimer');

@@ -21,6 +21,10 @@ var config bool bServerAdapter;
 var config bool bIndependentWeapons;
 var config bool bInventoryFocusEnabled;
 var config bool bMultiplayerZedGrabAllowed;
+// Experimental arm loss on living Zeds (#210). A dedicated server reads this
+// (or VRArmLoss=1 on the URL); Solo and a listen host follow the host's own
+// headset switch, live.
+var config bool bLivingArmLoss;
 // Host permission for the gravity pull: on unless the URL says VRGravityPull=0.
 var bool bGravityPullAllowed;
 var config float InventoryFocusScale;
@@ -149,6 +153,8 @@ event InitGame(string Options, out string ErrorMessage)
     // Ordinary Zed grabs are independent of parked experimental interactions.
     bMultiplayerZedGrabAllowed = class'VRExperimentalPolicy'.static.ZedGrabbingEnabled()
         && (!HasOption(Options, "VRMultiplayerGrabs") || ParseOption(Options, "VRMultiplayerGrabs") == "1");
+    if (HasOption(Options, "VRArmLoss")) bLivingArmLoss = ParseOption(Options, "VRArmLoss") == "1";
+    class'VRArmLossMutator'.static.Install(self, bLivingArmLoss);
     bGravityPullAllowed = !HasOption(Options, "VRGravityPull") || ParseOption(Options, "VRGravityPull") != "0";
     if (HasOption(Options, "VRInventoryFocus"))
         bInventoryFocusEnabled = ParseOption(Options, "VRInventoryFocus") == "1";
@@ -436,6 +442,12 @@ function Logout(Controller Exiting)
     Super.Logout(Exiting);
 }
 
+function bool LivingArmLossEnabled()
+{
+    local VRArmLossMutator M;
+    M = class'VRArmLossMutator'.static.Find(WorldInfo);
+    return M != None && M.Enabled();
+}
 defaultproperties
 {
     PlayerControllerClass=class'KF2VRNet.KF2VRNetPlayerController'

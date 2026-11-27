@@ -88,4 +88,9 @@ def main(slug, fraction=0.55):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1], *(float(a) for a in sys.argv[2:3]))
+    # Retired 2026-11-08 (#227): this reads the UModel PSK without undoing its
+    # Y mirror, so its Y values have the wrong sign in game (the Katana head
+    # tip came out 30 units off its blade). Use tools/re/measure_melee_zones.py,
+    # which measures every zone in game space (tools/re/melee_rig.py game()).
+    sys.exit("retired: use tools/re/measure_melee_zones.py (game-space zones); "
+             "this tool's Y values are mirrored. See docs/re/MELEE_WEAPON_ZONES_AND_GRIPS.md")

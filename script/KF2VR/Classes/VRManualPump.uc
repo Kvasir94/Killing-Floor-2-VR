@@ -29,7 +29,6 @@ var VRPumpInertia Inertia;
 var bool bWasCarry, bRebaseHand;
 // Button reloads still own their stock ammo timers when physical insertion is
 // disabled. Only their empty-port presentation and subsequent close are manual.
-var bool bStockEmptyReload;
 var int LastRoomSpaceEpoch;
 
 var KFWeapon Gun;
@@ -135,21 +134,6 @@ function BeforeAnimation(KFWeapon W, name Sequence)
 {
     local AnimNodeSequence N;
     local VRWeaponRuntime R;
-    // Record empty-start before rig/reference readiness can delay Bind beyond
-    // stock's first-shell timer. This records debt; stock still pays the shell.
-    if (W != None && RequiresManualCycle() && !Owner.Enabled()
-        && class'VRPumpCatalog'.static.PumpAction(W) && W.AmmoCount[0] == 0
-        && (Sequence == 'Reload_Open_Shell' || Sequence == 'Reload_Open_Shell_Elite')
-        && Owner.InputOwner != None && Owner.InputOwner.Inventory != None
-        && Owner.InputOwner.Inventory.Registry != None)
-    {
-        R = Owner.InputOwner.Inventory.Registry.FindItem(W);
-        if (R != None && R.MechanismPending == 0 && !R.bPumpPortPredicted)
-        {
-            R.PumpPortStage = 1;
-            R.bManualPumpPending = true;
-        }
-    }
     // Every manual action owes a cycle after a shot, including a perk-free
     // shot or one arriving before the presentation binds. HZ12 increments
     // its protected NumShotsFired in ConsumeAmmo, before
@@ -361,7 +345,7 @@ function MagazineReloadPaid(KFWeapon W, bool bEmptyReload)
 function bool InHand()
 {
     return (RequiresManualCycle() || class'VRWeaponRuntime'.static.StockIdle(Gun))
-        && (!Gun.IsInState('Reloading') || bStockEmptyReload) && !Gun.IsInState('WeaponEquipping')
+        && !Gun.IsInState('Reloading') && !Gun.IsInState('WeaponEquipping')
         && !Gun.IsInState('WeaponPuttingDown') && !Gun.IsInState('Inactive');
 }
 
@@ -472,7 +456,6 @@ function bool Bind(VRWeaponRuntime R, int Hand)
     bGripWasDown = (Bridge.NativeGripActiveMask & (1 << OffHand())) == 0
         || Owner.GripDown(OffHand());
     bWasCarry = Carried();
-    bStockEmptyReload = false;
     LastRoomSpaceEpoch = Bridge.NativeRoomSpaceEpoch;
     Inertia.Reset(Pull);
     Parts.Length = 0;
@@ -558,7 +541,6 @@ function Unbind()
     bNeedsPump = false;
     bLiveEjectPending = false;
     bHolding = false;
-    bStockEmptyReload = false;
 }
 
 function Shutdown()
@@ -570,54 +552,24 @@ function Shutdown()
 
 // ------------------------------------------------------------------ update
 
-// Reconcile stock payment without becoming a second ammo writer. This is
-// deliberately exact-pump-only: the bolt/lever owner inherits Update too.
+// Physical reloads off (hand cycling went with them, R50): a pump-port stage
+// left by a mode change mid-reload is settled once stock has loaded the gun.
+// Exact-pump-only: the bolt/lever owner inherits Update too.
 function ObserveStockEmptyReload()
 {
-    local int Paid;
     if (Owner.Enabled() || !class'VRPumpCatalog'.static.PumpAction(Gun)
-        || Runtime.MechanismPending != 0 || Runtime.bPumpPortPredicted)
-    { bStockEmptyReload = false; return; }
-    // Also recover a late first Bind during the same stock reload. A top-up
-    // cannot pass: its current count exceeds the shells paid by this reload.
-    if (RequiresManualCycle() && Runtime.PumpPortStage == 0 && Gun.IsInState('Reloading')
-        && Gun.InitialReloadAmount > 0 && Gun.InitialReloadAmount <= Gun.MagazineCapacity[0]
-        && Gun.ReloadAmountLeft >= 0 && Gun.ReloadAmountLeft <= Gun.InitialReloadAmount)
-    {
-        Paid = Gun.InitialReloadAmount - Gun.ReloadAmountLeft;
-        if (Paid > 0 && Gun.AmmoCount[0] == Paid) Runtime.PumpPortStage = 1;
-    }
-    if (RequiresManualCycle() && Gun.IsInState('Reloading') && Gun.AmmoCount[0] == 0
-        && (LastAmmo == 0 || Runtime.PumpPortStage > 0))
-    {
-        Runtime.PumpPortStage = 1;
-        bStockEmptyReload = true;
-    }
-    // Include a rebind after the stock timer has already paid: LastAmmo may
-    // then equal the current count, but an unpaid rear latch remains explicit.
+        || Runtime.MechanismPending != 0 || Runtime.bPumpPortPredicted) return;
     if (Runtime.PumpPortStage == 1 && Gun.AmmoCount[0] > 0)
     {
-        if (RequiresManualCycle())
-        {
-            Runtime.PumpPortStage = 2;
-            Runtime.bManualPumpPending = true;
-            bNeedsPump = true;
-        }
-        else
-        {
-            Runtime.PumpPortStage = 0;
-            Runtime.bManualPumpPending = false;
-            bNeedsPump = false;
-            bPulledBack = false;
-            bEngaged = false;
-            Pull = 0;
-            Motion.Reset();
-            Inertia.Reset(0);
-        }
+        Runtime.PumpPortStage = 0;
+        Runtime.bManualPumpPending = false;
+        bNeedsPump = false;
+        bPulledBack = false;
+        bEngaged = false;
+        Pull = 0;
+        Motion.Reset();
+        Inertia.Reset(0);
     }
-    if (RequiresManualCycle() && Gun.IsInState('Reloading') && Runtime.PumpPortStage > 0)
-        bStockEmptyReload = true;
-    else bStockEmptyReload = false;
     if (Runtime.PumpPortStage > 0)
     {
         SelectStroke();

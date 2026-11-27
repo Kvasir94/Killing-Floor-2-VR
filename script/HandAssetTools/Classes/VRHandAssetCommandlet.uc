@@ -173,10 +173,12 @@ function bool ImportBakedTextures(WorldInfo WI, string AssetName, optional strin
     local string Suffix, GroupName;
     local Texture2D T;
     if (Root == "") Root = TextureRoot;
-    // _T is the hands' optional skin transmission mask (revision 70 on).
-    for (I = 0; I < (AssetName == "VRHorzineHands" ? 4 : 3); ++I)
+    // _T is the hands' optional skin transmission mask (revision 70 on); _M is
+    // the watch's optional variation mask for the stock weapon material
+    // (revision 82 on; VRHUDPanel reads its presence as "gloss-mapped hands").
+    for (I = 0; I < ((AssetName == "VRHorzineHands" || AssetName == "VRHorzineWatch") ? 4 : 3); ++I)
     {
-        Suffix = I == 0 ? "_D" : (I == 1 ? "_N" : (I == 2 ? "_S" : "_T"));
+        Suffix = I == 0 ? "_D" : (I == 1 ? "_N" : (I == 2 ? "_S" : (AssetName == "VRHorzineWatch" ? "_M" : "_T")));
         WI.ConsoleCommand("NEW Texture2D NAME=" $ AssetName $ Suffix
             $ " PACKAGE=KF2VRHands FILE=\"" $ Root $ "/" $ AssetName $ Suffix $ ".tga\"");
         T = Texture2D(FindObject("KF2VRHands." $ AssetName $ Suffix, class'Texture2D'));

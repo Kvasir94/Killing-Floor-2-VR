@@ -152,9 +152,20 @@ function Update(vector Position, quat Rotation, vector Entry, vector Seat,
         StartDistance = EntryDistance;
     }
     DT = Time - LastTime;
+    if (DT <= 0) { Reset(); return; }
     // Tracking reacquisition and large frame gaps cannot jump to the latch.
-    if (DT <= 0 || DT > 0.15 || VSize(Position - LastPosition) > FMax(12, 1000 * DT))
-    { Reset(); return; }
+    // R69: they do not drop the capture either. Keep the progress and rebase
+    // the slider on this sample, so only travel after the gap moves it.
+    if (DT > 0.15 || VSize(Position - LastPosition) > FMax(12, 1000 * DT))
+    {
+        // A sample at or past the latch cannot be rebased onto: release the
+        // capture (the hand keeps the carry) rather than seat from the gap.
+        if (Progress >= 1 || Remaining <= Tolerance + 0.01) { Reset(); return; }
+        StartDistance = (Remaining - Progress * Tolerance) / (1 - Progress);
+        LastPosition = Position;
+        LastTime = Time;
+        return;
+    }
     LastPosition = Position;
     LastTime = Time;
     // The slider: the hand's projection along the magwell, clamped.
@@ -184,7 +195,11 @@ function AdvanceSettle(float Time)
 {
     local float T;
     if (!bSettling) return;
-    if (Time < LastTime || Time - LastTime > 0.15) { Reset(); return; }
+    if (Time < LastTime) { Reset(); return; }
+    // R69: a long frame is not a reason to drop a settle the release already
+    // earned. Hold the ease where it was for the gap and go on next frame.
+    if (Time - LastTime > 0.15)
+    { SettleStarted += Time - LastTime; LastTime = Time; return; }
     LastTime = Time;
     T = FClamp((Time - SettleStarted) / SettleDuration, 0, 1);
     Progress = SettleFrom + (1 - SettleFrom) * (1 - (1-T)*(1-T));

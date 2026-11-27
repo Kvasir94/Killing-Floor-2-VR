@@ -19,6 +19,9 @@ var class<KFWeapon> DrawClass;
 var array<KFWeapon> Starters;
 var bool bDrawPending, bDrawIssued, bQuitSent, bChainLogged;
 var KFWeapon WatchSent[2];
+// goto online: the view yaw before the walk turned it (see WalkTo).
+var int WalkYaw;
+var bool bWalkYawSaved;
 
 function bool Setup()
 {
@@ -42,7 +45,7 @@ function bool Setup()
     if (!bStartupShellClosed && B.MenuSession() != None && B.MenuSession().NativeShellActive != 0 && B.MenuSession().LivingView())
     {
         B.MenuSession().ToggleMenu(); bStartupShellClosed = true;
-        `log("KF2VR_SCRIPT phase=setup action=close-startup-shell");
+        Say("phase=setup action=close-startup-shell");
         return false;
     }
     if (!B.HandInventory.Input.ContextValid())
@@ -59,10 +62,57 @@ function bool Setup()
     B.NativeReplayReady = 1;
     bInputEnabled = true;
     LoopCounts.Length = Ops.Length;
-    `log("KF2VR_SCRIPT phase=ready ops=" $ Ops.Length @ "autoshot=" $ BoolText(bAutoShot) @ "net=client");
+    Say("phase=ready ops=" $ Ops.Length @ "autoshot=" $ BoolText(bAutoShot) @ "net=client");
     foreach DynamicActors(class'KFWeapon', Starter)
         if (Starter.Owner == B.Human || Starter.Instigator == B.Human) Starters.AddItem(Starter);
     Agent.ServerMark("client-ready");
+    return true;
+}
+
+// On a network client started with -kf2vr-hand-replay the native adapter
+// replaces the movement stick's forward axis with the controller's
+// NativeDiagnosticMoveY (the legacy network diagnostic walk, zero otherwise),
+// so the authored forward/back axis never walks; strafing does. goto
+// therefore turns the view so its next point lies square to the right and
+// strafes onto it, then gives the view back its yaw (face turns it onto the
+// anchor instead). `walk forward|back` and a stick's forward axis stay dead
+// online until the adapter leaves version-3 scripted sticks alone.
+function bool WalkTo(string Op, float Elapsed)
+{
+    local bool bArrived;
+    local int MoveHand;
+    local vector Forward, Right, Want;
+    local rotator View;
+    if (B == None || B.PC == None) return Super.WalkTo(Op, Elapsed);
+    if (!bWalkYawSaved) { WalkYaw = B.PC.Rotation.Yaw; bWalkYawSaved = true; }
+    bArrived = Super.WalkTo(Op, Elapsed);
+    MoveHand = B.MovementHand == 1 ? 1 : 0;
+    if (bArrived)
+    {
+        bWalkYawSaved = false;
+        if (Field(Op, "face") != "1") { View = B.PC.Rotation; View.Yaw = WalkYaw; B.PC.SetRotation(View); }
+        return true;
+    }
+    if (VSize(Stick[MoveHand]) < 0.01) return false;
+    Forward = vector(B.PC.Rotation); Forward.Z = 0; Forward = Normal(Forward);
+    Right = Forward cross vect(0,0,-1);
+    Want = Forward * Stick[MoveHand].Y + Right * Stick[MoveHand].X;
+    View = B.PC.Rotation; View.Yaw = rotator(Want).Yaw - 16384;
+    B.PC.SetRotation(View);
+    Stick[MoveHand].X = FMin(1.0, VSize(Want)); Stick[MoveHand].Y = 0;
+    return false;
+}
+
+// Online a hand-replay client is not turned by the turn stick (the native
+// adapter applies stick turns only through a live headset pivot), so goto's
+// face sets the view yaw directly, as `look` does.
+function bool FaceToward(vector Delta, int MoveHand, bool bInTime)
+{
+    local rotator View;
+    Stick[1 - MoveHand] = vect(0,0,0);
+    if (VSize(Delta) <= 1 || B.PC == None) return true;
+    View = B.PC.Rotation; View.Yaw = rotator(Delta).Yaw;
+    B.PC.SetRotation(View);
     return true;
 }
 
@@ -77,6 +127,7 @@ function Shot(int Line, string EventName, bool bPose)
     `log("KF2VR_REPLAY_CAPTURE caseIndex=" $ Page @ "index=" $ Index @ "name=" $ CaptureName
         @ "event=" $ EventName @ "time=" $ WorldInfo.RealTimeSeconds
         @ "eventTime=" $ WorldInfo.RealTimeSeconds @ "deferred=False");
+    if (Link != None) Link.Say("CAPTURE name=" $ CaptureName @ "event=" $ EventName);
     B.PC.ConsoleCommand("bugscreenshot " $ CaptureName);
     LastCaptureAt = WorldInfo.RealTimeSeconds;
 }
@@ -223,7 +274,7 @@ function bool StartCase(string Op, float Elapsed)
     local bool bResult;
     if (bOpStarted) return Super.StartCase(Op, Elapsed);
     bResult = Super.StartCase(Op, Elapsed);
-    bDrawPending = false; bDrawIssued = false; DrawMelee = None;
+    bDrawPending = false; bDrawIssued = false; DrawMelee = None; bWalkYawSaved = false;
     WatchSent[0] = None; WatchSent[1] = None;
     if (Agent != None) Agent.ServerClear();
     return bResult;
@@ -242,9 +293,20 @@ function PlaceAtStart()
 function bool SpawnZedOp(string Op)
 {
     if (Agent == None) return Super.SpawnZedOp(Op);
-    Agent.ServerSpawnZed(Field(Op, "zed"), float(Field(Op, "dist", "300")), float(Field(Op, "yaw", "0")));
-    Note(LineOf(Op), "spawn requested zed=" $ Field(Op, "zed") @ "via=server");
+    // An exact class or a hostile Zed: the server spawns it as Solo does.
+    if (Field(Op, "cls") != "" || Field(Op, "hostile") == "1")
+        Agent.ServerSpawnZedAs(Field(Op, "cls"), Field(Op, "zed"), float(Field(Op, "dist", "300")),
+            float(Field(Op, "yaw", "0")), Field(Op, "hostile") == "1");
+    else Agent.ServerSpawnZed(Field(Op, "zed"), float(Field(Op, "dist", "300")), float(Field(Op, "yaw", "0")));
+    Note(LineOf(Op), "spawn requested zed=" $ Field(Op, "cls", Field(Op, "zed")) @ "hostile=" $ (Field(Op, "hostile") == "1") @ "via=server");
     return true;
+}
+
+// damage on|off online: the server owns the player's god mode.
+function SetDamage(bool bOn)
+{
+    if (Agent != None) Agent.ServerGod(!bOn);
+    else Super.SetDamage(bOn);
 }
 
 // Online the server opens the trader, as a trigger would (NetScriptAgent).

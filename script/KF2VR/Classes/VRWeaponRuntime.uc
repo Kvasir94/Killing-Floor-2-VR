@@ -50,11 +50,9 @@ var bool bManualPumpPending;
 // These are mechanism state only; stock/receipt writers still own ammunition.
 var float LeverCycleAmount;
 var bool bLeverCycleOpen;
-// Crossbow string cocking is an authored mechanism step before bolt seating.
+// The crossbows' string as the guided bolt draws it back: 0 forward to 1
+// cocked (R63). Presentation and the replay probe only.
 var float CrossbowCockProgress;
-var bool bCrossbowCockLoaded;
-// The hand has moved this crossbow's pump since its last bolt (R32).
-var bool bCrossbowStroked;
 // Break-shotgun chambers already emptied by a physical opening. Missing
 // rounds beyond this count are newly spent cases, not live ammunition.
 var int BreakEmptyChambers;
@@ -143,49 +141,11 @@ static function bool TracksWeaponMagazineFeed(KFWeapon W)
     return W != None && TracksMagazineFeedClass(W.Class);
 }
 
+// The closed-bolt magazine feeds that keep a chambered round are a catalog
+// fact (VRReloadCatalog.bKeepsChamber), split pair members included.
 static function bool TracksMagazineFeedClass(class<KFWeapon> WeaponClass)
 {
-    local int I;
-    // Only exact audited single-member wrappers share the stock feed. An
-    // aggregate dual actor still has two feeds and never takes this policy.
-    for (I = 0; I < class'VRWeaponPair'.default.Families.Length; ++I)
-        if (WeaponClass == class'VRWeaponPair'.default.Families[I].MemberClass)
-        { WeaponClass = class'VRWeaponPair'.default.Families[I].SingleClass; break; }
-    // Exact conventional closed-bolt magazine feeds. Never infer support from
-    // a magazine or rack bone: open bolts and aggregate/special loads are
-    // excluded, as is the HRG Stunner: its alt shot spends three magazine
-    // rounds. Underbarrel grenades (M203 family, S12, medic GL, FAMAS) use
-    // ammo type 1. The FAMAS and 93R bursts stop at the chambered round
-    // (stock bursts never exceed AmmoCount); the AF2011 has two chambers.
-    return WeaponClass != None && (WeaponClass == class'KFWeap_Pistol_9mm'
-        || WeaponClass == class'KFWeap_Pistol_Deagle'
-        || WeaponClass == class'KFWeap_Pistol_Colt1911'
-        || WeaponClass == class'KFWeap_Pistol_Medic'
-        || WeaponClass == class'KFWeap_AssaultRifle_AK12'
-        || WeaponClass == class'KFWeap_AssaultRifle_Bullpup'
-        || WeaponClass == class'KFWeap_Rifle_M14EBR'
-        || WeaponClass == class'KFWeap_SMG_Medic'
-        || WeaponClass == class'KFWeap_AssaultRifle_AR15'
-        || WeaponClass == class'KFWeap_AssaultRifle_SCAR'
-        || WeaponClass == class'KFWeap_SMG_MP7'
-        || WeaponClass == class'KFWeap_SMG_Kriss'
-        || WeaponClass == class'KFWeap_SMG_P90'
-        || WeaponClass == class'KFWeap_AssaultRifle_G36C'
-        || WeaponClass == class'KFWeap_SMG_HK_UMP'
-        || WeaponClass == class'KFWeap_SMG_MP5RAS'
-        || WeaponClass == class'KFWeap_Shotgun_Medic'
-        || WeaponClass == class'KFWeap_AssaultRifle_Medic'
-        || WeaponClass == class'KFWeap_Pistol_G18C'
-        || WeaponClass == class'KFWeap_AssaultRifle_FNFal'
-        || WeaponClass == class'KFWeap_Shotgun_S12'
-        || WeaponClass == class'KFWeap_AssaultRifle_M16M203'
-        || WeaponClass == class'KFWeap_SMG_G18'
-        || WeaponClass == class'KFWeap_AssaultRifle_HRGIncendiaryRifle'
-        || WeaponClass == class'KFWeap_AssaultRifle_HRGTeslauncher'
-        || WeaponClass == class'KFWeap_AssaultRifle_MedicRifleGrenadeLauncher'
-        || WeaponClass == class'KFWeap_AssaultRifle_FAMAS'
-        || WeaponClass == class'KFWeap_HRG_93R'
-        || WeaponClass == class'KFWeap_Pistol_AF2011');
+    return WeaponClass != None && class'VRReloadCatalog'.static.KeepsChamber(WeaponClass);
 }
 
 function bool RealisticAmmo() { return AmmoRules != 0; }
@@ -445,12 +405,7 @@ function FlushMagazineShot()
 // reload. Calling StartFire(1) directly bypasses that stock admission path.
 function bool UsesStockSecondaryReload()
 {
-    return Item != None && (Item.Class == class'KFWeap_AssaultRifle_M16M203'
-        || Item.Class == class'KFWeap_AssaultRifle_HRGIncendiaryRifle'
-        || Item.Class == class'KFWeap_AssaultRifle_HRGTeslauncher'
-        || Item.Class == class'KFWeap_AssaultRifle_MedicRifleGrenadeLauncher'
-        || Item.Class == class'KFWeap_AssaultRifle_FAMAS'
-        || Item.Class == class'KFWeap_Shotgun_S12');
+    return class'VRSecondaryReloadCatalog'.static.Supported(Item);
 }
 
 function bool CanStartStockSecondaryReload()
@@ -518,6 +473,8 @@ function StartAction(byte Mode, optional bool bStockReload)
     Chamber = (bStockReload && Mode == 2 && RealisticAmmo() && TracksMagazineFeed() && MagazineHasChamber())
         ? Min(Item.AmmoCount[0], ChamberRounds()) : 0;
     if (bTopUp) { TopUpAmmo = Item.AmmoCount[0]; Item.AmmoCount[0] = Item.MagazineCapacity[0] - 1; }
+    // Idle flame sprays wait off the gun (#230); seat them before stock fire.
+    if (Mode <= 1 && Presenter != None) class'VRFlamePresentation'.static.Wake(Presenter, Item);
     // The Rail Gun refuses a direct ALTFIRE start; stock reaches MANUAL only
     // by converting DEFAULT through bUseAltFireMode, so let it do that here.
     if (Mode == 1 && Item.IsA('KFWeap_Rifle_RailGun') && Item.bUseAltFireMode)

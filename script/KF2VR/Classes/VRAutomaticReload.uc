@@ -320,7 +320,7 @@ function Start()
     {
         Detached = !Owner.MagazineReloading(Gun);
         Clip = Owner.InsertAnim;
-        Position = Owner.InsertTime + (Owner.InsertEndTime - Owner.InsertTime) * Owner.InsertGuide.InsertFraction();
+        Position = Owner.InsertTime + (Owner.InsertEndTime - Owner.InsertTime) * Owner.GuidePathFraction();
         bPaid = Owner.bAmmoStepPaid && !Owner.bShells;
         Owner.HandBackAutomatic();
         if (!Detached) { Stage = 2; bSawReload = true; return; }
@@ -339,8 +339,12 @@ function Start()
     // The magazine already left: resume the stock insert at its retained
     // guide position instead of replaying extraction or requesting payment.
     if (Detached && bSawReload && Clip != '' && Gun.WeaponAnimSeqNode != None
-        && Gun.WeaponAnimSeqNode.AnimSeqName == Clip)
+        && (Gun.WeaponAnimSeqNode.AnimSeqName == Clip
+            || class'VRInteractiveReload'.static.EliteOf(Gun.WeaponAnimSeqNode.AnimSeqName, Clip, Gun)))
     {
+        // A tactical perk restarts on the elite clip; Position was sampled
+        // on its ordinary counterpart.
+        Position = class'VRInteractiveReload'.static.LiveClipTimeOf(Gun, Clip, Position);
         Gun.WeaponAnimSeqNode.SetPosition(Position, false);
         if (Gun.IsTimerActive('ReloadAmmoTimer'))
             Gun.SetTimer(FMax(0.01, Gun.GetRemainingTimeForTimer('ReloadAmmoTimer')

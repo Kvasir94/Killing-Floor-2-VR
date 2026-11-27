@@ -5,10 +5,12 @@
 // so a server clamps whatever scale a client sends.
 class VRMeleeScale extends Object;
 
-// 0.35 lets a flat blade hit (curve floor x0.75 times flat x0.5) through; a
-// client can only lower its own damage with it.
+// 0.35 is the slowest part hit (melee spec M21); a client can only lower its
+// own damage with it.
 const MIN_SCALE = 0.35;
-const MAX_SCALE = 1.5;
+// Melee spec M30: speed never raises a hit above its stock number, for melee
+// weapons and gun bashes alike; the authority clamps to this too.
+const MAX_SCALE = 1.0;
 
 // A gun with a blade on part of it (the compound bow's spike and limb blades,
 // the Mosin's bayonet) keeps its stock bash type for the blade. Any other part
@@ -104,15 +106,87 @@ static function RestoreBlunt(KFWeapon W, byte Mode, class<DamageType> SavedType,
 
 // bBluntContact (a gun with a blade on part of it, struck with another part)
 // can only lower the hit: a gun without a blunt-part entry ignores it.
-static function ProcessScaledHit(KFWeapon W, byte Mode, ImpactInfo Impact, float Scale, optional bool bShieldContact,
-    optional bool bNoDismember, optional bool bExperimentalInteractions, optional bool bBluntContact)
+// Ruling A (Kvasir94 2026-11-09, #227): the part of a melee weapon that struck
+// picks the damage type. PART_BLUDGEON (a flat side, a blade's spine, a
+// shaft, hilt or guard) and PART_PIERCE (an axe's back pick) replace the
+// mode's type for this one hit; the amount stays the mode's (the stock bash).
+const PART_NONE = 0;
+const PART_BLUDGEON = 1;
+const PART_PIERCE = 2;
+// The weapon's own stock slashing type (the Crovel's light attack) at the
+// swing's own amount: its shovel edge slices on any swing.
+const PART_STOCK_SLASH = 3;
+// Melee spec M19: a blunt weapon's broad face or back is a striking surface.
+// The swing's own mode and amount, as that weapon's bludgeon (the Crovel's
+// flat lands its heavy attack's type; its light attack is the edge's slash).
+const PART_STOCK_BLUNT = 5;
+// Melee spec M22: a tip-first thrust. The stock stab's type and reactions at
+// the swing's own mode and amount.
+const PART_STOCK_STAB = 6;
+// Melee spec M21: the stock rifle-butt bash, the base of a blunt part hit on a
+// weapon whose own bash is another attack (a stab, a shield slam, a blade).
+const BUTT_DAMAGE = 25.0;
+
+static function class<DamageType> PartDamageType(byte Part)
 {
+    if (Part == PART_BLUDGEON) return class'VRDT_MeleePommel';
+    if (Part == PART_PIERCE) return class'VRDT_MeleePierce';
+    return None;
+}
+
+// The type a part swaps in for one hit, or None to leave the mode's own.
+static function class<DamageType> PartSwapType(KFWeapon W, byte Mode, byte Part)
+{
+    local byte Heavy;
+    if (Part == PART_STOCK_SLASH) return W.InstantHitDamageTypes[0];
+    if (Part == PART_STOCK_STAB)
+    {
+        if (class'KFWeapon'.const.BASH_FIREMODE < W.InstantHitDamageTypes.Length)
+            return W.InstantHitDamageTypes[class'KFWeapon'.const.BASH_FIREMODE];
+        return None;
+    }
+    if (Part == PART_STOCK_BLUNT)
+    {
+        Heavy = class'KFWeap_MeleeBase'.const.HEAVY_ATK_FIREMODE;
+        if (class<KFDT_Bludgeon>(W.InstantHitDamageTypes[Mode]) == None && Heavy < W.InstantHitDamageTypes.Length
+            && class<KFDT_Bludgeon>(W.InstantHitDamageTypes[Heavy]) != None) return W.InstantHitDamageTypes[Heavy];
+        return None;
+    }
+    return PartDamageType(Part);
+}
+
+// Melee spec M21: what a part hit (PART_BLUDGEON, PART_PIERCE) is scaled from.
+// The weapon's stock bash where that bash is a blunt strike with the weapon
+// itself, or its stab for a leading point; otherwise the rifle-butt bash.
+static function float PartBaseDamage(KFWeapon W, byte Part)
+{
+    local byte Bash;
+    local class<DamageType> BashType;
+    Bash = class'KFWeapon'.const.BASH_FIREMODE;
+    if (W == None || Bash >= W.InstantHitDamage.Length || Bash >= W.InstantHitDamageTypes.Length) return BUTT_DAMAGE;
+    BashType = W.InstantHitDamageTypes[Bash];
+    // Section 7: the folded Scythe's stock bash is a strike with the snath
+    // (40); unfolded it is a stab with the blade, so the rifle-butt base.
+    if (Part == PART_BLUDGEON && KFWeap_Edged_Scythe(W) != None)
+        return KFWeap_Edged_Scythe(W).bIsFolded ? W.InstantHitDamage[Bash] : BUTT_DAMAGE;
+    if (Part == PART_PIERCE && class<KFDT_Piercing>(BashType) != None) return W.InstantHitDamage[Bash];
+    if (class<KFDT_Bludgeon>(BashType) != None && KFWeap_Blunt_MaceAndShield(W) == None
+        && KFWeap_Pistol_Bladed(W) == None) return W.InstantHitDamage[Bash];
+    return BUTT_DAMAGE;
+}
+
+static function ProcessScaledHit(KFWeapon W, byte Mode, ImpactInfo Impact, float Scale, optional bool bShieldContact,
+    optional bool bNoDismember, optional bool bExperimentalInteractions, optional bool bBluntContact, optional byte Part)
+{
+    local class<DamageType> SavedPartType;
+    local bool bPart;
     local float SavedDamage, SavedMomentum, SavedBluntDamage;
     local class<DamageType> SavedBluntType;
     local bool bDamage, bMomentum, bBoneCrusher, bBlunt;
     local class<DamageType> SavedType, SavedBladeType, Twin;
     local bool bTwin;
     local KFWeap_Blunt_MaceAndShield BoneCrusher;
+    local byte SavedFireMode;
     if (W == None || W.MeleeAttackHelper == None) return;
     bBlunt = bBluntContact && Mode == class'KFWeapon'.const.BASH_FIREMODE
         && ApplyBlunt(W, Mode, SavedBluntType, SavedBluntDamage);
@@ -137,16 +211,36 @@ static function ProcessScaledHit(KFWeapon W, byte Mode, ImpactInfo Impact, float
             bTwin = true;
         }
     }
+    if (Part != PART_NONE && Mode < W.InstantHitDamageTypes.Length && !bBlunt && !bBoneCrusher
+        && PartSwapType(W, Mode, Part) != None)
+    {
+        SavedPartType = W.InstantHitDamageTypes[Mode];
+        W.InstantHitDamageTypes[Mode] = PartSwapType(W, Mode, Part);
+        bPart = true;
+    }
     if (!(Scale == Scale) || Scale <= 0) Scale = 1.0;
     Scale = FClamp(Scale, MIN_SCALE, MAX_SCALE);
     bDamage = Mode < W.InstantHitDamage.Length;
     bMomentum = Mode < W.InstantHitMomentum.Length;
-    if (bDamage) { SavedDamage = W.InstantHitDamage[Mode]; W.InstantHitDamage[Mode] = SavedDamage * Scale; }
+    if (bDamage)
+    {
+        SavedDamage = W.InstantHitDamage[Mode];
+        if (bPart && (Part == PART_BLUDGEON || Part == PART_PIERCE)) W.InstantHitDamage[Mode] = PartBaseDamage(W, Part) * Scale;
+        else W.InstantHitDamage[Mode] = SavedDamage * Scale;
+    }
     if (bMomentum) { SavedMomentum = W.InstantHitMomentum[Mode]; W.InstantHitMomentum[Mode] = SavedMomentum * Scale
         * (bExperimentalInteractions ? ZedTimeWeight(W) : 1.0); }
+    // Stock NotifyMeleeCollision reads the attack's own fire mode (the Ion
+    // Thruster's charge per hit); a VR stroke never enters a stock attack
+    // state, so stand in this hit's mode for the call, as the Pulverizer does.
+    SavedFireMode = W.CurrentFireMode;
+    W.CurrentFireMode = Mode;
     W.MeleeAttackHelper.ProcessMeleeHit(Mode, Impact);
-    if (bBoneCrusher) W.InstantHitDamageTypes[Mode] = SavedType;
+    W.CurrentFireMode = SavedFireMode;
+    // Undo the type swaps in the reverse order they were made.
+    if (bPart) W.InstantHitDamageTypes[Mode] = SavedPartType;
     if (bTwin) W.InstantHitDamageTypes[Mode] = SavedBladeType;
+    if (bBoneCrusher) W.InstantHitDamageTypes[Mode] = SavedType;
     if (bDamage) W.InstantHitDamage[Mode] = SavedDamage;
     if (bMomentum) W.InstantHitMomentum[Mode] = SavedMomentum;
     if (bBlunt) RestoreBlunt(W, Mode, SavedBluntType, SavedBluntDamage);

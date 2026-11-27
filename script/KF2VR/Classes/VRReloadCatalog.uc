@@ -76,6 +76,25 @@ struct MagazineProfile
     // magazine and let go, the handle parks in its notch; once loaded, it is
     // released by a pull and let-go, a slap: MP5, UMP).
     var byte ActionKind;
+    // R60: a rock-in well (the stock clip swings the magazine in at an angle)
+    // that also takes a magazine pushed straight in. The direction it moves
+    // into the well, in the gun root bone's frame; zero for the stock path
+    // only. Opt-in per gun.
+    var vector StraightWellAxis;
+    // R63: a part the incoming load pushes home along its final approach (the
+    // crossbows' string, which the bolt draws back as it is pushed into
+    // place). The insert is sampled from the Tactical Reload clip under every
+    // perk (its hand lays the bolt and pushes it back; the ordinary clip pumps
+    // the string back first), from the moment this part starts to move, and
+    // the live gun follows the guided insert (VRCrossbowCocking).
+    var name DrawBone;
+    // A conventional closed-bolt magazine feed: with KEEP CHAMBERED ROUND the
+    // chambered round stays in the gun when the magazine comes out, and fires
+    // with it out (R6). Never set for open bolts, aggregate or special loads,
+    // or the HRG Stunner, whose alt shot spends three magazine rounds.
+    // Underbarrel grenades use ammo type 1 and are unaffected. The FAMAS and
+    // 93R bursts stop at the chambered round; the AF2011 keeps two.
+    var bool bKeepsChamber;
 };
 var array<MagazineProfile> Profiles;
 
@@ -145,13 +164,25 @@ static function name KeptBone(KFWeapon W)
     return '';
 }
 
-// X/A drops a locked slide only on the slide-based pistols (R40).
-static function bool HandReleaseOnly(KFWeapon W)
+// X/A drops a locked slide only on the slide-based pistols (R40): a profile
+// whose slide holds back on KF2's own lock pose and has a release. A rifle
+// bolt that locks back (bHandRelease) and a handle the hand parked in its
+// notch (ActionKind 3: MP5, UMP, HMTech-501, Teslauncher) go home by hand.
+static function bool ButtonReleases(KFWeapon W)
 {
     local int Index;
     if (W == None) return false;
     Index = FindClass(W.Class);
-    return Index >= 0 && default.Profiles[Index].bHandRelease;
+    return Index >= 0 && default.Profiles[Index].bSlideLock && !default.Profiles[Index].bHandRelease;
+}
+
+// The profile of WeaponClass keeps a chambered round (a split pair member
+// reads its single gun's profile; an aggregate dual actor has none).
+static function bool KeepsChamber(class<KFWeapon> WeaponClass)
+{
+    local int Index;
+    Index = FindClass(WeaponClass);
+    return Index >= 0 && default.Profiles[Index].bKeepsChamber;
 }
 
 static function bool SlideLocks(KFWeapon W)
@@ -166,7 +197,7 @@ static function bool SlideLocks(KFWeapon W)
 static function bool UsableSample(VRReloadRigSampler Sample, bool bEmpty)
 {
     return Sample != None && Sample.Path.Length == 17 && Sample.SeatTime > 0
-        && Sample.InsertLength > 0.1 && Sample.PathLength < 30
+        && Sample.InsertLength > 0.1 && Sample.PathLength < (Sample.bDrawInsert ? 80 : 30)
         && (!bEmpty || Sample.bRackSampled || Sample.ActionKind == 2);
 }
 
@@ -178,43 +209,43 @@ static function byte ActionKindOf(int Index)
 
 defaultproperties
 {
-    Profiles(0)=(WeaponClass=class'KFWeap_Pistol_Colt1911',MeshName=Wep_1stP_M1911_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true)
-    Profiles(1)=(WeaponClass=class'KFWeap_Pistol_Deagle',MeshName=Wep_1stP_Deagle_Rig,RackBone=RW_Slide,MaterialIndex=0,bSlideLock=true)
-    Profiles(2)=(WeaponClass=class'KFWeap_Pistol_Medic',MeshName=Wep_1stP_Medic_Pistol_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true)
-    Profiles(3)=(WeaponClass=class'KFWeap_AssaultRifle_AK12',MeshName=Wep_1stP_AK12_Rig,RackBone=RW_Bolt,MaterialIndex=0)
-    Profiles(4)=(WeaponClass=class'KFWeap_AssaultRifle_Bullpup',MeshName=Wep_1stP_L85A2_Rig,RackBone=RW_Bolt,MaterialIndex=0)
-    Profiles(5)=(WeaponClass=class'KFWeap_Pistol_9mm',MeshName=Wep_1stP_9mm_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true)
+    Profiles(0)=(WeaponClass=class'KFWeap_Pistol_Colt1911',MeshName=Wep_1stP_M1911_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true,bKeepsChamber=true)
+    Profiles(1)=(WeaponClass=class'KFWeap_Pistol_Deagle',MeshName=Wep_1stP_Deagle_Rig,RackBone=RW_Slide,MaterialIndex=0,bSlideLock=true,bKeepsChamber=true)
+    Profiles(2)=(WeaponClass=class'KFWeap_Pistol_Medic',MeshName=Wep_1stP_Medic_Pistol_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true,bKeepsChamber=true)
+    Profiles(3)=(WeaponClass=class'KFWeap_AssaultRifle_AK12',MeshName=Wep_1stP_AK12_Rig,RackBone=RW_Bolt,MaterialIndex=0,bKeepsChamber=true)
+    Profiles(4)=(WeaponClass=class'KFWeap_AssaultRifle_Bullpup',MeshName=Wep_1stP_L85A2_Rig,RackBone=RW_Bolt,MaterialIndex=0,bKeepsChamber=true)
+    Profiles(5)=(WeaponClass=class'KFWeap_Pistol_9mm',MeshName=Wep_1stP_9mm_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true,bKeepsChamber=true)
     // 2026-09-28 expansion: closed-bolt rifles, SMGs and the AA-12. None carries
     // a stock lock pose, so every empty reload racks from the closed action.
-    Profiles(6)=(WeaponClass=class'KFWeap_Rifle_M14EBR',MeshName=WEP_1stP_M14_EBR,RackBone=RW_Bolt,MaterialIndex=0)
+    Profiles(6)=(WeaponClass=class'KFWeap_Rifle_M14EBR',MeshName=WEP_1stP_M14_EBR,RackBone=RW_Bolt,MaterialIndex=0,StraightWellAxis=(X=0,Y=0,Z=1),bKeepsChamber=true)
     Profiles(7)=(WeaponClass=class'KFWeap_Shotgun_AA12',MeshName=Wep_1stP_AA12_Rig,RackBone=RW_ChargingHandle,MaterialIndex=0)
-    Profiles(8)=(WeaponClass=class'KFWeap_SMG_Medic',MeshName=Wep_1stP_Medic_SMG_Rig,RackBone=RW_Bolt,MaterialIndex=0)
-    Profiles(9)=(WeaponClass=class'KFWeap_AssaultRifle_AR15',MeshName=Wep_1stP_AR15_9mm_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt)
-    Profiles(10)=(WeaponClass=class'KFWeap_AssaultRifle_SCAR',MeshName=Wep_1stP_SCAR_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt)
-    Profiles(11)=(WeaponClass=class'KFWeap_SMG_MP7',MeshName=Wep_1stP_MP7_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt)
-    Profiles(12)=(WeaponClass=class'KFWeap_SMG_Kriss',MeshName=Wep_1stP_KRISS_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0)
-    Profiles(13)=(WeaponClass=class'KFWeap_SMG_P90',MeshName=Wep_1stP_P90_Rig,RackBone=RW_Charging_Handle,bRackThumbContact=true,MaterialIndex=0)
+    Profiles(8)=(WeaponClass=class'KFWeap_SMG_Medic',MeshName=Wep_1stP_Medic_SMG_Rig,RackBone=RW_Bolt,MaterialIndex=0,bKeepsChamber=true)
+    Profiles(9)=(WeaponClass=class'KFWeap_AssaultRifle_AR15',MeshName=Wep_1stP_AR15_9mm_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,bKeepsChamber=true)
+    Profiles(10)=(WeaponClass=class'KFWeap_AssaultRifle_SCAR',MeshName=Wep_1stP_SCAR_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,bKeepsChamber=true)
+    Profiles(11)=(WeaponClass=class'KFWeap_SMG_MP7',MeshName=Wep_1stP_MP7_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,bKeepsChamber=true)
+    Profiles(12)=(WeaponClass=class'KFWeap_SMG_Kriss',MeshName=Wep_1stP_KRISS_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,bKeepsChamber=true)
+    Profiles(13)=(WeaponClass=class'KFWeap_SMG_P90',MeshName=Wep_1stP_P90_Rig,RackBone=RW_Charging_Handle,bRackThumbContact=true,MaterialIndex=0,bKeepsChamber=true)
     // 2026-09-30 wave, actions read from each stock empty clip: the G36C holds
     // open on KF2's own lock pose like the pistols; the Tommy Gun and Mac-10
     // are open-bolt guns cocked by one pull; the Zed MKIII has no action step;
     // the UMP's bolt catch has no stock lock pose and the MP5 slap is a plain pull.
     Profiles(14)=(WeaponClass=class'KFWeap_AssaultRifle_Thompson',MeshName=Wep_1stP_TommyGun_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,ActionKind=1)
     Profiles(15)=(WeaponClass=class'KFWeap_SMG_Mac10',MeshName=Wep_1stP_MAC10_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,ActionKind=1)
-    Profiles(16)=(WeaponClass=class'KFWeap_AssaultRifle_G36C',MeshName=WEP_1stP_G36C_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,bSlideLock=true,bHandRelease=true,FollowBone=RW_Bolt)
+    Profiles(16)=(WeaponClass=class'KFWeap_AssaultRifle_G36C',MeshName=WEP_1stP_G36C_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,bSlideLock=true,bHandRelease=true,FollowBone=RW_Bolt,bKeepsChamber=true)
     Profiles(17)=(WeaponClass=class'KFWeap_ZedMKIII',MeshName=WEP_1stP_ZEDMKIII_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,ActionKind=2)
     Profiles(18)=(WeaponClass=class'KFWeap_HRG_Stunner',MeshName=Wep_1stP_HRG_Stunner_Rig,RackBone=RW_ChargingHandle,MaterialIndex=0,FollowBone=RW_Bolt)
-    Profiles(19)=(WeaponClass=class'KFWeap_Shotgun_S12',MeshName=Wep_1stP_Saiga12_Rig,RackBone=RW_Bolt,MaterialIndex=0)
-    Profiles(20)=(WeaponClass=class'KFWeap_SMG_HK_UMP',MeshName=Wep_1stP_HK_UMP_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,ActionKind=3)
-    Profiles(21)=(WeaponClass=class'KFWeap_SMG_MP5RAS',MeshName=Wep_1stP_MP5RAS_Rig,RackBone=RW_Charging_Handle,bRackThumbContact=true,MaterialIndex=0,FollowBone=RW_Bolt,ActionKind=3)
+    Profiles(19)=(WeaponClass=class'KFWeap_Shotgun_S12',MeshName=Wep_1stP_Saiga12_Rig,RackBone=RW_Bolt,MaterialIndex=0,bKeepsChamber=true)
+    Profiles(20)=(WeaponClass=class'KFWeap_SMG_HK_UMP',MeshName=Wep_1stP_HK_UMP_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,ActionKind=3,bKeepsChamber=true)
+    Profiles(21)=(WeaponClass=class'KFWeap_SMG_MP5RAS',MeshName=Wep_1stP_MP5RAS_Rig,RackBone=RW_Charging_Handle,bRackThumbContact=true,MaterialIndex=0,FollowBone=RW_Bolt,ActionKind=3,bKeepsChamber=true)
     // Two-material medic magazines: body and rounds use different slots.
     // Their fold-out handle rides the bolt, as on the HMTech-201.
-    Profiles(22)=(WeaponClass=class'KFWeap_Shotgun_Medic',MeshName=Wep_1stP_Medic_Shotgun_Rig,RackBone=RW_Bolt,MaterialIndex=0,Section1MaterialIndex=1)
-    Profiles(23)=(WeaponClass=class'KFWeap_AssaultRifle_Medic',MeshName=Wep_1stP_Medic_Assault_Rig,RackBone=RW_Bolt,MaterialIndex=0,Section1MaterialIndex=1)
+    Profiles(22)=(WeaponClass=class'KFWeap_Shotgun_Medic',MeshName=Wep_1stP_Medic_Shotgun_Rig,RackBone=RW_Bolt,MaterialIndex=0,Section1MaterialIndex=1,bKeepsChamber=true)
+    Profiles(23)=(WeaponClass=class'KFWeap_AssaultRifle_Medic',MeshName=Wep_1stP_Medic_Assault_Rig,RackBone=RW_Bolt,MaterialIndex=0,Section1MaterialIndex=1,bKeepsChamber=true)
     // 2026-09-30 pistols (roadmap wave 6). The Glock 18C and 93R hold their
     // slide back on KF2's own lock pose. The Disrupter's upper is one piece
     // with its frame (its RW_Bolt animates no geometry): no action step.
-    Profiles(24)=(WeaponClass=class'KFWeap_Pistol_G18C',MeshName=Wep_1stP_G18C_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true)
-    Profiles(25)=(WeaponClass=class'KFWeap_HRG_93R',MeshName=WEP_1P_HRG_93R_Pistol_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true)
+    Profiles(24)=(WeaponClass=class'KFWeap_Pistol_G18C',MeshName=Wep_1stP_G18C_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true,bKeepsChamber=true)
+    Profiles(25)=(WeaponClass=class'KFWeap_HRG_93R',MeshName=WEP_1P_HRG_93R_Pistol_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true,bKeepsChamber=true)
     Profiles(26)=(WeaponClass=class'KFWeap_HRG_Energy',MeshName=WEP_1stP_HRG_Energy_Rig,RackBone=RW_Bolt,MaterialIndex=0,ActionKind=2)
     // 2026-10-01 MKb.42 (roadmap wave 7): an open-bolt gun like the Tommy Gun; its
     // charging handle is the bolt's child, and its eject cover never moves.
@@ -225,10 +256,10 @@ defaultproperties
     // is the handle's child); none of the rifles locks open. The AF2011's
     // slide holds back on its last shot. The FAMAS M26 and the M203 keep their
     // stock AltReloading.
-    Profiles(28)=(WeaponClass=class'KFWeap_AssaultRifle_FAMAS',MeshName=WEP_1stP_Famas_Rig,RackBone=RW_Charging_Rod,MaterialIndex=0,KeepBone=RW_Magazine2)
-    Profiles(29)=(WeaponClass=class'KFWeap_AssaultRifle_FNFal',MeshName=WEP_1stP_FNFAL_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt)
-    Profiles(30)=(WeaponClass=class'KFWeap_AssaultRifle_M16M203',MeshName=Wep_1stP_M16_M203_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt)
-    Profiles(31)=(WeaponClass=class'KFWeap_Pistol_AF2011',MeshName=Wep_1stP_AF2001_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true)
+    Profiles(28)=(WeaponClass=class'KFWeap_AssaultRifle_FAMAS',MeshName=WEP_1stP_Famas_Rig,RackBone=RW_Charging_Rod,MaterialIndex=0,KeepBone=RW_Magazine2,bKeepsChamber=true)
+    Profiles(29)=(WeaponClass=class'KFWeap_AssaultRifle_FNFal',MeshName=WEP_1stP_FNFAL_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,bKeepsChamber=true)
+    Profiles(30)=(WeaponClass=class'KFWeap_AssaultRifle_M16M203',MeshName=Wep_1stP_M16_M203_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,bKeepsChamber=true)
+    Profiles(31)=(WeaponClass=class'KFWeap_Pistol_AF2011',MeshName=Wep_1stP_AF2001_Rig,RackBone=RW_Bolt,MaterialIndex=0,bSlideLock=true,bKeepsChamber=true)
     // 2026-10-01 roadmap wave 13: the Blunderbuss pulls its loaded RW_Cylinder
     // 48 UU out and the same bone returns refilled (Reload_Empty 0.5-1.0 s);
     // RW_Cylinder2 stays with the hidden arm. It has no action step: the
@@ -243,11 +274,14 @@ defaultproperties
     // slide and the Boomy's open bolt hold back after the last shot.
     Profiles(33)=(WeaponClass=class'KFWeap_Shotgun_Nailgun',MeshName=Wep_1stP_Nail_ShotGun_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2)
     Profiles(34)=(WeaponClass=class'KFWeap_HRG_Nailgun',MeshName=Wep_1stP_HRG_Nailgun_PDW_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2)
-    Profiles(35)=(WeaponClass=class'KFWeap_AssaultRifle_HRGIncendiaryRifle',MeshName=WEP_1stP_HRG_IncendiaryRifle_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt)
-    Profiles(36)=(WeaponClass=class'KFWeap_AssaultRifle_HRGTeslauncher',MeshName=WEP_1stP_HRG_Teslauncher_Rig,RackBone=RW_Charging_Handle,RackHand=1,bRackThumbContact=true,MaterialIndex=0)
-    Profiles(37)=(WeaponClass=class'KFWeap_AssaultRifle_MedicRifleGrenadeLauncher',MeshName=Wep_1stP_Medic_GrenadeLauncher_Rig,RackBone=RW_Charging_Handle,RackHand=1,bRackThumbContact=true,MaterialIndex=0)
+    Profiles(35)=(WeaponClass=class'KFWeap_AssaultRifle_HRGIncendiaryRifle',MeshName=WEP_1stP_HRG_IncendiaryRifle_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,FollowBone=RW_Bolt,bKeepsChamber=true)
+    // R65: the Teslauncher and HMTech-501 share one empty clip, which pulls
+    // the charging handle back with the magazine out (0.7-0.9 s, right thumb)
+    // and returns it after the seat (1.9-2.0 s): the park-then-release kind.
+    Profiles(36)=(WeaponClass=class'KFWeap_AssaultRifle_HRGTeslauncher',MeshName=WEP_1stP_HRG_Teslauncher_Rig,RackBone=RW_Charging_Handle,RackHand=1,bRackThumbContact=true,MaterialIndex=0,ActionKind=3,bKeepsChamber=true)
+    Profiles(37)=(WeaponClass=class'KFWeap_AssaultRifle_MedicRifleGrenadeLauncher',MeshName=Wep_1stP_Medic_GrenadeLauncher_Rig,RackBone=RW_Charging_Handle,RackHand=1,bRackThumbContact=true,MaterialIndex=0,ActionKind=3,bKeepsChamber=true)
     Profiles(38)=(WeaponClass=class'KFWeap_HRG_Boomy',MeshName=Wep_1stP_HRG_Boomy_Rig,RackBone=RW_Charging_Handle,MaterialIndex=0,bSlideLock=true,bHandRelease=true,ActionKind=1,bEarlierCarryGrip=true)
-    Profiles(39)=(WeaponClass=class'KFWeap_SMG_G18',MeshName=Wep_1P_RiotShield_Rig,RackBone=RW_Bolt,RackHand=1,MaterialIndex=0,bSlideLock=true)
+    Profiles(39)=(WeaponClass=class'KFWeap_SMG_G18',MeshName=Wep_1P_RiotShield_Rig,RackBone=RW_Bolt,RackHand=1,MaterialIndex=0,bSlideLock=true,bKeepsChamber=true)
     Profiles(40)=(WeaponClass=class'KFWeap_AssaultRifle_LazerCutter',MeshName=Wep_1stP_Laser_Cutter_Rig,RackBone=RW_Weapon,MaterialIndex=1,ActionKind=2)
     Profiles(41)=(WeaponClass=class'KFWeap_AssaultRifle_Microwave',MeshName=Wep_1stP_Microwave_Assault_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2)
     Profiles(42)=(WeaponClass=class'KFWeap_HVStormCannon',MeshName=WEP_1stP_HVStormCannon_Rig,RackBone=RW_Weapon,MaterialIndex=1,ActionKind=2,Section1MaterialIndex=4)
@@ -280,9 +314,10 @@ defaultproperties
     Profiles(66)=(WeaponClass=class'KFWeap_AssaultRifle_Doshinegun',MeshName=Wep_1stP_Doshinegun_Rig,RackBone=RW_Weapon,MaterialIndex=2,ActionKind=2,LoadedBone=RW_Notes2,SpareBone=RW_Notes2,bSeatAtNotify=true,bNoEject=true,bParkedLoaded=true)
     Profiles(60)=(WeaponClass=class'KFWeap_Rifle_ParasiteImplanter',MeshName=Wep_1stP_ParasiteImplanter_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Magazine,SpareBone=RW_Magazine,InsertHand=1,bEarlierCarryGrip=true)
     // Single projectiles: never eject a fictitious magazine. Stock retains
-    // its cable/bolt completion and each weapon's one-round ammo contract.
-    Profiles(67)=(WeaponClass=class'KFWeap_Bow_Crossbow',MeshName=Wep_1stP_Crossbow_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Projectile,SpareBone=RW_Projectile,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true,ParkedRest=(X=37.7,Z=8.5))
-    Profiles(68)=(WeaponClass=class'KFWeap_HRG_Crossboom',MeshName=Wep_1stP_HRG_Crossboom_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Projectile,SpareBone=RW_Projectile,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true,ParkedRest=(X=37.7,Z=8.5))
+    // each weapon's one-round ammo contract. The crossbows' bolt draws the
+    // string as it is pushed home (DrawBone, R63).
+    Profiles(67)=(WeaponClass=class'KFWeap_Bow_Crossbow',MeshName=Wep_1stP_Crossbow_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Projectile,SpareBone=RW_Projectile,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true,ParkedRest=(X=37.7,Z=8.5),DrawBone=RW_Cable_Center)
+    Profiles(68)=(WeaponClass=class'KFWeap_HRG_Crossboom',MeshName=Wep_1stP_HRG_Crossboom_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Projectile,SpareBone=RW_Projectile,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true,ParkedRest=(X=37.7,Z=8.5),DrawBone=RW_Cable_Center)
     Profiles(69)=(WeaponClass=class'KFWeap_Rifle_RailGun',MeshName=WEP_1stP_RailGun_Rig,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Bullets1,SpareBone=RW_Bullets1,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
     Profiles(70)=(WeaponClass=class'KFWeap_Rifle_HRGIncision',MeshName=WEP_1stP_HRG_Incision,RackBone=RW_Weapon,MaterialIndex=0,ActionKind=2,LoadedBone=RW_Bullets1,SpareBone=RW_Bullets1,bNoEject=true,bPlateauInsert=true,bProjectilePlateau=true,bEarlierCarryGrip=true)
     // The bow is LW_Weapon; RW_Weapon is the right-hand arrow, not the bow.

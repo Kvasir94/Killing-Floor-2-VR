@@ -70,7 +70,7 @@ def main(argv=None):
     def save():
         receipt.write_text(json.dumps(record, indent=2), encoding="utf-8")
     for name, flags in scenarios(args.suite, args.test_map):
-        command = [str(release / "runtime/python.exe"), str(release / "tools/multiplayer/session.py"),
+        command = [str(release / "runtime/python.exe"), str(args.workspace / "tools/multiplayer/session.py"),
                    "--release", str(release), "--game-root", str(args.game_root),
                    "--server-root", str(args.server_root), "--user-config", str(args.user_config),
                    "--cache-root", str(args.workspace / "build/workshop-cache"),

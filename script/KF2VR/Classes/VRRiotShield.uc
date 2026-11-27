@@ -84,13 +84,17 @@ simulated function Update(VRHandsBridge B, KFWeapon W, int Hand)
     local quat ControllerQ, ShieldQ, HalfTurn;
     local vector ShieldPosition;
     local bool bGauntlet;
+    local VRWeaponPresenter ItemPresenter;
+    ItemPresenter = VRWeaponPresenter(B);
     if (Tree != None && (W != Weapon || Mesh != W.MySkelMesh || Mesh.Animations != Tree)) Release();
-    if (Hand < 0 || Hand > 1 || !bCalibrated || B.FreeHandPose == None || !B.FreeHandPose.bReady)
+    if (Hand < 0 || Hand > 1 || !bCalibrated || B.FreeHandPose == None || !B.FreeHandPose.bReady
+        || (Tree == None && !Bind(W)))
     {
         Suspend();
+        if (ItemPresenter != None && ItemPresenter.OffhandGauntletMelee != None)
+            ItemPresenter.OffhandGauntletMelee.GauntletKickVelocity = vect(0,0,0);
         return;
     }
-    if (Tree == None && !Bind(W)) return;
     // The free hand's wrist is WristRotation(controller) at the controller
     // position; express the authored left-wrist shield in controller space.
     ShieldQ = QuatProduct(B.FreeHandPose.WristBasis[0], ShieldRotationInWrist);
@@ -111,6 +115,8 @@ simulated function Update(VRHandsBridge B, KFWeapon W, int Hand)
     }
     ControllerQ = QuatFromRotator(Hand == 0 ? B.LeftRotation : B.RightRotation);
     Control.BoneTranslation = B.Hands[Hand].Position + QuatRotateVector(ControllerQ, ShieldPosition);
+    if (bGauntlet && ItemPresenter != None && ItemPresenter.OffhandGauntletMelee != None)
+        ItemPresenter.OffhandGauntletMelee.ApplyGauntletContact(Hand, Control.BoneTranslation);
     Control.BoneRotation = QuatToRotator(QuatProduct(ControllerQ, ShieldQ));
     Control.SetSkelControlStrength(1, 0);
     // A world-space target is baked into component space when the skeleton is

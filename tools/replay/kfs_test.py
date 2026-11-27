@@ -47,6 +47,20 @@ class CompileTest(unittest.TestCase):
             '2|stick|hand=L|x=0|y=0.5', '2|wait|t=2', '2|stick|hand=L|x=0|y=0'])
         self.assertEqual(ops('turn left')[0], '1|stick|hand=R|x=-1|y=0')
 
+    def test_belt_progress_and_regrab_compile_as_input_ops(self):
+        result = ops('release left grip\nmove left to reload.target speed 60 tol 1 timeout 6 track\n'
+                     'hold left grip\nwait until R.belt_engaged == true timeout 1.5s\n'
+                     'stroke left R to 0.7 speed 20 tol 0.03 timeout 6\n'
+                     'expect R.belt_progress >= 0.5\nrelease left grip\n'
+                     'wait until R.belt_seated == true timeout 2s')
+        self.assertEqual(result[0], '1|button|hand=L|b=grip|down=0')
+        self.assertIn('a=reload.target', result[1])
+        self.assertIn('probe=R.belt_engaged', result[3])
+        self.assertIn('|stroke|hand=L|gun=R|s=0.7', result[4])
+        self.assertIn('probe=R.belt_progress', result[5])
+        self.assertEqual(result[6], '7|button|hand=L|b=grip|down=0')
+        self.assertIn('probe=R.belt_seated', result[7])
+
     def test_log_checks_need_marks(self):
         compiled = kfs.Compiler().compile_text('mark seated\nexpect log /seated/ since seated\nforbid log /Critical/', 'x')
         self.assertEqual([c['kind'] for c in compiled.log_checks], ['expect', 'forbid'])
@@ -97,6 +111,40 @@ class LogTest(unittest.TestCase):
             'mark seated\nexpect log /GEOMETRY seated/ since seated\nforbid log /Critical/\nexpect log /never/', 'x')
         self.assertEqual([r['passed'] for r in kfs.check_log(self.LOG, compiled)], [True, True, False])
 
+
+
+class NewStatementTest(unittest.TestCase):
+    def test_spawn_names_the_exact_class_and_hostile(self):
+        self.assertEqual(ops('spawn clot hostile dist 400'),
+                         ['1|spawn|zed=ClotA|cls=KFPawn_ZedClot_Alpha|hostile=1|dist=400|yaw=0'])
+        self.assertEqual(ops('spawn GF2 yaw 30'), ['1|spawn|zed=GF2|dist=300|yaw=30'])
+        self.assertIn('cls=KFPawn_ZedHusk', ops('spawn KFPawn_ZedHusk')[0])
+
+    def test_damage(self):
+        self.assertEqual(ops('damage on; damage off'), ['1|damage|on=1', '1|damage|on=0'])
+        with self.assertRaises(kfs.ScriptError):
+            ops('damage maybe')
+
+    def test_select_and_wheel(self):
+        self.assertEqual(ops('select left W.Gun refused timeout 5'),
+                         ['1|select|hand=L|act=pick|pick=W.Gun|refused=1|timeout=5'])
+        self.assertIn('pick=hand', ops('select right empty')[0])
+        self.assertEqual(ops('wheel right open'), ['1|select|hand=R|act=open'])
+        self.assertEqual(ops('wheel left close'), ['1|select|hand=L|act=close'])
+        with self.assertRaises(kfs.ScriptError):
+            ops('wheel left spin')
+
+    def test_camera(self):
+        self.assertEqual(ops('camera side dist 140 body'), ['1|camera|mode=side|dist=140|body=1'])
+        self.assertEqual(ops('camera eye'), ['1|camera|mode=eye'])
+        for bad in ('camera eye dist 100', 'camera nowhere', 'camera front dist 5000'):
+            with self.assertRaises(kfs.ScriptError, msg=bad):
+                ops(bad)
+
+    def test_new_probes(self):
+        self.assertIn('probe=god', ops('expect god == false')[0])
+        self.assertIn('probe=nearest.VRWorldDropGun.pull', ops('expect nearest(VRWorldDropGun).pull == 0')[0])
+        self.assertEqual(ops('log left.wheel_items'), ['1|log|probes=L.wheel_items'])
 
 if __name__ == '__main__':
     unittest.main()

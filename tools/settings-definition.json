@@ -1590,6 +1590,33 @@
    "applies": "live"
   },
   {
+   "key": "bLauncherTriggerOnly",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "group": "Grip",
+   "depth": "customize",
+   "label": "A/X + trigger fires launcher",
+   "aliases": [
+    "Secondary fire button",
+    "Launcher trigger only",
+    "Modifier secondary fire"
+   ],
+   "help": "On guns whose launcher or shotgun has its own trigger (M16 M203, HRG Incendiary, FAMAS), A/X + trigger also fires it; when off, only that launcher's trigger grip does.",
+   "owner": "player",
+   "kind": "choice",
+   "choices": [
+    [
+     "False",
+     "On"
+    ],
+    [
+     "True",
+     "Off"
+    ]
+   ],
+   "applies": "live"
+  },
+  {
    "key": "AimAssistPreset",
    "store": "assist",
    "category": "Hands & Weapons",
@@ -1929,11 +1956,36 @@
    "category": "Hands & Weapons",
    "depth": "customize",
    "group": "Melee",
-   "label": "Physical melee",
-   "help": "Hit by swinging melee weapons with your own arm.",
+   "label": "B&S2 melee feel",
+   "help": "Adds Blade & Sorcery style weight to melee: hit-stop, weapon kick, Zed pushes, stabs that stick. Swinging to hit works either way.",
    "owner": "player",
    "applies": "live",
    "headset_only": true
+  },
+  {
+   "key": "bExperimentalFeatures",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "depth": "customize",
+   "group": "Melee",
+   "label": "Experimental features",
+   "help": "Try features still being built. Each one has its own switch below.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true
+  },
+  {
+   "key": "bLivingArmLoss",
+   "store": "hands",
+   "category": "Hands & Weapons",
+   "depth": "customize",
+   "group": "Melee",
+   "label": "Living Zed gore",
+   "help": "Zeds show serious damage while still alive. Weapons can take an arm off, you can tear one off a small Zed by hand, and a Zed can't hit with an arm it has lost. Heavy hits to the belly open a gut wound. Off leaves stock gore and Zed attacks unchanged. Shows with gore intensity at High.",
+   "owner": "player",
+   "applies": "live",
+   "headset_only": true,
+   "server_governed": true
   },
   {
    "key": "graphics_preset",
@@ -2543,6 +2595,37 @@
    "applies": "live",
    "headset_only": true,
    "where": "game"
+  },
+  {
+   "key": "bPerformanceScopes",
+   "store": "hands",
+   "category": "Graphics & HUD",
+   "group": "Shadow tuning",
+   "depth": "customize",
+   "label": "Scopes",
+   "aliases": [
+    "Scope quality",
+    "Scope refresh"
+   ],
+   "help": "How often a scope's glass redraws. Performance redraws it every other frame while the game runs at 80 FPS or more, for a few more frames per second.",
+   "owner": "player",
+   "applies": "live",
+   "kind": "choice",
+   "choices": [
+    [
+     "False",
+     "Quality"
+    ],
+    [
+     "True",
+     "Performance"
+    ]
+   ],
+   "choice_help": {
+    "False": "The scope image updates every frame.",
+    "True": "The scope image updates every other frame at 80 FPS or more."
+   },
+   "recommended": "False"
   },
   {
    "key": "ShadowQuality",

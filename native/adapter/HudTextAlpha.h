@@ -11,12 +11,12 @@ namespace kf2vr::adapter {
 // copy resolved from an owned HUD/hand-selector/damage Canvas on the render thread.
 class HudTextAlpha {
 public:
-    static constexpr unsigned PanelCount=14,SelectorCount=2,PopupCount=24;
+    static constexpr unsigned PanelCount=15,SelectorCount=2,PopupCount=24;
     // Status, left/right weapon readout, session module, alert banner, the
-    // first ammo pouch counter, six teammate tags, second pouch counter, and
-    // the full-text priority/boss introduction panel.
-    static constexpr unsigned PanelWidth[PanelCount]{1024,800,800,1024,1024,800,512,512,512,512,512,512,800,1024};
-    static constexpr unsigned PanelHeight[PanelCount]{512,320,320,512,256,320,256,256,256,256,256,256,320,512};
+    // first ammo pouch counter, six teammate tags, second pouch counter, the
+    // full-text priority/boss introduction panel and the Rack 'em Up splat.
+    static constexpr unsigned PanelWidth[PanelCount]{1024,800,800,1024,1024,800,512,512,512,512,512,512,800,1024,512};
+    static constexpr unsigned PanelHeight[PanelCount]{512,320,320,512,256,320,256,256,256,256,256,256,320,512,512};
 private:
     template<class T> using Ptr=Microsoft::WRL::ComPtr<T>;
     std::array<Ptr<ID3D11Resource>,PanelCount+SelectorCount+PopupCount> targets_;

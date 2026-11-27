@@ -14,6 +14,18 @@ static function bool ValidPosition(vector Position)
         && Abs(Position.X) < 100000000 && Abs(Position.Y) < 100000000 && Abs(Position.Z) < 100000000;
 }
 
+// How far a gun tipped between two world orientations, ignoring turns about
+// the vertical (R69: a snap or smooth turn is not a tilt or a discontinuity):
+// the larger change in elevation of its forward and right axes, in radians.
+static function float TiltStep(quat A, quat B)
+{
+    local vector FA, FB, RA, RB;
+    FA = QuatRotateVector(A, vect(1,0,0)); FB = QuatRotateVector(B, vect(1,0,0));
+    RA = QuatRotateVector(A, vect(0,1,0)); RB = QuatRotateVector(B, vect(0,1,0));
+    return FMax(Abs(Asin(FClamp(FA.Z, -1, 1)) - Asin(FClamp(FB.Z, -1, 1))),
+        Abs(Asin(FClamp(RA.Z, -1, 1)) - Asin(FClamp(RB.Z, -1, 1))));
+}
+
 static function bool ValidTime(float Time)
 {
     return Time == Time && Time >= 0 && Time < 100000000;

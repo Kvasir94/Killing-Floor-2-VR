@@ -879,7 +879,9 @@ function UpdateHand()
         }
         if (!bRecoveredMagazine && (Bridge.NativeTriggerActiveMask & (1 << OffHand())) == 0) { CancelHand(OffHand()); return; }
         if (bRecoveredMagazine && !Motion.bReady) Motion.Begin(LocalPosition, Owner.Now());
-        if (!Motion.Check(LocalPosition, Owner.Now())) { CancelHand(OffHand()); return; }
+        // R69: a frame gap or a jump re-anchors the carry; it is not tracking loss.
+        if (!Motion.Check(LocalPosition, Owner.Now()))
+        { if (!Motion.Begin(LocalPosition, Owner.Now())) CancelHand(OffHand()); return; }
         if (!bRecoveredMagazine)
         {
             PouchSide = Owner.ReturnPouchSide(OffHand(), Trigger, PouchReturnArmed);
@@ -910,7 +912,14 @@ function UpdateHand()
         bEngaged = true; Bridge.Hands[OffHand()].bGripArmed = false;
         Owner.Pulse(1 << OffHand(), 0.25, 0.02); return;
     }
-    if (!Motion.Check(LocalPosition, Owner.Now())) { CancelHand(OffHand()); return; }
+    if (!Motion.Check(LocalPosition, Owner.Now()))
+    {
+        // R69: a frame gap or a jump keeps the stroke. Rebase the grab on this
+        // sample so the amount stays where it was and only later travel moves it.
+        if (!Motion.Begin(LocalPosition, Owner.Now())) { CancelHand(OffHand()); return; }
+        GrabOffset = LocalPosition / GunScale() - Path.ContactLocal(Amount);
+        return;
+    }
     if (Stage == 1 && !bRecoveredMagazine)
     {
         if ((Bridge.NativeTriggerActiveMask & (1 << OffHand())) == 0) { CancelHand(OffHand()); return; }

@@ -12,6 +12,8 @@ var string LastExtractionGate;
 var quat ClosedQ, OpenQ, LastQ, GripQ;
 var vector Pivot, GripLocal;
 var int RequiredShells, SeatedShells;
+// Shells already paid at their seat (the break-action shotguns, #246).
+var int PaidShells;
 // The catalog row of the bound gun, and its hinge as a local axis with the
 // plane the hand angle is measured in (U toward V is a positive opening).
 var int Profile, Capacity, AmmoAtBind, SourceHand;
@@ -32,10 +34,25 @@ var float EjectStarted;
 var VRMG3BeltPath BeltPath;
 var bool bBoxSeated, bBeltSeated, bBeltEngaged, bBeltGripWasDown;
 var float BeltAmount;
+// A belt let go past BeltReleaseAmount of its lay finishes into the tray by
+// itself over BeltSettleSeconds, as a released magazine past its alignment
+// eases home (#211). Short of it, the belt falls back to the box mouth.
+var bool bBeltSettling;
+var float BeltSettleStarted, BeltSettleFrom, BeltReleaseAmount, BeltSettleSeconds;
 var vector BeltGrabOffset;
 var vector LastCoverPalm;
 var float CoverPalmTime;
 var int BeltPartStart;
+// R64: the charging handle the stock reload works before the action opens
+// (VRBreakCatalog.ChargeBone). Its pull is sampled from the reload clip; the
+// hand takes it first, pulls it to the rear stop and lets it go forward, and
+// only then does the cover become the next step. ChargeAmount runs 0 forward
+// to 1 rear. With no hand free it strokes by itself (R11).
+var VRActionPath ChargePath;
+var int ChargePart, ChargeHand;
+var float ChargeAmount, LastChargeTime, ChargeReturnSeconds;
+var bool bChargeOwed, bChargeEngaged, bChargeRear, bChargeReturning, bChargeGripWasDown;
+var AkEvent ChargeBackSound, ChargeForwardSound;
 var bool bRequestGrip, bOpeningByGrip, bRequestOpeningByGrip;
 var quat GrabHandQ, LastHandQ;
 var float TapRadius, InspectSeconds;
@@ -154,6 +171,27 @@ function bool SupportWinsGrip(VRWeaponRuntime R, int Hand, float HandleGap)
     return VSize(Bridge.Hands[Hand].Position - Zone) < HandleGap;
 }
 
+// R67: on a loaded rifle whose bolt is closed and owes no cycle or reload
+// step, a squeeze at the trigger grip (the inventory's twelve-unit regrip
+// zone) takes the grip and never opens the bolt. The M99's knob sits beside
+// that grip, so a palm on the grip is always near the knob: the wrist nearer
+// the bolt's own stock wrist contact than the grip is the deliberate knob
+// grab (#169, RACK A LOADED GUN inspection), which still works it, as does
+// any owed step.
+function bool TriggerGripWins(VRWeaponRuntime R, int Hand)
+{
+    local vector Contact;
+    local float GripGap;
+    if (R == None || R.Item == None || R.Presenter == None || !BoltOpening(R.Item)
+        || R.Item.AmmoCount[0] <= 0 || R.Item.IsInState('Reloading') || R.MechanismPending != 0
+        || (Gun == R.Item && (bOpened || bEngaged)) || (Owner.bActive && Owner.Gun == R.Item)
+        || (Owner.ManualAction != None && Owner.ManualAction.Gun == R.Item
+            && (Owner.ManualAction.bNeedsPump || Owner.ManualAction.Amount > 0.05))) return false;
+    GripGap = VSize(Bridge.Hands[Hand].Position - R.Presenter.PrimaryGripWorld());
+    if (GripGap > 12) return false;
+    return !PathOpeningContact(R, Contact) || VSize(Bridge.Hands[Hand].Position - Contact) >= GripGap;
+}
+
 // How far a root-local palm is from a part's span: from its handle bone, posed
 // at P/Q, to the far end the catalog measured (SlapTip). A hand takes or slaps
 // the part anywhere along it. The stock wrist contact can sit well off the
@@ -200,6 +238,23 @@ function bool HandleInReach()
     if (HandleGap() <= HandleReach()) return true;
     return bPath && (BoltOpening(Gun) || ManualLeverClosure())
         && VSize(Bridge.Hands[OffHand()].Position - Contact()) <= Radius;
+}
+
+// How far a world point is from this session's spanned part where it stands
+// now, in world UU, and the nearest point of the part to it. A large value
+// when the part has no measured span.
+function float SpanPointGap(vector World, optional out vector Nearest)
+{
+    local vector P, PartLocal;
+    local quat Q;
+    local float Gap;
+    if (!bPath || Profile < 0) return 1000000;
+    ActionPath.PoseAt(Amount, 0, P, Q);
+    PartLocal = QuatRotateVector(QuatInvert(RootQ()), World - RootPos()) / GunScale();
+    Gap = SpanGap(Profile, PartLocal, P, Q, Nearest);
+    if (Gap >= 1000000) return Gap;
+    Nearest = RootPos() + QuatRotateVector(RootQ(), Nearest * GunScale());
+    return Gap * GunScale();
 }
 
 // How far a palm is from the action handle it could take now, in world UU:
@@ -428,7 +483,8 @@ function bool ReadyToSeatShell()
 }
 function bool OwnsHand(int Hand)
 {
-    return Enabled() && Owner.InputOwner.ContextValid() && Gun != None && (bEngaged || bBeltEngaged) && Hand == OffHand();
+    return Enabled() && Owner.InputOwner.ContextValid() && Gun != None
+        && (bEngaged || bBeltEngaged || bChargeEngaged) && Hand == OffHand();
 }
 
 static function bool BoltOpening(KFWeapon W)
@@ -618,6 +674,7 @@ function Update()
                 Gap = bSpan ? Gap * Scale : VSize(ContactPosition - Bridge.Hands[1-H].Position);
             }
             if (HasContact && !(Down && !bRequestTrigger) && SupportWinsGrip(R, 1-H, Gap)) HasContact = false;
+            if (HasContact && TriggerGripWins(R, 1-H)) HasContact = false;
             if ((HasContact && (Gap <= (bSpan ? PartRadius * Scale : Radius)
                     // Bolt handles and loading levers keep the stock wrist contact too.
                     || (bSpan && (BoltOpening(R.Item)
@@ -628,7 +685,8 @@ function Update()
                         class'VRBreakCatalog'.static.FindClass(R.Item.Class)].PathBones[0])) <= Radius)
                 || (SingleShotLauncher(R.Item) && VSize(Bridge.PalmPosition(1-H)
                     - (R.Item.MySkelMesh.GetBoneLocation('RW_Barrel')
-                        + QuatRotateVector(R.Item.MySkelMesh.GetBoneQuaternion('RW_Barrel'), vect(4,0,0) * Owner.ScaleOf(R.Item)))) <= Radius))
+                        + QuatRotateVector(R.Item.MySkelMesh.GetBoneQuaternion('RW_Barrel'), vect(4,0,0) * Owner.ScaleOf(R.Item)))) <= Radius)
+                || ChargeStartContact(R, 1-H, Grip))
             {
                 // A squeeze during the shot recovery must survive until stock
                 // returns to Active. Keep it only while held at this contact.
@@ -649,6 +707,25 @@ function Update()
         return;
     }
     bRequestTrigger = true; bRequestGrip = true; bQueuedOpening = false; bQueuedReload = false; QueuedGun = None;
+}
+
+// R64: an empty belt-fed gun's charging handle starts its reload with no
+// button, as an empty pump's fore-end does: a grip with the palm on the handle,
+// nearer to it than to the support hold. A gun with rounds left is started by
+// X/A or its cover, so a support squeeze can never drop a part-full box.
+function bool ChargeStartContact(VRWeaponRuntime R, int Hand, bool Grip)
+{
+    local int Row;
+    local name Bone;
+    local float Gap;
+    if (!Grip || R == None || R.Item == None || R.Item.AmmoCount[0] > 0 || !R.CanStartReload()
+        || R.bLoadEmptied || Owner.AutoActionAllowed(R)) return false;
+    Row = class'VRBreakCatalog'.static.FindClass(R.Item.Class);
+    if (Row < 0) return false;
+    Bone = class'VRBreakCatalog'.default.Profiles[Row].ChargeBone;
+    if (Bone == '' || R.Item.MySkelMesh.MatchRefBone(Bone) < 0) return false;
+    Gap = VSize(Bridge.PalmPosition(Hand) - R.Item.MySkelMesh.GetBoneLocation(Bone));
+    return Gap <= PartRadius * Owner.ScaleOf(R.Item) && !SupportWinsGrip(R, Hand, Gap);
 }
 
 function bool BeginSession(VRWeaponRuntime R, int Hand)
@@ -687,10 +764,13 @@ function bool BeginSession(VRWeaponRuntime R, int Hand)
     bCloseAdmitted = false;
     LastEjectTime = 0;
     BeltPath = None; bBoxSeated = false; bBeltSeated = false;
-    bBeltEngaged = false; bBeltGripWasDown = true; BeltAmount = 0;
+    bBeltEngaged = false; bBeltGripWasDown = true; BeltAmount = 0; bBeltSettling = false;
     CoverPalmTime = 0;
     BeltPartStart = -1;
     InspectHeldAt = 0; bInspectClosing = false;
+    ChargePath = None; ChargePart = -1; ChargeAmount = 0; LastChargeTime = 0;
+    bChargeOwed = false; bChargeEngaged = false; bChargeRear = false; bChargeReturning = false;
+    bChargeGripWasDown = true;
     ActionPath = None;
     if (bPath)
     {
@@ -704,7 +784,7 @@ function bool BeginSession(VRWeaponRuntime R, int Hand)
     Amount = 0; bOpened = false; bClosed = false; bCloseReady = false;
     bFlickClosing = false;
     bOpeningByGrip = bRequestOpening && bRequestOpeningByGrip;
-    bEngaged = false; SeatedShells = 0;
+    bEngaged = false; SeatedShells = 0; PaidShells = 0;
     RequiredShells = RequiredLoad(Gun.Class, Gun.MagazineCapacity[0],
         Gun.AmmoCount[0], Gun.GetSpareAmmoForHUD(), Gun.bInfiniteSpareAmmo);
     if (Owner.bBreakInspection) RequiredShells = 0;
@@ -854,6 +934,7 @@ function bool BeginPath(AnimNodeSequence Seq)
         Parts[I].IdleLocal = Owner.SeatLocal;
         Parts[I].IdleLocalQ = Owner.SeatLocalQ;
     }
+    BeginCharge();
     if (class'VRMG3BeltPath'.static.Covers(Gun) && !Owner.bBreakInspection)
     {
         BeltPath = new(self) class'VRMG3BeltPath';
@@ -887,7 +968,10 @@ function bool BeginPath(AnimNodeSequence Seq)
     if (bSpeedloader) { Owner.bAwaitAmmo = true; Owner.PauseStock(); }
     Motion.Reset();
     bTriggerWasDown = false;
-    if (bManualOpening && (bOpeningByGrip ? Owner.GripDown(OffHand()) : Owner.TriggerDown(OffHand())))
+    // The squeeze that started the reload takes the charging handle if it is
+    // on it (R64); the cover is not taken while the handle is owed.
+    if (bChargeOwed) { bChargeGripWasDown = false; bTriggerWasDown = true; bGripWasDown = true; }
+    else if (bManualOpening && (bOpeningByGrip ? Owner.GripDown(OffHand()) : Owner.TriggerDown(OffHand())))
     {
         bEngaged = true; GrabAmount = Amount;
         if (BoltOpening(Gun)) ActionPath.Grab(LocalHandPosition() / GunScale(), Amount);
@@ -899,6 +983,144 @@ function bool BeginPath(AnimNodeSequence Seq)
     `log("KF2VR_BREAK_ACTION phase=begin path=" $ ActionPath.Bones[0] @ "shells=" $ RequiredShells
         @ "open=" $ ActionPath.OpenTime @ "start=" $ ActionPath.StartTime @ "length=" $ ActionPath.Length);
     return true;
+}
+
+// R64: sample the charging handle's pull from the reload clip and hold the
+// handle under its own control, so the stock clip's stroke never plays under
+// a free hand. Called while Parts still ends with the non-belt parts.
+function BeginCharge()
+{
+    local name Bone;
+    local VRActionPath Other;
+    local AnimSequence Seq;
+    local AnimNotify_AkEvent Event;
+    local int I;
+    Bone = class'VRBreakCatalog'.default.Profiles[Profile].ChargeBone;
+    if (Bone == '' || Owner.bBreakInspection || Owner.Automatic(Runtime)
+        || Gun.MySkelMesh.MatchRefBone(Bone) < 0) return;
+    ChargePath = new(self) class'VRActionPath';
+    ChargePath.Bones[0] = Bone; ChargePath.BoneCount = 1;
+    ChargeHand = 0;
+    if (!ChargePath.SampleClip(Bridge, Gun, RootBone, Owner.InsertAnim, Bridge.HandBone(0))) { ChargePath = None; return; }
+    // The stock hand that really works it: the nearer wrist (the Stoner's and
+    // Bastion's left, the MG3's right).
+    Other = new(self) class'VRActionPath';
+    Other.Bones[0] = Bone; Other.BoneCount = 1;
+    if (Other.SampleClip(Bridge, Gun, RootBone, Owner.InsertAnim, Bridge.HandBone(1))
+        && VSize(Other.GripLocal) > 0.01
+        && (VSize(ChargePath.GripLocal) < 0.01 || VSize(Other.GripLocal) < VSize(ChargePath.GripLocal)))
+    { ChargePath = Other; ChargeHand = 1; }
+    // Its rest pose, on the reference its own path was sampled on.
+    Bridge.AttachComponent(ChargePath.Ref);
+    ChargePath.PoseRef(ChargePath.StartTime);
+    I = Parts.Length;
+    AddPart(ChargePath.Ref, Bone, false);
+    Bridge.DetachComponent(ChargePath.Ref);
+    if (Parts.Length != I + 1) { ChargePath = None; return; }
+    ChargePart = I;
+    // The clip's own two charge events, played at the rear stop and the return.
+    ChargeBackSound = None; ChargeForwardSound = None;
+    Seq = Gun.MySkelMesh.FindAnimSequence(Owner.InsertAnim);
+    if (Seq != None)
+    {
+        for (I = 0; I < Seq.Notifies.Length; ++I)
+        {
+            Event = AnimNotify_AkEvent(Seq.Notifies[I].Notify);
+            if (Event == None || !class'VRReloadAudioPlan'.static.StockBeltCharge(Event.AkEvent)) continue;
+            if (ChargeBackSound == None) ChargeBackSound = Event.AkEvent;
+            else if (ChargeForwardSound == None) ChargeForwardSound = Event.AkEvent;
+        }
+    }
+    // Owed once per reload: a resumed reload whose box already left has had it.
+    bChargeOwed = !Runtime.bLoadEmptied;
+    `log("KF2VR_BREAK_ACTION phase=charge-bound bone=" $ Bone @ "hand=" $ ChargeHand @ "owed=" $ bChargeOwed
+        @ "length=" $ ChargePath.Length);
+}
+
+// The hand's hold on the charging handle (or where it will take it).
+function vector ChargeContact()
+{
+    return RootPos() + QuatRotateVector(RootQ(), ChargePath.ContactLocal(ChargeAmount) * GunScale());
+}
+
+function PlayCharge(bool bBack)
+{
+    local AkEvent Sound;
+    Sound = bBack ? ChargeBackSound : ChargeForwardSound;
+    if (Sound != None) Gun.PlayAkEvent(Sound, true, false, false,
+        class'VRReloadAudio'.static.NearField(Bridge, ChargeContact()));
+    class'VRMechanismHaptics'.static.Emit(Bridge,
+        bBack ? class'VRMechanismHaptics'.const.SlideRear : class'VRMechanismHaptics'.const.SlideForward,
+        (bChargeEngaged || bChargeReturning) ? (1 << OffHand()) : 3);
+}
+
+// The charging handle is the reload's first step (R64): taken by a grip at
+// its stock contact, pulled to the rear stop and let go. A pull that stops
+// short springs forward and is still owed.
+function UpdateCharge(float Time)
+{
+    local bool Grip, Edge;
+    local float DT;
+    DT = (LastChargeTime > 0) ? FClamp(Time - LastChargeTime, 0, 0.1) : 0.0;
+    LastChargeTime = Time;
+    Grip = Owner.GripDown(OffHand());
+    Edge = Grip && !bChargeGripWasDown;
+    bChargeGripWasDown = Grip;
+    if (bChargeEngaged)
+    {
+        // R69: a frame gap or a jump keeps the handle where it was.
+        if (!Motion.Check(LocalHandPosition(), Time))
+        {
+            if (Motion.Begin(LocalHandPosition(), Time))
+                ChargePath.GrabOffset = LocalHandPosition() / GunScale() - ChargePath.ContactLocal(ChargeAmount);
+            else { bChargeEngaged = false; Motion.Reset(); }
+            return;
+        }
+        if (Grip)
+        {
+            ChargeAmount = ChargePath.ProjectNearby(LocalHandPosition() / GunScale() - ChargePath.GrabOffset, ChargeAmount);
+            if (!bChargeRear && ChargeAmount >= 0.95) { bChargeRear = true; PlayCharge(true); }
+            // Ridden all the way forward again by the hand: done.
+            if (bChargeRear && ChargeAmount <= 0.05) { bChargeEngaged = false; Motion.Reset(); FinishCharge(); }
+            return;
+        }
+        bChargeEngaged = false; Motion.Reset();
+        bChargeReturning = bChargeRear;
+    }
+    if (bChargeReturning || (ChargeAmount > 0 && !Owner.AutoActionAllowed(Runtime)))
+    {
+        // The spring sends it forward: home after a full pull, back to rest
+        // (still owed) after a short one.
+        ChargeAmount = FMax(0, ChargeAmount - DT / ChargeReturnSeconds);
+        if (ChargeAmount <= 0 && bChargeReturning) FinishCharge();
+        return;
+    }
+    // No hand free: it works itself, as the cover then does (R11).
+    if (Owner.AutoActionAllowed(Runtime))
+    {
+        ChargeAmount = FMin(1, ChargeAmount + DT / ChargeReturnSeconds);
+        if (ChargeAmount >= 1) { bChargeRear = true; PlayCharge(true); bChargeReturning = true; }
+        return;
+    }
+    if (Edge && Owner.HandMode == 0
+        && VSize(Bridge.Hands[OffHand()].Position - ChargeContact()) <= Radius)
+    {
+        bChargeEngaged = true;
+        ChargePath.GrabOffset = LocalHandPosition() / GunScale() - ChargePath.ContactLocal(ChargeAmount);
+        Motion.Begin(LocalHandPosition(), Time);
+        Owner.InputOwner.Inventory.ReleaseHand(OffHand());
+        Owner.Pulse(1 << OffHand(), 0.25, 0.02);
+    }
+}
+
+function FinishCharge()
+{
+    ChargeAmount = 0;
+    PlayCharge(false);
+    bChargeOwed = false; bChargeRear = false; bChargeReturning = false;
+    // The squeeze that worked the handle is not a new one on the cover.
+    bTriggerWasDown = true; bGripWasDown = true;
+    `log("KF2VR_BREAK_ACTION phase=charged weapon=" $ Gun.Class);
 }
 
 // These bones animate independently of the cylinder in the stock clip. Keep
@@ -1008,12 +1230,18 @@ function vector HingedGripLocal()
 function vector Contact() { return ContactAt(ContactAmount()); }
 
 // The action's progress along whatever the hand works now (0 closed, 1 open).
-function float ContactAmount() { return bBeltEngaged ? BeltAmount : Amount; }
+function float ContactAmount()
+{
+    if (bChargeOwed && ChargePath != None) return ChargeAmount;
+    return bBeltEngaged ? BeltAmount : Amount;
+}
 
 // Where the hand's contact sits at progress S: along the belt, the sampled
 // action path, or the hinged barrel swung to S.
 function vector ContactAt(float S)
 {
+    if (bChargeOwed && ChargePath != None)
+        return RootPos() + QuatRotateVector(RootQ(), ChargePath.ContactLocal(S) * GunScale());
     if (bBeltEngaged) return RootPos() + QuatRotateVector(RootQ(), BeltPath.ContactAt(S) * GunScale());
     if (bPath) return RootPos() + QuatRotateVector(RootQ(), ActionPath.ContactLocal(S) * GunScale());
     return Hinge() + QuatRotateVector(QuatProduct(RootQ(), QuatSlerp(ClosedQ, OpenQ, S, true)), HingedGripLocal() * GunScale());
@@ -1022,6 +1250,13 @@ function quat WristQ()
 {
     local vector P;
     local quat Q, ActionQ;
+    if (bChargeEngaged && ChargePath != None)
+    {
+        ChargePath.PoseAt(ChargeAmount, 0, P, ActionQ);
+        Q = QuatProduct(QuatProduct(ActionQ, ChargePath.GripQ), QuatInvert(Bridge.FreeHandPose.WristBasis[ChargeHand]));
+        if (OffHand() != ChargeHand) Q = class'VRHandRolePose'.static.MirrorCanonicalRotation(Q);
+        return QuatProduct(RootQ(), QuatProduct(Q, Bridge.FreeHandPose.WristBasis[OffHand()]));
+    }
     if (bBeltEngaged)
     {
         BeltPath.PoseAt(BeltAmount, 0, P, ActionQ);
@@ -1104,9 +1339,8 @@ function bool ExtractionMotionContinuous(float Time, out byte PalmContinuous)
     if (LastEjectTime > 0 && DT > 0 && DT <= 0.1
         && class'VRReloadHandPose'.static.ValidQ(Q) && class'VRReloadHandPose'.static.ValidQ(LastEjectQ))
     {
-        Delta = QuatProduct(Q, QuatInvert(LastEjectQ));
-        V.X = Delta.X; V.Y = Delta.Y; V.Z = Delta.Z;
-        Angle = 2 * Atan2(VSize(V), Abs(Delta.W));
+        // R69: measured as tilt only, so a snap or smooth turn is continuous.
+        Angle = class'VRReloadMotionGuard'.static.TiltStep(Q, LastEjectQ);
         bContinuous = Angle <= 0.35 && Angle <= 12 * DT;
     }
     if (LastEjectTime > 0 && DT > 0 && DT <= 0.1
@@ -1186,8 +1420,10 @@ function NoteExtractionGate(string Gate)
 
 function bool NeedsActionHint()
 {
-    if (Gun == None || bClosed || bEngaged || bBeltEngaged || bFlickClosing || Owner.HandMode != 0) return false;
+    if (Gun == None || bClosed || bEngaged || bBeltEngaged || bChargeEngaged || bFlickClosing || Owner.HandMode != 0) return false;
     if (Owner.CluesAutomatic(Gun)) return false;
+    // The charging handle comes first (R64).
+    if (bChargeOwed) return !bChargeReturning && !Owner.AutoActionAllowed(Runtime);
     // A part X/A left for the hand (R25) is the next step: light it, not the
     // ammunition, and name it on the readout (#169).
     if (!bOpened) return bManualOpening || (WaitsForHand() && !Owner.AutoActionAllowed(Runtime));
@@ -1204,6 +1440,8 @@ function bool NeedsActionHint()
 function string ReloadPrompt(KFWeapon W)
 {
     if (W != Gun || !Bridge.bReloadHints || Owner.CluesAutomatic(W)) return "";
+    if (bChargeEngaged) return bChargeRear ? "LET THE HANDLE GO" : "PULL CHARGING HANDLE";
+    if (bChargeOwed) return NeedsActionHint() ? "GRIP CHARGING HANDLE" : "";
     if (bEngaged) return bOpened ? "CLOSE ACTION" : "OPEN ACTION";
     if (bBeltEngaged) return "LAY BELT INTO FEED";
     if (!NeedsActionHint()) return "";
@@ -1216,7 +1454,16 @@ function string ReloadPrompt(KFWeapon W)
 
 function vector ActionHintTarget()
 {
+    local vector Nearest;
+    if (bChargeOwed && ChargePath != None) return ChargeContact();
     if (BeltPath != None && bBoxSeated && !bBeltSeated) return BeltLeadRound();
+    // A feed cover is taken by the palm on the cover itself (span-only,
+    // R24): light the point of the cover nearest the stock contact. The
+    // stock wrist sits about 9 UU off the Stoner's, Bastion's and MG3's
+    // cover, beyond the 8 UU reach, so a hand brought to a ring there
+    // never took the cover (#211).
+    if (class'VRMG3BeltPath'.static.Covers(Gun)
+        && SpanPointGap(Contact(), Nearest) < 1000000) return Nearest;
     return Contact();
 }
 
@@ -1307,6 +1554,7 @@ function UpdateHand()
     local byte PalmContinuous;
     local vector Bore, Palm, CloseDirection, OpenContact, ClosedContact, CloseGrip, Held;
     Time = Owner.Now(); DT = Time - LastTime;
+    if (bBeltSettling) { AdvanceBeltSettle(Time); LastTime = 0; return; }
     // An open no-reserve inspection may acquire ammunition later. Resume the
     // same extraction transaction rather than requiring a fake close/reopen.
     if (bSpeedloader && bEjected && Owner.bCylinderEjectConfirmed && Owner.bBreakInspection
@@ -1331,7 +1579,22 @@ function UpdateHand()
         && class'VRReloadHandPose'.static.ValidQ(LocalHandQ()))
     { GrabAmount = Amount; GrabHandQ = LocalHandQ(); LastHandQ = GrabHandQ; }
     if (bEngaged && !Motion.Check(LocalHandPosition(), Time))
-    { CancelHand(OffHand()); return; }
+    {
+        // R69: a frame gap or a jump keeps the grip. Re-grab where the part
+        // is now and drop the flick history, so the gap moves nothing.
+        if (!Motion.Begin(LocalHandPosition(), Time)) { CancelHand(OffHand()); return; }
+        GrabAmount = Amount; GrabAngle = HandAngle();
+        GrabHandQ = LocalHandQ(); LastHandQ = GrabHandQ;
+        if (bPath)
+        {
+            if (BoltOpening(Gun)) ActionPath.Grab(LocalHandPosition() / GunScale(), Amount);
+            else ActionPath.GrabOffset = LocalHandPosition() / GunScale() - ActionPath.ContactLocal(Amount);
+        }
+        LastTime = 0; FlickTravel = 0;
+        return;
+    }
+    if (bChargeOwed && ChargePath != None)
+    { UpdateCharge(Time); LastTime = 0; return; }
     if (BeltPath != None && bBoxSeated && !bBeltSeated)
     { UpdateBelt(); LastTime = 0; return; }
     CanClose = bCloseAdmitted || CloseReady();
@@ -1571,32 +1834,58 @@ function UpdateBelt()
         if (!Edge || Owner.HandMode != 0
             || (VSize(P - Target) * GunScale() > Radius
                 && VSize(Bridge.PalmPosition(OffHand()) - BeltLeadRound()) > Radius)) return;
-        BeltGrabOffset = P - Target;
+        BeltGrabOffset = P - BeltPath.RoundAt(BeltAmount);
         if (!Motion.Begin(LocalHandPosition(), Owner.Now())) return;
         Owner.InputOwner.Inventory.ReleaseHand(OffHand());
         bBeltEngaged = true;
         Owner.Pulse(1 << OffHand(), 0.25, 0.02);
         return;
     }
-    if (!Motion.Check(LocalHandPosition(), Owner.Now())) { CancelHand(OffHand()); return; }
-    Next = BeltPath.Project(P - BeltGrabOffset);
-    if (VSize(P - BeltGrabOffset - BeltPath.ContactAt(Next)) * GunScale() > Radius * 1.5)
+    if (!Motion.Check(LocalHandPosition(), Owner.Now()))
+    {
+        // R69: a frame gap or a jump keeps the belt where it lies.
+        if (!Motion.Begin(LocalHandPosition(), Owner.Now())) { CancelHand(OffHand()); return; }
+        BeltGrabOffset = P - BeltPath.RoundAt(BeltAmount);
+        return;
+    }
+    // The hand carries the leading round: the belt follows the round's own
+    // stock path, whichever hand holds it and however it is turned (#211).
+    Next = BeltPath.ProjectRound(P - BeltGrabOffset);
+    if (VSize(P - BeltGrabOffset - BeltPath.RoundAt(Next)) * GunScale() > Radius * 1.5)
     { CancelHand(OffHand()); return; }
     // The belt keeps the stock clip's shape along its preset path; the held
     // hand is drawn on the leading round there.
     BeltAmount = Next;
     // Reaching the tray seats the belt while it is still held, just like a
-    // magazine latch. Releasing inside a two-unit wrist target made both
-    // belt-fed reloads look complete while withholding their only credit.
+    // magazine latch. A belt let go well along its lay finishes into the
+    // tray by itself and seats there; one let go early falls back. The
+    // credit is paid only once the belt is seated (R4).
     if (Down && BeltAmount < 0.95) return;
     bBeltEngaged = false;
     Motion.Reset();
-    if (BeltAmount >= 0.95)
+    if (BeltAmount >= 0.95) SeatLaidBelt();
+    else if (BeltAmount >= BeltReleaseAmount)
     {
-        BeltAmount = 1; bBeltSeated = true;
-        Owner.SeatBelt();
+        bBeltSettling = true;
+        BeltSettleStarted = Owner.Now();
+        BeltSettleFrom = BeltAmount;
     }
     else BeltAmount = 0;
+}
+
+function SeatLaidBelt()
+{
+    bBeltSettling = false;
+    BeltAmount = 1; bBeltSeated = true;
+    Owner.SeatBelt();
+}
+
+function AdvanceBeltSettle(float Time)
+{
+    local float T;
+    T = FClamp((Time - BeltSettleStarted) / BeltSettleSeconds, 0, 1);
+    BeltAmount = BeltSettleFrom + (1 - BeltSettleFrom) * (1 - (1 - T) * (1 - T));
+    if (T >= 1) SeatLaidBelt();
 }
 
 function PlaceVisuals()
@@ -1639,6 +1928,7 @@ function PlaceVisuals()
                 continue;
             }
             P = Parts[I].IdleLocal; Q = Parts[I].IdleLocalQ;
+            if (I == ChargePart && ChargePath != None && ChargeAmount > 0) ChargePath.PoseAt(ChargeAmount, 0, P, Q);
             if (Parts[I].bTravels)
             {
                 P = PivotP + QuatRotateVector(Turn, P - Parts[0].IdleLocal);
@@ -1697,7 +1987,10 @@ function LetGoHand(int Hand, bool bKeepExtraction)
     }
     Motion.Reset();
     bBeltEngaged = false; bBeltGripWasDown = true;
-    if (!bBeltSeated) BeltAmount = 0;
+    // A lost charging handle springs forward; a full pull still counts.
+    if (bChargeEngaged) bChargeReturning = bChargeRear;
+    bChargeEngaged = false; bChargeGripWasDown = true; LastChargeTime = 0;
+    if (!bBeltSeated && !bBeltSettling) BeltAmount = 0;
     bEngaged = false; bTriggerWasDown = true; bGripWasDown = true; bRequestGrip = true;
     LastTime = 0; FlickTravel = 0; bFlickClosing = false;
 }
@@ -1734,7 +2027,9 @@ function Unbind()
     }
     if (KFWeap_LMG_MG3(Gun) != None) KFWeap_LMG_MG3(Gun).UpdateAmmoBeltBullets(Gun.AmmoCount[0]);
     if (KFWeap_LMG_Stoner63A(Gun) != None) KFWeap_LMG_Stoner63A(Gun).UpdateAmmoBeltBullets(Gun.AmmoCount[0]);
-    BeltPath = None; bBoxSeated = false; bBeltSeated = false; bBeltEngaged = false;
+    BeltPath = None; bBoxSeated = false; bBeltSeated = false; bBeltEngaged = false; bBeltSettling = false;
+    ChargePath = None; ChargePart = -1; ChargeAmount = 0;
+    bChargeOwed = false; bChargeEngaged = false; bChargeRear = false; bChargeReturning = false;
     super.Unbind();
     bRequestOpening = false; bRequestOpeningByGrip = false; bRequestTrigger = true; bQueuedOpening = false; bQueuedReload = false; QueuedGun = None;
 }
@@ -1745,5 +2040,9 @@ defaultproperties
     TapRadius=16
     PartRadius=8
     SlapSpeed=35
+    BeltReleaseAmount=0.5
+    BeltSettleSeconds=0.15
+    ChargeReturnSeconds=0.12
+    ChargePart=-1
     InspectSeconds=1.5
 }

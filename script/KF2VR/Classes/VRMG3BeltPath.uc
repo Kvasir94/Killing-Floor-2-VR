@@ -164,7 +164,21 @@ function vector ContactAt(float Amount)
     return P + GripOffset(Q);
 }
 
-function float Project(vector P)
+// Where the leading round itself lies at Amount, in the seat frame.
+function vector RoundAt(float Amount)
+{
+    local vector P;
+    local quat Q;
+    PoseAt(Amount, 0, P, Q);
+    return P;
+}
+
+// The lay amount whose leading round is nearest P. The hand holds the round,
+// so the belt follows where the round is carried: on the Stoner and Bastion
+// a right-handed player's left hand holds it as the mirror of the stock right
+// hand, and that mirrored wrist path cuts through the receiver, so a natural
+// push of the round toward the tray left it (#211).
+function float ProjectRound(vector P)
 {
     local int I;
     local float F, D, BestD, Best, Denom;
@@ -172,10 +186,9 @@ function float Project(vector P)
     BestD = 1000000;
     for (I = 0; I < 16; ++I)
     {
-        A = Path[I].Contact; V = Path[I+1].Contact - A;
+        A = Path[I].P[0]; V = Path[I+1].P[0] - A;
         Denom = V dot V;
-        if (Denom < 0.000001) continue;
-        F = FClamp(((P - A) dot V) / Denom, 0, 1);
+        F = Denom < 0.000001 ? 0.0 : FClamp(((P - A) dot V) / Denom, 0, 1);
         D = VSize(P - A - V * F);
         if (D < BestD) { BestD = D; Best = PathS[I] + F * (PathS[I+1] - PathS[I]); }
     }

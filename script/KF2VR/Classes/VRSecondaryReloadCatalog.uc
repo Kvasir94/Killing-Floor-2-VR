@@ -107,6 +107,19 @@ static function bool ActionStroke(class<KFWeapon> WeaponClass, int Stage, out na
 // R20: the pump is a support grip. The hand is held on this bone with the
 // stock shot clip's wrist and fingers at the moment it has closed on the
 // handle (Shoot_Secondary frame 16), so it rides the handle through a stroke.
+// The support grip's own trigger fires the secondary on every gun whose
+// launcher or shotgun has a real trigger under that hand, whichever hand holds
+// it (R20, R59): the FAMAS shotgun grip, and the M203 that the M16 and the HRG
+// Incendiary Rifle share. Checked on the stock 1P meshes: the HMTech-501 and
+// Teslauncher launchers (one shared body) and the S12 have no trigger of
+// their own, so they stay on the modifier.
+static function bool SupportTriggerFires(class<KFWeapon> WeaponClass)
+{
+    return WeaponClass == class'KFWeap_AssaultRifle_FAMAS'
+        || WeaponClass == class'KFWeap_AssaultRifle_M16M203'
+        || WeaponClass == class'KFWeap_AssaultRifle_HRGIncendiaryRifle';
+}
+
 static function bool PumpGrip(class<KFWeapon> WeaponClass, out name Bone, out name Clip, out float Time)
 {
     if (WeaponClass != class'KFWeap_AssaultRifle_FAMAS') return false;

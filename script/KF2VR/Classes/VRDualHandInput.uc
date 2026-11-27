@@ -364,8 +364,6 @@ function bool ContextValid()
 function VRWeaponRuntime ShotgunGripRuntime(int Hand)
 {
     local VRWeaponRuntime R;
-    local name GripBone, GripClip;
-    local float GripTime;
     R = Inventory.Registry.GetSupport(Hand);
     if (R == None || R.PrimaryHand < 0 || R.PrimaryHand == Hand || R.Presenter == None
         || R.Presenter.PumpSupportHeld())
@@ -374,9 +372,24 @@ function VRWeaponRuntime ShotgunGripRuntime(int Hand)
         if (R == None || R.Presenter == None || !R.Presenter.ShotgunGripHeld()) return None;
     }
     if (!R.IsCurrent() || R.Item == None || R.AlternateKind() < 2
-        || !class'VRSecondaryReloadCatalog'.static.PumpGrip(R.Item.Class, GripBone, GripClip, GripTime))
+        || !class'VRSecondaryReloadCatalog'.static.SupportTriggerFires(R.Item.Class))
         return None;
     return R;
+}
+
+// An empty underbarrel (M203 and family) follows R7 like any physical feed
+// (#218): with EMPTY TRIGGER RELOADS on the press is that feed's X/A request,
+// the double tap on the gun hand; off, it clicks. Stock would turn it into its
+// alt reload, which the physical secondary holds.
+function bool EmptySecondaryTrigger(VRWeaponRuntime R, KFWeapon W, int Mode)
+{
+    if (Reloads == None || Reloads.Secondary == None || !Reloads.Enabled() || R == None || W == None
+        || !class'VRSecondaryReloadCatalog'.static.Supported(W) || Mode != 1
+        || W.HasAmmo(1) || !W.HasSpareAmmo(1) || R.PrimaryHand < 0 || R.PrimaryHand > 1) return false;
+    Reloads.PlayDryFire(W, 1);
+    if (Reloads.EmptyTriggerReloads() && !Reloads.TryAutomaticReload(R, R.PrimaryHand, true)
+        && !Reloads.Secondary.TryBegin(R, R.PrimaryHand)) Reloads.Pulse(1 << R.PrimaryHand, 0.08, 0.01);
+    return true;
 }
 
 function bool SupportTriggerFire(int Hand, bool Trigger, bool TriggerEdge)
@@ -403,6 +416,7 @@ function bool SupportTriggerFire(int Hand, bool Trigger, bool TriggerEdge)
     CancelSprint();
     if (Reloads != None && Reloads.BlocksFire(W, true)) { Reloads.Pulse(1 << Hand, 0.08, 0.01); return true; }
     if (Reloads != None && Reloads.AutomaticButtonRequired(W) && Reloads.DryFireInstead(W, Mode)) return true;
+    if (EmptySecondaryTrigger(R, W, Mode)) return true;
     if (VRTrackedWeapon(W) != None) return true;
     R.StartAction(byte(Mode));
     InputState[Hand].SupportFireRuntime = R;
@@ -807,8 +821,14 @@ function UpdateSupportCarry()
             R.bCarryReleaseArmed = true;
         Value = Hand == 0 ? Bridge.LeftGripValue : Bridge.RightGripValue;
         if (GripReleased(Hand) && !R.bCarryReleaseArmed) R.bCarrySawRelease = true;
-        if ((Bridge.NativeGripMask & Bit) != 0 && Value >= 0.65 && Value <= 1
-            && (!Bridge.bToggleGrip || R.bCarrySawRelease))
+        // MIXED (#158): while a held support grip braces the gun, the trigger
+        // hand's squeeze is already the hold, so opening it hands the gun to
+        // the support hand without first needing a fresh toggle press.
+        // The held grip bit is enough there: it is the squeeze already holding.
+        if ((Bridge.NativeGripMask & Bit) != 0
+            && ((Value >= 0.65 && Value <= 1 && (!Bridge.bToggleGrip || R.bCarrySawRelease))
+                || (R.SupportHand >= 0 && Bridge.bHoldSupportGrip
+                    && (Bridge.NativeGripMask & (1 << R.SupportHand)) != 0)))
             R.bCarryReleaseArmed = true;
         else if (GripReleased(Hand) && R.bCarryReleaseArmed)
         {
@@ -820,6 +840,16 @@ function UpdateSupportCarry()
                 || (Bridge.NativeGripMask & (1 << R.SupportHand)) != 0))
             {
                 if (Inventory.EnterSupportCarry(Hand)) R.bCarryReleaseArmed = false;
+                else if (!R.bCarrySawRelease)
+                {
+                    // Once per refused hand-off: which gate held the gun.
+                    R.bCarrySawRelease = true;
+                    `log("KF2VR_SUPPORT_CARRY phase=refused weapon=" $ R.Item.Class.Name @ "hand=" $ Hand
+                        @ "setting=" $ Bridge.bSupportHandCarry @ "available=" $ Bridge.SupportCarryAvailable()
+                        @ "eligible=" $ Inventory.CarryEligible(R)
+                        @ "tracking=" $ (R.Presenter != None && R.Presenter.HasValidSupportTracking())
+                        @ "transfer=" $ Inventory.IsTransferPending(Hand));
+                }
             }
             else if (!Bridge.bToggleGrip && (!Inventory.WorldDropsActive()
                     || !class'VRWorldDropGun'.static.HasWorldArt(R.Item))
@@ -1548,7 +1578,25 @@ function UpdateHand(int Hand, float DeltaTime)
     }
     if (!Melee && R.AlternateKind() >= 2)
     {
-        if (Lower && InputState[Hand].bLowerArmed && TriggerEdge && EffectiveTrigger)
+        // R61: with A/X + TRIGGER FIRES LAUNCHER off, a gun with a launcher
+        // trigger of its own fires its secondary only from that trigger grip;
+        // the trigger fires the rifle, and the held A/X is still consumed so
+        // its release is not read as a reload press.
+        if (Lower && InputState[Hand].bLowerArmed && TriggerEdge && EffectiveTrigger
+            && Bridge.bLauncherTriggerOnly && class'VRSecondaryReloadCatalog'.static.SupportTriggerFires(W.Class))
+            InputState[Hand].bLowerConsumed = true;
+        // The syringe has no X/A + trigger self-heal (Kvasir94, 2026-11-10:
+        // "remove this method"): it heals at the chest or a teammate on the
+        // plain trigger. The pull is swallowed whole: no heal, no reload tap
+        // on the modifier's release, and the trigger re-arms once released.
+        else if (Lower && InputState[Hand].bLowerArmed && TriggerEdge && EffectiveTrigger
+            && W.IsA('KFWeap_Healer_Syringe'))
+        {
+            InputState[Hand].bLowerConsumed = true;
+            InputState[Hand].bSecondaryAction = true;
+            FireMode[Hand] = -1;
+        }
+        else if (Lower && InputState[Hand].bLowerArmed && TriggerEdge && EffectiveTrigger)
         {
             InputState[Hand].bLowerConsumed = true;
             CancelSprint();
@@ -1565,6 +1613,7 @@ function UpdateHand(int Hand, float DeltaTime)
                 && Reloads.Vampire.TryEmptyFire(W, FireMode[Hand])) FireMode[Hand] = -1;
             else if (Reloads != None && Reloads.ServerMagazine != None
                 && Reloads.ServerMagazine.TryEmptyFire(W, FireMode[Hand])) FireMode[Hand] = -1;
+            else if (EmptySecondaryTrigger(R, W, FireMode[Hand])) FireMode[Hand] = -1;
             else if (VRTrackedWeapon(W) == None) R.StartAction(byte(FireMode[Hand]));
         }
         if (InputState[Hand].bSecondaryAction)
@@ -1663,15 +1712,13 @@ function UpdateHand(int Hand, float DeltaTime)
     if (!Trigger) InputState[Hand].bSecondaryAction = false;
     // The mode is latched at the trigger edge: releasing a modifier while
     // holding the trigger never starts an unexpected second action.
-    WantParry = Melee && (!Physical || R.Presenter.PhysicalMelee.bButtonGuard) && Lower && InputState[Hand].bLowerArmed && !Trigger;
-    // A loaded gauntlet (Blast Brawlers) reloads on the X/A tap; only a hold
-    // past the tap window raises its guard (#82).
-    if (WantParry && !InputState[Hand].bParrying && W.UsesAmmo() && LowerTime[Hand] < 0.25) WantParry = false;
-    if (WantParry != InputState[Hand].bParrying)
+    // No block button on any melee weapon (melee spec G5): guards are
+    // physical. Release a block an older input state may still hold.
+    WantParry = false;
+    if (InputState[Hand].bParrying)
     {
-        if (WantParry) { R.StartAction(1); class'VRMeleeControls'.static.OpenButtonParry(Bridge, W, Hand); }
-        else W.StopFire(1);
-        InputState[Hand].bParrying = WantParry;
+        W.StopFire(1);
+        InputState[Hand].bParrying = false;
     }
     if (WantParry) InputState[Hand].bLowerConsumed = true;
     // Stock Ion Thruster maps reload to its charged ultimate. Preserve that
@@ -1680,6 +1727,11 @@ function UpdateHand(int Hand, float DeltaTime)
         && !Lower && InputState[Hand].bLowerWasDown && InputState[Hand].bLowerArmed
         && !InputState[Hand].bLowerConsumed && LowerTime[Hand] < 0.25;
     if (Bow != None && Bow.Handles(W) && Bow.Phase != 0) Reload = false;
+    // Melee spec M26: a tap folds or unfolds the Scythe, stock's reload key
+    // for it, on either hand holding it. Nothing else of a reload runs.
+    if (class'VRScytheFold'.static.Is(W) && !Lower && InputState[Hand].bLowerWasDown && InputState[Hand].bLowerArmed
+        && !InputState[Hand].bLowerConsumed && LowerTime[Hand] < 0.25)
+        Bridge.ToggleScytheFold(W, Hand);
     Reload = ResolveReloadTap(R, Hand, Reload, Lower);
     bReloadWasRunning = Bridge.PC.bRun != 0 && !EffectiveTrigger;
     if ((EffectiveTrigger && !InputState[Hand].bTriggerWasDown) || WantParry) CancelSprint();

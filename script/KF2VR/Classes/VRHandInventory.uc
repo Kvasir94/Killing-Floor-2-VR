@@ -630,9 +630,21 @@ function bool DrawItem(int Hand, KFWeapon W, bool bSinglePairMember, int PairMem
     if (Hand < 0 || Hand > 1 || !ContextValid()) return false;
     if (WorldDrops != None && WorldDrops.Busy()) return false;
     if (IsTransferPending(Hand)) CancelTransfer();
+    // The wheel lists a stock dual that is still splitting (#221): choosing it
+    // again, from either hand, only retargets that conversion. It must not be
+    // refused because the first request named the other hand.
+    if (W != None && PendingPairConversion != None && PendingPairConversion.StockItem == W)
+    {
+        PendingPairHand = Hand;
+        PendingPairMember = bSinglePairMember ? Clamp(PairMember, 0, 1) : -1;
+        if (!W.WeaponContentLoaded) W.Class.static.TriggerAsyncContentLoad(W.Class);
+        return true;
+    }
     // A new draw or release into the hand a dual pair is still preparing for
     // is the newer intent; otherwise the pair commits later over this weapon.
-    if (Hand == PendingPairHand) CancelPendingPair();
+    // So is a different dual from either hand: one conversion runs at a time.
+    if (Hand == PendingPairHand || (PendingPairConversion != None && KFWeap_DualBase(W) != None))
+        CancelPendingPair();
     if (W == None)
     {
         // Selector Open Hand reaches Draw(None) directly. It must release the
@@ -1327,6 +1339,9 @@ function bool ActionContactPreferred(VRWeaponRuntime R, int Hand)
     }
     if (R.Item.Class == class'KFWeap_Rifle_M99') Bone = 'RW_Bolt';
     else return false;
+    // R67: a loaded, closed rifle that owes nothing gives its trigger grip to
+    // the squeeze there, even with the palm beside the knob.
+    if (Reloads.BreakAction != None && Reloads.BreakAction.TriggerGripWins(R, Hand)) return false;
     if (Bone == '' || R.Item.MySkelMesh.MatchRefBone(Bone) < 0) return false;
     P = Bridge.Hands[Hand].Position;
     Gap = VSize(Bridge.PalmPosition(Hand) - R.Item.MySkelMesh.GetBoneLocation(Bone));
@@ -1359,8 +1374,13 @@ function bool SupportGrabContact(VRWeaponRuntime R, int Hand)
     if (R.Item.Class == class'KFWeap_AssaultRifle_FAMAS'
         || R.Item.Class == class'KFWeap_AssaultRifle_M16M203')
     {
+        // Nearer the support than the trigger grip, so a regrip of the rifle
+        // grip is never taken as support. Only the FAMAS also halves the
+        // reach, for its pump contact; the M16's support reaches its whole
+        // M203 fore end (#218).
         Primary = R.Presenter.PrimaryGripWorld();
-        Radius = FMin(Radius, VSize(Primary - Zone) * 0.5);
+        if (R.Item.Class == class'KFWeap_AssaultRifle_FAMAS')
+            Radius = FMin(Radius, VSize(Primary - Zone) * 0.5);
         if (Distance > VSize(Bridge.Hands[Hand].Position - Primary)) return false;
     }
     return Distance <= Radius;
@@ -2117,6 +2137,16 @@ function PlaceAll()
                 Bridge.WristIK[Hand].BoneTranslation = PhysicalFists[Hand] != None
                     ? PhysicalFists[Hand].VisualHandPosition(Bridge.Hands[Hand].Position, Bridge.WorldInfo.RealTimeSeconds)
                     : Bridge.Hands[Hand].Position;
+                // The implicit gauntlet has no bound hand mesh. Move its neutral
+                // wrist by the same offset already applied to LW_Weapon above.
+                R = Registry.GetPrimary(1 - Hand);
+                if (R != None && CanStrikeGauntlet(R, Hand) && R.Presenter.OffhandGauntletMelee != None
+                    && R.Presenter.OffhandGauntletMelee.bDualGauntlet
+                    && R.Presenter.OffhandGauntletMelee.StrikeHand == Hand
+                    && R.Presenter.RiotShield != None && R.Presenter.RiotShield.Control != None
+                    && R.Presenter.RiotShield.Control.ControlStrength > 0)
+                    Bridge.WristIK[Hand].BoneTranslation = Bridge.Hands[Hand].Position
+                        + R.Presenter.OffhandGauntletMelee.GauntletVisualOffset;
                 Bridge.WristIK[Hand].BoneRotation = QuatToRotator(Bridge.FreeHandPose.WristRotation(
                     Hand, Hand == 0 ? Bridge.LeftRotation : Bridge.RightRotation));
                 if (bCatchHand)

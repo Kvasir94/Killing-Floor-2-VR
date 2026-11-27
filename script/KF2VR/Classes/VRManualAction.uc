@@ -30,10 +30,13 @@ var VRLeverIntent PrimaryIntent;
 
 function bool LeverAction() { return Cycle != None && Cycle.Bones[0] == 'RW_Finger_Lever'; }
 
+// The lever guns whose lever belongs to the trigger grip (R62: the Frost Fang
+// works like the Winchester and SPX).
 static function bool PrimaryGripOnly(KFWeapon W)
 {
     return W != None && (W.Class == class'KFWeap_Rifle_Winchester1894'
-        || W.Class == class'KFWeap_Rifle_CenterfireMB464');
+        || W.Class == class'KFWeap_Rifle_CenterfireMB464'
+        || W.Class == class'KFWeap_Rifle_FrostShotgunAxe');
 }
 
 function bool ReadyCycleAllowed()
@@ -445,8 +448,11 @@ function UpdateHand()
     if (!Motion.Check(LocalHandPosition(), Owner.Now()))
     {
         // Neither hand may finish an old action from a rejected return sample.
-        // Keep its physical pose and spent chamber, then require a fresh grip.
-        CancelHand(Hand);
+        // R69: a frame gap or a jump keeps the grip; re-grab at the current
+        // amount so only travel after the gap moves the action. A pose that
+        // cannot anchor still cancels (keeping its pose and spent chamber).
+        if (!Motion.Begin(LocalHandPosition(), Owner.Now())) { CancelHand(Hand); return; }
+        Cycle.Grab(HandLocal, Amount);
         return;
     }
     if (!bGrip) { CancelHand(Hand); return; }

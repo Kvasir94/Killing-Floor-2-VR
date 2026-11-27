@@ -75,6 +75,9 @@ var float CatchCueTime, CatchCueRadius, LateCatchTime, CatchRadius;
 // and shows no gravity cue, so tossing a gun to yourself stays clean.
 var float AirborneReach, DirectReach, TossQuietUp;
 
+// Body yaw at each hand's last motion sample (R69 snap-turn reset).
+var int SampleYaw[2];
+
 function Initialize(VRHandsBridge B, VRHandInventory OwnerInventory)
 {
     Bridge = B;
@@ -393,8 +396,15 @@ function vector SampleMotion(int H, float Now)
 {
     local vector Rel, V;
     local float DT;
-    local int Slot;
+    local int Slot, Yaw;
     Rel = Bridge.PalmPosition(H) - Bridge.Human.Location;
+    Yaw = Bridge.BodyYaw().Yaw;
+    // R69: a snap turn swings the palm about the body in one frame. That is
+    // not a flick: drop the history and start again from this sample.
+    if (Hands[H].bHaveSample && Abs(NormalizeRotAxis(Yaw - SampleYaw[H])) > 1820)
+        Hands[H].bHaveSample = false;
+    SampleYaw[H] = Yaw;
+    if (!Hands[H].bHaveSample) Hands[H].HistoryCount = 0;
     if (Hands[H].bHaveSample)
     {
         DT = Now - Hands[H].LastSampleAt;

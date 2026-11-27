@@ -1000,6 +1000,14 @@ simulated function bool RequestNetworkSeekerSights(KFWeapon W, bool bSighted)
     return true;
 }
 
+// Melee spec M26: the server puts the Scythe in this mode and publishes it.
+simulated function bool RequestNetworkScytheFold(KFWeapon W, bool bFolded)
+{
+    if (WorldInfo.NetMode != NM_Client || KF2VRNetPlayerController(PC) == None) return false;
+    KF2VRNetPlayerController(PC).ServerVRScytheFold(W, bFolded);
+    return true;
+}
+
 simulated function bool NetworkGrenadePending()
 {
     return UsesNetworkDualWeapons() && KF2VRNetPlayerController(PC).NetChannel.GrenadePending();
@@ -1047,13 +1055,13 @@ simulated function KF2VRNetTypes.NetPhysicalStrike PhysicalStrike(int Hand, int 
     return Strike;
 }
 
-simulated function bool RequestNetworkMeleeHit(byte FiringMode, Actor Victim, vector HitLocation, vector RayDir, name BoneName, KFWeapon SourceWeapon, int Hand, int SwingSerial, optional float DamageScale = 1.0, optional bool bShieldContact, optional bool bNoDismember, optional bool bExplosiveContact, optional bool bBluntContact)
+simulated function bool RequestNetworkMeleeHit(byte FiringMode, Actor Victim, vector HitLocation, vector RayDir, name BoneName, KFWeapon SourceWeapon, int Hand, int SwingSerial, optional float DamageScale = 1.0, optional bool bShieldContact, optional bool bNoDismember, optional bool bExplosiveContact, optional bool bBluntContact, optional byte Part)
 {
     local KF2VRNetPlayerController NetPC;
     NetPC = KF2VRNetPlayerController(PC);
     if (NetPC != None)
     {
-        NetPC.ServerMeleeHit(Victim, FiringMode, HitLocation, RayDir, BoneName, SourceWeapon, PhysicalStrike(Hand, SwingSerial, SourceWeapon), DamageScale, bShieldContact, bNoDismember, bExplosiveContact, bBluntContact);
+        NetPC.ServerMeleeHit(Victim, FiringMode, HitLocation, RayDir, BoneName, SourceWeapon, PhysicalStrike(Hand, SwingSerial, SourceWeapon), DamageScale, bShieldContact, bNoDismember, bExplosiveContact, bBluntContact, Part);
         return true;
     }
     return false;
@@ -1078,6 +1086,24 @@ simulated function bool RequestNetworkPhysicalDamage(Actor Victim, float DamageA
         return true;
     }
     return false;
+}
+
+simulated function bool RequestNetworkMeleeWarning(KFWeapon SourceWeapon, byte Dir)
+{
+    local KF2VRNetPlayerController NetPC;
+    NetPC = KF2VRNetPlayerController(PC);
+    if (NetPC == None || SourceWeapon == None) return false;
+    NetPC.ServerVRMeleeWarning(SourceWeapon, Dir);
+    return true;
+}
+
+simulated function bool RequestNetworkGuard(KFWeapon SourceWeapon, int Hand, bool bUp, int Yaw, int Half, byte MetSerial)
+{
+    local KF2VRNetPlayerController NetPC;
+    NetPC = KF2VRNetPlayerController(PC);
+    if (NetPC == None || SourceWeapon == None) return false;
+    NetPC.ServerVRGuard(SourceWeapon, Hand, bUp, Yaw, Half, MetSerial);
+    return true;
 }
 
 simulated function bool RequestNetworkMeleeParry(Pawn Victim, KFWeapon SourceWeapon)

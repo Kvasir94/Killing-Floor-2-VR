@@ -11,6 +11,8 @@ var bool bTraderCompassHidden, bTraderCompassOriginalVisible;
 var bool bMapTextHidden, bMapTextOriginalVisible;
 var bool bMapCounterHidden, bMapCounterOriginalVisible;
 var private bool bSendingVRInteraction;
+// The low-health prompt's words as last shown (they follow the syringe).
+var private string ShownHealWording;
 
 // Run the stock map widgets unchanged: they own queue order, duration and
 // expiry. Read their live fields after each stock tick instead of inventing a
@@ -288,6 +290,20 @@ function SyncNoticeVisibility()
     else RestoreBossIntroduction();
 }
 
+// Whether either tracked hand holds the syringe now.
+function bool SyringeHeld(VRHandsBridge Bridge)
+{
+    local VRWeaponRuntime R;
+    local int H;
+    if (Bridge == None || Bridge.HandInventory == None) return false;
+    for (H = 0; H < 2; ++H)
+    {
+        R = Bridge.HandInventory.GetHeldForHand(H);
+        if (R != None && R.Item != None && R.Item.IsA('KFWeap_Healer_Syringe')) return true;
+    }
+    return false;
+}
+
 // Stock gamepad labels and hold tokens are Scaleform substitutions, not VR
 // controls. Adapt only the interaction types with a verified tracked action.
 function bool FormatUseInteraction(int MessageIndex, out string Text, out string Button,
@@ -309,10 +325,20 @@ function bool FormatUseInteraction(int MessageIndex, out string Text, out string
     {
         case IMT_HealSelfWarning:
             if (!bDualHand) return false;
-            Text = "DRAW SYRINGE";
-            Button = "TAP, HOLD Y/B";
-            HoldText = class'KFLocalMessage_Interaction'.default.HealSelfWarning @ "(AT CHEST)";
-            HoldButton = "TRIGGER";
+            // Kvasir94 approved this wording on 2026-11-10 ("good"). With the
+            // syringe already in a hand only the heal line remains.
+            if (SyringeHeld(Bridge))
+            {
+                Button = "TRIGGER AT CHEST";
+                Text = "HEAL";
+                HoldButton = "";
+                HoldText = "";
+                return true;
+            }
+            Button = "TAP Y/B, THEN HOLD";
+            Text = "SYRINGE";
+            HoldButton = "TRIGGER AT CHEST";
+            HoldText = "HEAL";
             return true;
         case IMT_ClotGrabWarning:
             if (!bDualHand) return false;
@@ -404,7 +430,6 @@ function DisplayInteractionMessage(string MessageString, int MessageIndex, optio
     local string SpatialText, SpatialButton, HoldText, HoldButton, FallbackText;
     local int PreviousIndex;
     RestoreInteraction();
-    PreviousIndex = CurrentInteractionIndex;
     SpatialText = MessageString;
     SpatialButton = ButtonName;
     bSendingVRInteraction = FormatUseInteraction(MessageIndex, SpatialText, SpatialButton, HoldText, HoldButton);
@@ -412,8 +437,15 @@ function DisplayInteractionMessage(string MessageString, int MessageIndex, optio
     {
         FallbackText = SpatialButton == "" ? SpatialText : SpatialButton $ ": " $ SpatialText;
         if (HoldText != "") FallbackText $= HoldCommandDelimiter $ HoldButton $ ": " $ HoldText;
-        Super.DisplayInteractionMessage(FallbackText, MessageIndex, "", Duration);
+        // Stock repeats the low-health warning while it holds and ignores a
+        // repeat of the shown message. Its VR wording follows whether the
+        // syringe is in a hand: changed words replace the shown prompt.
+        if (MessageIndex == IMT_HealSelfWarning && CurrentInteractionIndex == MessageIndex
+            && FallbackText != ShownHealWording) HideInteractionMessage();
+        if (MessageIndex == IMT_HealSelfWarning) ShownHealWording = FallbackText;
     }
+    PreviousIndex = CurrentInteractionIndex;
+    if (bSendingVRInteraction) Super.DisplayInteractionMessage(FallbackText, MessageIndex, "", Duration);
     else Super.DisplayInteractionMessage(MessageString, MessageIndex, ButtonName, Duration);
     bSendingVRInteraction = false;
     if (SpatialHUD == None || CurrentInteractionIndex != MessageIndex
@@ -426,6 +458,7 @@ function UpdateRhythmCounterWidget(int value, int max)
 {
     RestoreRhythm();
     Super.UpdateRhythmCounterWidget(value, max);
+    if (SpatialHUD != None) SpatialHUD.NotifyRhythm(value, max);
     SyncContentVisibility();
 }
 

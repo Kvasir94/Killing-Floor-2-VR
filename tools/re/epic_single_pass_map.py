@@ -16,6 +16,7 @@ SINGLE_PASS = {
     "BeginOcclusionTests": 0x902560, "ViewConstants": 0xcd61d0, "FlareOcclusion": 0x2a50f0,
     "RhiClear": 0xcb60e0, "SsrCompute": 0x3605d0, "Quad": 0x8e1bb0,
     "ShadowProjection": 0x935340, "HbaoRhi": 0xcd03b0,
+    "SkinScattering": 0x306ed0, "SkinScatteringParams": 0x30ae40,
     # Engine steps HookInitViews calls directly for the paired-view visibility path.
     "Visibility": 0x36b490, "ViewSetup": 0x360a30, "SortTranslucency": 0x950320,
     "FamilyStep904df0": 0x904df0, "LightGate8f95e0": 0x8f95e0,
@@ -30,7 +31,8 @@ OBJECT_MOTION = {
 # HiZ (0x1ec2398) is read by neither group; these Steam functions reference it.
 HIZ_XREFS = {"HiZXref315af0": 0x315af0, "HiZXref327370": 0x327370, "HiZXref67bb20": 0x67bb20}
 GLOBALS = {"HiZ": 0x1ec2398, "ViewGateOff": 0x1fbafec, "ViewGateOn": 0x1ec2388,
-           "ForegroundFlag": 0x2225590, "Rhi": 0x21f6ed0}
+           "ForegroundFlag": 0x2225590, "Rhi": 0x21f6ed0,
+           "SceneBufferX": 0x2222a7c, "SceneBufferY": 0x2222a80}
 
 
 def main():

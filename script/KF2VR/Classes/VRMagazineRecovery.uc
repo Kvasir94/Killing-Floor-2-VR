@@ -309,8 +309,11 @@ function CancelHand(int Hand)
     if (Carries[Hand].Request == 0) { Carries[Hand].bGuide = false; Carries[Hand].TargetWeapon = None; }
 }
 
-// Room-space velocity excludes stick locomotion and rejects tracking/turn
-// discontinuities before they can become a deposit or a manufactured toss.
+// Room-space velocity excludes stick locomotion. A long frame gap, a turn of
+// the room-to-world mapping (a snap turn) or one implausible jump is not
+// tracking loss (R68): the speed and throw history are discarded, so the gap
+// can never become a manufactured toss, and the hold continues from this
+// sample. False only for an invalid pose: the caller cancels the hand then.
 function bool SampleMotion(int Hand)
 {
     local vector P, V;
@@ -325,8 +328,13 @@ function bool SampleMotion(int Hand)
     {
         DT = Now - Carries[Hand].SampleTime;
         if (DT < 0 || DT > 0.08 || Abs(QuatDot(MapQ, Carries[Hand].RoomToWorld)) < 0.999
-            || VSize(P - Carries[Hand].RoomPosition) > FMin(40, 2 + 1200 * DT)) return false;
-        if (DT > 0)
+            || VSize(P - Carries[Hand].RoomPosition) > FMin(40, 2 + 1200 * DT))
+        {
+            Carries[Hand].bSampleReady = false;
+            `log("KF2VR_MAGAZINE_RECOVERY phase=motion-reset hand=" $ Hand @ "dt=" $ DT
+                @ "turn=" $ Abs(QuatDot(MapQ, Carries[Hand].RoomToWorld)) @ "step=" $ VSize(P - Carries[Hand].RoomPosition));
+        }
+        else if (DT > 0)
         {
             V = QuatRotateVector(MapQ, (P - Carries[Hand].RoomPosition) / DT);
             if (VSize(V) > 700) V = Normal(V) * 700;
@@ -334,7 +342,9 @@ function bool SampleMotion(int Hand)
             if (Thrower != None) Thrower.Add(Hand, V, Now);
         }
     }
-    else
+    // First sample of a hold, or the first after a reset: it only anchors the
+    // next one, so a release now falls from the hand with no velocity.
+    if (!Carries[Hand].bSampleReady)
     {
         Carries[Hand].Velocity = vect(0,0,0);
         if (Thrower == None) Thrower = new(self) class'VRThrowRelease'; Thrower.Reset(Hand);
@@ -370,6 +380,8 @@ function SubmitRelease(int Hand)
     if (Carries[Hand].Action == PouchAction) TargetW = CompatibleOwnedFamily(Carries[Hand].Family);
     // Authority already owns the payload. This bounded presentation message
     // supplies the actual release pose/motion without proposing any ammo count.
+    if (Carries[Hand].Action == ReleaseAction)
+        `log("KF2VR_MAGAZINE_RECOVERY phase=release hand=" $ Hand @ "speed=" $ VSize(Carries[Hand].ReleaseVelocity));
     if (Carries[Hand].Action == ReleaseAction
         && Dropped.LeaseValid(Carries[Hand].Slot, Carries[Hand].Generation))
         Bridge.PublishMagazinePresentation(Carries[Hand].Token, Carries[Hand].Origin,

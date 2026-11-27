@@ -150,11 +150,11 @@ defaultproperties
     MinDampingRatio=0.7
     TwoHandLinearScale=2.0
     TwoHandAngularScale=4.0
-    SnapDistance=12.5
+    SnapDistance=25
     SnapAngleDegrees=45
     Step=0.0041667
     MaxDelta=0.1
-    UUPerMetre=50
+    UUPerMetre=100
     HitKickPerDamage=20
     HitKickMax=900
     BlockedKickScale=0.5

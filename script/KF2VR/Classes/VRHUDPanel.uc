@@ -16,26 +16,51 @@ var VRSpatialHUD DisplayOwner;
 var int PanelIndex;
 var bool bDrawn, bPresented, bReady;
 var float LastPlacement;
+// The four indicator blocks on the watch's elbow end, lit as a health gauge
+// the player can read without turning the wrist: one lamp per quarter.
+var StaticMeshComponent WatchLamps[4];
+var MaterialInstanceConstant LampMaterials[4];
+// Lamp centres in the watch mesh's own frame (cm at scale 1): X toward the
+// palm, Y toward the fingers, Z across the wrist. From the mesh's four blocks.
+var vector LampCentres[4];
+var int LampsLit;
+var bool bLampsLow;
+// Emissive colours, already scaled: the master multiplies them straight into
+// the glow, and the watch face's own pale teal washes out to white there.
+var LinearColor LampOn, LampLow;
 
 // Per-component instances keep stock character material assets immutable.
 static function MaterialInstanceConstant CreateHorzineMaterial(Object TargetOuter, string Prefix)
 {
-    local MaterialInstanceConstant M;
-    local Texture2D Diffuse, Normal, Specular, Transmission;
+    local MaterialInstanceConstant M, Parent;
+    local Texture2D Diffuse, Normal, Specular, Variation;
     Diffuse = Texture2D(DynamicLoadObject("KF2VRHands." $ Prefix $ "_D", class'Texture2D', true));
     Normal = Texture2D(DynamicLoadObject("KF2VRHands." $ Prefix $ "_N", class'Texture2D', true));
     Specular = Texture2D(DynamicLoadObject("KF2VRHands." $ Prefix $ "_S", class'Texture2D', true));
     if (Diffuse == None || Normal == None || Specular == None) return None;
     M = new(TargetOuter) class'MaterialInstanceConstant';
-    M.SetParent(MaterialInstanceConstant'CHR_1P_Arms_MAT.CHR_Master_1stP_Arms_MIC');
+    // The hands' _S carries gloss in alpha from hand art revision 82 on:
+    // leather takes a broad highlight and skin a slightly tighter one, through
+    // the stock gloss-mapped arm instance (docs/re/FIRST_PERSON_MATERIALS.md).
+    // The watch's _M shipped with those maps, so it marks a package that has
+    // them; an older package keeps the plain arm instance, which its maps
+    // suit. The watch, tomahawk and Deadbolt stay on the plain instance.
+    Variation = Texture2D(DynamicLoadObject("KF2VRHands.VRHorzineWatch_M", class'Texture2D', true));
+    if (Prefix == "VRHorzineHands" && Variation != None)
+        Parent = MaterialInstanceConstant(DynamicLoadObject("Chr_Mic_Lib.CHR_1P_Glss_MIC", class'MaterialInstanceConstant', true));
+    if (Parent != None) M.SetParent(Parent);
+    else M.SetParent(MaterialInstanceConstant'CHR_1P_Arms_MAT.CHR_Master_1stP_Arms_MIC');
     M.SetTextureParameterValue('Tex2d_Diff', Diffuse);
     M.SetTextureParameterValue('Tex2d_Norm', Normal);
     M.SetTextureParameterValue('Tex2d_Spec', Specular);
-    // The bare-arm parent enables skin transmission over the whole surface.
-    // Leather and metal must not inherit its white subsurface mask; the hands'
-    // _T mask restores it on skin only, where the stock arms had it.
-    Transmission = Texture2D(DynamicLoadObject("KF2VRHands." $ Prefix $ "_T", class'Texture2D', true));
-    M.SetTextureParameterValue('Tex2d_SSSMask', Transmission != None ? Transmission : Texture2D'EngineResources.Black');
+    // Tex2d_SSSMask flags pixels for KF2's screen-space skin blur, which runs
+    // in the world pass only: the stock arms draw in the foreground pass and
+    // never take it, whatever their mask says. These meshes draw in the world
+    // pass at arm's length, where that blur is many pixels wide and keeps
+    // any neighbour within about 33 cm of depth, so flagged skin showed the
+    // Zed, gun or wall behind it (#10; docs/re/10-skin-scattering-pass.md).
+    // No flag on any of them, skin included, as for the stock arms in play.
+    M.SetTextureParameterValue('Tex2d_SSSMask', Texture2D'EngineResources.Black');
     // Hands: the stock bare-arm MIC's broad SpecPower 10 and a weaker
     // reflection, so glove leather reads matte instead of wet. Watch and
     // tomahawk metal keep the tighter highlight.
@@ -61,10 +86,11 @@ simulated function bool InitializePanel(VRSpatialHUD NewOwner, int Index)
         || ParentMaterial.BlendMode != BLEND_Translucent || ParentMaterial.bDisableDepthTest
         || !ParentMaterial.GetTextureParameterValue('Texture_D', ExistingTexture)) return false;
     // Each texture matches its quad's aspect (weapon readout 12 x 4.8 cm is
-    // 2.5:1), and native HudTextAlpha registers exactly these fourteen panels.
+    // 2.5:1), and native HudTextAlpha registers exactly these fifteen panels.
     // Panel 5, the pouch counter, shares the weapon readout target size;
-    // panels 6-11 are 512 x 256 teammate tags; 12 is the second pouch card.
-    Height = (Index == 0 || Index == 3 || Index == 13) ? 512 : ((Index < 3 || Index == 5 || Index == 12) ? 320 : 256);
+    // panels 6-11 are 512 x 256 teammate tags; 12 is the second pouch card;
+    // 14 is the square Rack 'em Up splat.
+    Height = (Index == 0 || Index == 3 || Index == 13 || Index == 14) ? 512 : ((Index < 3 || Index == 5 || Index == 12) ? 320 : 256);
     Width = (Index == 0 || Index == 13) ? 1024 : ((Index < 3 || Index == 5 || Index == 12) ? 800 : (Index >= 6 ? 512 : 1024));
     Display = ScriptedTexture(class'ScriptedTexture'.static.Create(Width, Height, PF_A8R8G8B8, MakeLinearColor(0,0,0,0)));
     if (Display == None) return false;
@@ -79,7 +105,9 @@ simulated function bool InitializePanel(VRSpatialHUD NewOwner, int Index)
     DisplayMaterial.SetTextureParameterValue('Texture_D', Display);
     White = MakeLinearColor(1,1,1,1);
     DisplayMaterial.SetVectorParameterValue('Vector_Glow_Color', White);
-    DisplayMaterial.SetScalarParameterValue('Scalar_Glow_Intensity', Index == 0 ? 0.6 : 0.24);
+    // The Rack 'em Up splat (14) is stock blood art, not lettering on a dark
+    // plate: it needs the watch face's intensity to read as red, not pink.
+    DisplayMaterial.SetScalarParameterValue('Scalar_Glow_Intensity', (Index == 0 || Index == 14) ? 0.6 : 0.24);
     DisplayMaterial.SetScalarParameterValue('Scalar_Opacity', 1.0);
     Surface.SetMaterial(0, DisplayMaterial);
     Surface.SetDepthPriorityGroup((Index == 3 || Index == 4 || Index == 13) ? SDPG_Foreground : SDPG_World);
@@ -105,8 +133,88 @@ simulated function bool InitializePanel(VRSpatialHUD NewOwner, int Index)
         WatchCase.SetHidden(true);
         WatchCase.SetMaterial(0, CreateHorzineMaterial(self, "VRHorzineWatch"));
         AttachComponent(WatchCase);
+        if (WatchCase.StaticMesh != None && WatchCase.StaticMesh.Name == 'VRWristwatch')
+            CreateWatchLamps(ParentMaterial);
     }
     return true;
+}
+
+// Thin unlit plates over the mesh's indicator blocks. They use the display's
+// own emissive master, so they glow like the screens and take no scene light.
+simulated function CreateWatchLamps(Material ParentMaterial)
+{
+    local int I;
+    LampsLit = -1;
+    for (I = 0; I < ArrayCount(WatchLamps); ++I)
+    {
+        LampMaterials[I] = new(self) class'MaterialInstanceConstant';
+        LampMaterials[I].SetParent(ParentMaterial);
+        LampMaterials[I].SetTextureParameterValue('Texture_D', Texture2D'EngineResources.WhiteSquareTexture');
+        LampMaterials[I].SetScalarParameterValue('Scalar_Opacity', 1.0);
+        WatchLamps[I] = new(self) class'StaticMeshComponent';
+        WatchLamps[I].SetStaticMesh(StaticMesh'EngineMeshes.Cube');
+        WatchLamps[I].SetMaterial(0, LampMaterials[I]);
+        WatchLamps[I].SetDepthPriorityGroup(SDPG_World);
+        WatchLamps[I].CastShadow = false;
+        WatchLamps[I].bCastDynamicShadow = false;
+        WatchLamps[I].SetActorCollision(false, false, false);
+        WatchLamps[I].SetTraceBlocking(false, false);
+        WatchLamps[I].SetBlockRigidBody(false);
+        WatchLamps[I].SetAbsolute(true, true, true);
+        WatchLamps[I].SetHidden(true);
+        AttachComponent(WatchLamps[I]);
+    }
+}
+
+// One lamp per started quarter of health; at a quarter or less the last one
+// turns red, as the watch face does. Materials change only when the count does.
+simulated function PlaceWatchLamps(vector Position, rotator Orientation, float Scale)
+{
+    local int I, Lit;
+    local bool bLow;
+    local vector X, Y, Z, MeshScale;
+    local LinearColor Tint;
+    if (WatchLamps[0] == None) return;
+    if (DisplayOwner.HealthLimit > 0)
+        Lit = Clamp(FCeil(4.0 * DisplayOwner.HealthValue / DisplayOwner.HealthLimit), 0, 4);
+    bLow = DisplayOwner.HealthValue <= DisplayOwner.HealthLimit * 0.25;
+    if (Lit != LampsLit || bLow != bLampsLow)
+    {
+        LampsLit = Lit; bLampsLow = bLow;
+        Tint = bLow ? LampLow : LampOn;
+        for (I = 0; I < ArrayCount(WatchLamps); ++I)
+        {
+            LampMaterials[I].SetVectorParameterValue('Vector_Glow_Color', Tint);
+            LampMaterials[I].SetScalarParameterValue('Scalar_Glow_Intensity', 1.0);
+        }
+    }
+    GetAxes(Orientation, X, Y, Z);
+    // The Cube spans 256 UU. A plate just proud of the block's face, a little
+    // smaller than the block so its dark rim stays as a bezel.
+    MeshScale.X = 0.19 * Scale / 256.0;
+    MeshScale.Y = 0.012 * Scale / 256.0;
+    MeshScale.Z = 0.14 * Scale / 256.0;
+    for (I = 0; I < ArrayCount(WatchLamps); ++I)
+    {
+        // Lamp 3 is the leftmost seen from the elbow: the gauge empties toward it.
+        if (ArrayCount(WatchLamps) - 1 - I >= Lit)
+        {
+            if (!WatchLamps[I].HiddenGame) WatchLamps[I].SetHidden(true);
+            continue;
+        }
+        WatchLamps[I].SetTranslation(Position + (X * LampCentres[I].X + Y * LampCentres[I].Y + Z * LampCentres[I].Z) * Scale);
+        WatchLamps[I].SetRotation(Orientation);
+        WatchLamps[I].SetScale3D(MeshScale);
+        WatchLamps[I].SetHidden(false);
+        WatchLamps[I].ForceUpdate(true);
+    }
+}
+
+simulated function HideWatchLamps()
+{
+    local int I;
+    for (I = 0; I < ArrayCount(WatchLamps); ++I)
+        if (WatchLamps[I] != None && !WatchLamps[I].HiddenGame) WatchLamps[I].SetHidden(true);
 }
 
 simulated function RenderDisplay(Canvas C)
@@ -171,6 +279,7 @@ simulated function PlacePanel(vector Position, rotator Orientation, vector Size,
             {
                 WatchCase.SetScale3D(vect(1, 1, 1));
                 WatchCase.SetScale(FClamp(DisplayOwner.Bridge.WristwatchScale, 0.5, 2.0));
+                PlaceWatchLamps(Position, Orientation, FClamp(DisplayOwner.Bridge.WristwatchScale, 0.5, 2.0));
             }
             else
             {
@@ -185,6 +294,7 @@ simulated function PlacePanel(vector Position, rotator Orientation, vector Size,
         else
         {
             if (!WatchCase.HiddenGame) WatchCase.SetHidden(true);
+            HideWatchLamps();
         }
     }
     LastPlacement = WorldInfo.RealTimeSeconds;
@@ -194,6 +304,7 @@ simulated function HidePanel()
 {
     if (!Surface.HiddenGame) Surface.SetHidden(true);
     if (WatchCase != None && !WatchCase.HiddenGame) WatchCase.SetHidden(true);
+    HideWatchLamps();
     bPresented = false;
 }
 
@@ -205,11 +316,18 @@ simulated event Tick(float DeltaTime)
 
 simulated event Destroyed()
 {
+    local int I;
     if (WatchCase != None)
     {
         DetachComponent(WatchCase);
         WatchCase = None;
         WatchMaterials.Length = 0;
+        for (I = 0; I < ArrayCount(WatchLamps); ++I)
+        {
+            if (WatchLamps[I] != None) DetachComponent(WatchLamps[I]);
+            WatchLamps[I] = None;
+            LampMaterials[I] = None;
+        }
     }
     if (Display != None) { Display.Render = None; Display.bNeedsUpdate = false; }
     DisplayOwner = None;
@@ -224,6 +342,12 @@ defaultproperties
     bBlockActors=false
     bProjTarget=false
     TickGroup=TG_PostUpdateWork
+    LampOn=(R=0.03,G=0.34,B=0.24,A=1.0)
+    LampLow=(R=0.36,G=0.012,B=0.01,A=1.0)
+    LampCentres(0)=(X=0.495,Y=-6.84,Z=-1.105)
+    LampCentres(1)=(X=0.495,Y=-6.84,Z=-0.69)
+    LampCentres(2)=(X=0.495,Y=-6.84,Z=-0.275)
+    LampCentres(3)=(X=0.495,Y=-6.84,Z=0.14)
     WatchTints(0)=(R=0.05,G=0.054,B=0.06,A=1.0)
     WatchTints(1)=(R=0.004,G=0.005,B=0.006,A=1.0)
     WatchTints(2)=(R=0.62,G=0.12,B=0.025,A=1.0)

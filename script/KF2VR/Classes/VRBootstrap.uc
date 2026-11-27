@@ -35,6 +35,9 @@ function InitMutator(string Options, out string ErrorMessage)
 {
     super.InitMutator(Options, ErrorMessage);
     LogIdentity("InitMutator");
+    // Experimental arm loss (#210): Solo's authority answers (off unless the
+    // player's own switch is on).
+    class'VRArmLossMutator'.static.Install(WorldInfo.Game, false);
 }
 
 simulated function PostBeginPlay()
@@ -84,6 +87,24 @@ simulated function LogIdentity(string Phase)
  * hooks the VR work eventually needs, and that failure is invisible from the
  * startup log alone.
  */
+// Melee spec G1-G3: where the stock controller is in use, the local bridge
+// holds the player's guard (VRHandsBridge.RequestNetworkGuard) and a hit is
+// reduced here. Under KF2VRNetGame the network controller does this in its
+// AdjustDamage and no bridge has a local guard.
+function NetDamage(int OriginalDamage, out int Damage, Pawn Injured, Controller InstigatedBy, vector HitLocation,
+    out vector Momentum, class<DamageType> DamageType, Actor DamageCauser)
+{
+    local VRHandsBridge B;
+    Super.NetDamage(OriginalDamage, Damage, Injured, InstigatedBy, HitLocation, Momentum, DamageType, DamageCauser);
+    if (Damage <= 0 || DamageCauser == None || KFPawn_Human(Injured) == None) return;
+    foreach DynamicActors(class'VRHandsBridge', B)
+        if (B.LocalGuard != None && B.RootBridge == None && B.Human == Injured)
+        {
+            B.ApplyLocalGuard(Damage, DamageType, DamageCauser);
+            break;
+        }
+}
+
 function bool CheckReplacement(Actor Other)
 {
     if (!bLoggedFirstReplacementCheck)

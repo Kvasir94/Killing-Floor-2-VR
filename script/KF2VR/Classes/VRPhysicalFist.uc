@@ -52,6 +52,8 @@ var string LastBonus;
 // Stock parry strength of a punch against a Zed mid-attack (ParryResistance:
 // Clots 0, Crawlers and Stalkers 1, Gorefasts and Husks 2, Bloats 3, large 4).
 var byte LightParryStrength, HeavyParryStrength;
+// G11: stumble power added when a punch catches a Zed mid-attack.
+var float LightCounterStumble, HeavyCounterStumble;
 var int Parries, HeldPunches, HammerFists;
 // The drawn hand stops at what the fist struck, then eases back onto the
 // tracked hand. Presentation only: contacts always use the tracked hand.
@@ -310,6 +312,34 @@ static function bool AttackParryable(KFPawn Victim, byte Strength)
     return M.SpecialMoves[M.SpecialMove].CanInterruptWithParry();
 }
 
+// Melee spec G11: a punch on a Zed caught mid-attack is no longer a parry. It
+// adds stumble power through the stock affliction system, so the Zed's own
+// vulnerability, build-up and cooldown decide. G13: with B&S2 melee feel on, a
+// fist that strikes the attacking arm still parries. Authority only. Returns
+// whether it parried.
+static function bool CounterPunch(KFPawn Victim, KFPawn Puncher, bool bHeavy, name BoneName, bool bArmParryAllowed)
+{
+    local KFPawn_Monster M;
+    M = KFPawn_Monster(Victim);
+    if (M == None || Puncher == None || Puncher.Role < ROLE_Authority || !AttackParryable(M, 255)) return false;
+    if (bArmParryAllowed && ArmBone(M, BoneName)
+        && ApplyParry(M, Puncher, bHeavy ? default.HeavyParryStrength : default.LightParryStrength)) return true;
+    if (M.AfflictionHandler != None)
+        M.AfflictionHandler.AccrueAffliction(AF_Stumble, bHeavy ? default.HeavyCounterStumble : default.LightCounterStumble);
+    return false;
+}
+
+static function bool ArmBone(KFPawn Victim, name BoneName)
+{
+    local int Zone;
+    if (Victim == None || BoneName == '') return false;
+    Zone = Victim.HitZones.Find('BoneName', BoneName);
+    if (Zone == INDEX_NONE) Zone = Victim.HitZones.Find('ZoneName', BoneName);
+    if (Zone == INDEX_NONE) return false;
+    return Victim.HitZones[Zone].ZoneName == 'lhand' || Victim.HitZones[Zone].ZoneName == 'rhand'
+        || Victim.HitZones[Zone].ZoneName == 'lforearm' || Victim.HitZones[Zone].ZoneName == 'rforearm';
+}
+
 // Authority only; a network client's punch or guard asks the server, which
 // calls this itself.
 static function bool ApplyParry(KFPawn Victim, KFPawn Parrier, byte Strength)
@@ -401,7 +431,7 @@ simulated function ApplyContact(VRHandsBridge Bridge, int Hand, ImpactInfo Impac
     local float Alpha, Scale;
     local int Damage, DamageCap, HeldBy;
     local byte Strength;
-    local bool bHeavy, bParried;
+    local bool bHeavy, bParried, bArmParry;
     local class<DamageType> HitType;
     local VRHitStop HitStop;
     if (Bridge == None || Bridge.Human == None || Impact.HitActor == None || Impact.HitActor.bDeleteMe) return;
@@ -475,12 +505,15 @@ simulated function ApplyContact(VRHandsBridge Bridge, int Hand, ImpactInfo Impac
         if (!class'VRBoxingGloves'.static.Worn(Bridge)
             && (Bridge.PC.GetPerk() == None || KFPerk_Berserker(Bridge.PC.GetPerk()) == None))
             Damage = OrdinaryDamage(Damage);
-        // Parry first: the stumble must start from the attack it interrupts,
-        // before the blow's own reaction. A client predicts it for feedback;
-        // its server applies the same test to the forwarded punch.
+        // Melee spec G11/G13. Counter first: the stumble must start from the
+        // attack it interrupts, before the blow's own reaction. A client
+        // predicts the parry for feedback; its server applies the same test to
+        // the forwarded punch.
         Strength = bHeavy ? HeavyParryStrength : LightParryStrength;
-        if (Bridge.Human.Role == ROLE_Authority) bParried = ApplyParry(Victim, Bridge.Human, Strength);
-        else bParried = AttackParryable(Victim, Strength);
+        bArmParry = !Bridge.UseLegacyMelee(Bridge.bLegacyMeleeParry) && ArmBone(Victim, Impact.HitInfo.BoneName);
+        if (Bridge.Human.Role == ROLE_Authority)
+            bParried = CounterPunch(Victim, Bridge.Human, bHeavy, Impact.HitInfo.BoneName, bArmParry);
+        else bParried = bArmParry && AttackParryable(Victim, Strength);
         if (bParried)
         {
             ++Parries;
@@ -603,7 +636,9 @@ simulated function GatherContacts(VRHandsBridge Bridge, vector Start, vector End
     Radius = FistRadius;
     Extent = vect(1,1,1) * Radius;
     LimitedEnd = End;
-    Wall = Bridge.Trace(HitLocation, HitNormal, End, Start, false, Extent, Info);
+    // A point trace like the melee weapons: an extent trace also meets
+    // invisible player-clip volumes and ended punches in the open.
+    Wall = Bridge.Trace(HitLocation, HitNormal, End, Start, false, vect(0,0,0), Info);
     if (Wall != None)
     {
         LimitedEnd = HitLocation;
@@ -617,7 +652,7 @@ simulated function GatherContacts(VRHandsBridge Bridge, vector Start, vector End
     {
         if (++Count > 32) break;
         if (A == None || A == Bridge.Human || A.bDeleteMe || A.IsA('Weapon')
-            || HitActors.Find(A) != INDEX_NONE) continue;
+            || A.IsA('Volume') || HitActors.Find(A) != INDEX_NONE) continue;
         Victim = KFPawn(A);
         if (Victim != None)
         {
@@ -1012,6 +1047,8 @@ defaultproperties
     HammerFistDot=0.55
     MaxBonusDamage=100
     LightParryStrength=2
+    LightCounterStumble=90
+    HeavyCounterStumble=60
     HeavyParryStrength=3
     StopHoldTime=0.08
     StopReleaseTime=0.10

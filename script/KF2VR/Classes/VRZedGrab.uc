@@ -11,7 +11,7 @@
 // into another Zed, a held Zed driven into a wall or the floor, and a thrown
 // body, corpse or gib that hits a Zed before it comes to rest all deal blunt
 // damage scaled by impact speed. The pawn is never attached to a controller.
-class VRZedGrab extends Actor;
+class VRZedGrab extends Actor dependson(VRLivingArmLoss);
 
 // Alyx-style release velocity for this hand throw (VRThrowRelease).
 var VRThrowRelease Thrower;
@@ -130,6 +130,8 @@ var float SwingHumMaxStrength; // 0 turns the hum off
 var float RendStretch;
 var int RendSkillIndex;
 var int Rends;
+// Experimental arm loss (#210): per-hand yank tracking, Solo and listen host.
+var VRLivingArmLoss.ArmYank ArmYanks[2];
 var float RendWaitUntil;
 var float NextDazeCheck;
 // Melee item 10, B&S HumanWrist (IK position weight 1): a standing hold on a
@@ -1239,6 +1241,22 @@ simulated function matrix DesiredFrame(int Hand)
         (WorldInfo.TimeSeconds - Grabs[Hand].AttachTime) / FMax(class'VRBodyHold'.default.CatchTime, 0.01));
 }
 
+// Experimental arm loss (#210): with local authority (Solo, listen host), a
+// hard pull on a small Zed's held arm tears it off and the hand lets go.
+// Online clients are checked by the server from their tracked hands.
+simulated function bool TryArmYank(int Hand, vector Palm)
+{
+    local KFPawn_Monster M;
+    local int Zone;
+    M = Grabs[Hand].Pawn;
+    if (M == None || IsNetworkClient() || Bridge == None || Bridge.Human == None
+        || Bridge.Human.Role != ROLE_Authority || !Bridge.LivingArmLossEnabled()) return false;
+    Zone = class'VRLivingArmLoss'.static.YankStep(ArmYanks[Hand], M, Grabs[Hand].BoneName, Palm, WorldInfo.TimeSeconds);
+    if (Zone < 0 || !class'VRLivingArmLoss'.static.ServerTearByHand(M, Zone)) return false;
+    Pulse(Hand, 1.0, 0.12);
+    ClearGrab(Hand, "arm_torn");
+    return true;
+}
 simulated function PlaceHeld(int Hand, float DeltaTime)
 {
     local vector Palm, Want, Direction, HitLocation, HitNormal, Surface, Eye;
@@ -1272,6 +1290,7 @@ simulated function PlaceHeld(int Hand, float DeltaTime)
     }
     Grabs[Hand].LastPalm = Palm;
     Grabs[Hand].bHavePalm = true;
+    if (TryArmYank(Hand, Palm)) return;
     SwingHum(Hand);
 
     Target = DesiredFrame(Hand);

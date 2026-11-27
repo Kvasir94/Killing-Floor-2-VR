@@ -87,23 +87,28 @@ function bool Begin(int Request, KFWeapon W, int ExpectedHeldRevision, int Expec
 {
     local int Id, Revision;
     local VRWeaponPair Candidate;
+    local string Gate;
     if (Request <= Snapshot.LastBeginRequest || Request <= 0 || Request == MaxInt) return false;
     Snapshot.LastBeginRequest = Request; Snapshot.LastBeginWeapon = W;
     Snapshot.bBeginAccepted = false;
     Inventory.Refresh();
     Candidate = class'VRWeaponPair'.static.ForMember(W);
     bSwingOut = bSwingOut && !bStock && class'VRBreakCatalog'.static.SwingOutCylinder(W);
-    if (Snapshot.Status == 1 || Snapshot.Status == 4 || !Channel.PairedReloadContext(Snapshot.Hand)
-        || W == None || W.Role != ROLE_Authority || W.bAllowClientAmmoTracking
-        || W.AmmoCount[0] != ExpectedAmmo
-        || Candidate == None || !Candidate.IsMember(W)
-        || ExpectedHeldRevision != Inventory.Snapshot.Revision
-        || !Inventory.DescribeItem(W, Id, Revision)
-        || (Snapshot.Hand == 0 ? Inventory.Snapshot.LeftWeapon : Inventory.Snapshot.RightWeapon) != W
-        || (!class'VRWeaponRuntime'.static.StockIdle(W) && !W.IsInState('Reloading'))
-        || (!bSwingOut && !W.CanReload(0) && !Candidate.PhysicalTopUp(W, bRealistic)) || W.MySkelMesh == None)
+    // The first failing gate is named in the refusal, so a refused begin can
+    // be told apart from a stale count or a pose that has not resumed yet.
+    Gate = "";
+    if (Snapshot.Status == 1 || Snapshot.Status == 4) Gate = "running";
+    else if (!Channel.PairedReloadContext(Snapshot.Hand)) Gate = "context";
+    else if (W == None || W.Role != ROLE_Authority || W.bAllowClientAmmoTracking) Gate = "weapon";
+    else if (W.AmmoCount[0] != ExpectedAmmo) Gate = "ammo";
+    else if (Candidate == None || !Candidate.IsMember(W)) Gate = "pair";
+    else if (ExpectedHeldRevision != Inventory.Snapshot.Revision || !Inventory.DescribeItem(W, Id, Revision)
+        || (Snapshot.Hand == 0 ? Inventory.Snapshot.LeftWeapon : Inventory.Snapshot.RightWeapon) != W) Gate = "held";
+    else if (!class'VRWeaponRuntime'.static.StockIdle(W) && !W.IsInState('Reloading')) Gate = "state";
+    else if ((!bSwingOut && !W.CanReload(0) && !Candidate.PhysicalTopUp(W, bRealistic)) || W.MySkelMesh == None) Gate = "full";
+    if (Gate != "")
     {
-        Refused("begin expected_ammo=" $ ExpectedAmmo @ "held=" $ ExpectedHeldRevision $ "/" $ Inventory.Snapshot.Revision, W, Request);
+        Refused("begin gate=" $ Gate @ "expected_ammo=" $ ExpectedAmmo @ "held=" $ ExpectedHeldRevision $ "/" $ Inventory.Snapshot.Revision, W, Request);
         // A stale owner count refuses every later Begin; repair it here too.
         if (W != None && W.AmmoCount[0] != ExpectedAmmo) CorrectOwnerAmmo(W);
         Publish(); return false;

@@ -7,7 +7,7 @@ var VRActionPath CockPath, ReturnPath;
 var VRReloadMotionGuard PositionGuard, RotationGuard;
 var bool bSeeded, bReturning, bComplete;
 var bool bCockSoundPlayed, bReturnSoundPlayed;
-var float Amount, BasePitch, TurnPitch, PhaseSince;
+var float Amount, BasePitch, TurnPitch, PhaseSince, LastPitch;
 var float CockSoundAt, ReturnSoundAt;
 var AkEvent CockSound, ReturnSound;
 
@@ -70,11 +70,21 @@ function int Update(vector Position, quat ControllerQ, bool bGrip, float Now)
     {
         if (!PositionGuard.Begin(Position, Now) || !RotationGuard.Begin(Forward, Now))
         { Reset(); return 3; }
-        BasePitch = Pitch; PhaseSince = Now; bSeeded = true;
+        BasePitch = Pitch; PhaseSince = Now; bSeeded = true; LastPitch = Pitch;
         return 0;
     }
+    // R69: these guards run in world space, so a snap turn, a frame gap or one
+    // tracking jump trips them. That is not a release: re-seed them and shift
+    // the flex references by this sample's pitch jump, so the wrist keeps its
+    // progress and the gap neither cocks nor returns it.
     if (!PositionGuard.Check(Position, Now) || !RotationGuard.Check(Forward, Now))
-    { Reset(); return 3; }
+    {
+        if (!PositionGuard.Begin(Position, Now) || !RotationGuard.Begin(Forward, Now)) { Reset(); return 3; }
+        BasePitch += Pitch - LastPitch; TurnPitch += Pitch - LastPitch;
+        LastPitch = Pitch;
+        return 0;
+    }
+    LastPitch = Pitch;
     if (bComplete) return 0;
     // 30 degrees of deliberate wrist flex, followed by a return within five.
     // Neither a tiny shake nor completing the animation with time pays ammo.

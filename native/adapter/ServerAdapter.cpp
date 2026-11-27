@@ -14,6 +14,7 @@
 #include "WeaponIsolation.h"
 #include "WorldDropGuard.h"
 #include "WeaponBlockDispatch.h"
+#include "ArmLossDispatch.h"
 #include "ShieldDefenseScope.h"
 #include "PerkContext.h"
 #include "CorpseDamageObserver.h"
@@ -180,6 +181,7 @@ void HookProcess(void* object,void* stack,void* result) {
     kf2vr::adapter::BowReleaseDispatchScope bowRelease(*script,object,function,
         GameScript::At<void*>(stack,0x2c),result);
     if (bowRelease.Suppressed()) return;
+    if (kf2vr::adapter::RouteArmLoss(*script,object,function,GameScript::At<void*>(stack,0x2c),result,nullptr)) return;
     if (kf2vr::adapter::RouteVampireReloadGuard(*script,object,function)) return;
     kf2vr::adapter::SwipeDispatchScope swipeDispatch(*script,object,function,GameScript::At<void*>(stack,0x2c));
     if (kf2vr::adapter::RouteHeldSwipeContact(*script,object,function,GameScript::At<void*>(stack,0x2c))) return;

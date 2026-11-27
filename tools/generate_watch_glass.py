@@ -8,6 +8,31 @@ import struct
 import random
 from pathlib import Path
 
+# Faint fingerprints and one wipe on the lens: centre x, y, radii, turn (radians),
+# lift in levels, ridge spacing in pixels. A thumb lands low on each screen.
+SMUDGES=((402,418,46,62,.5,5.5,5.2),(880,150,40,54,-.4,4.5,4.8),(655,372,34,48,.9,3.5,5.6))
+
+def smudge(x,y):
+    lift=0.0
+    for cx,cy,rx,ry,turn,strength,ridge in SMUDGES:
+        dx=x-cx;dy=y-cy
+        if abs(dx)>90 or abs(dy)>90:continue
+        c=math.cos(turn);s=math.sin(turn)
+        u=(dx*c+dy*s)/rx;v=(-dx*s+dy*c)/ry
+        r2=u*u+v*v
+        if r2>=1.7:continue
+        body=math.exp(-r2*2.2)
+        # Ridges arc across the print round a point well below it, bent a
+        # little so they are not circles: a loop pattern, not a target.
+        a=dx*c+dy*s;b=-dx*s+dy*c
+        rings=math.sin((math.hypot(a+6*math.sin(b*.045),b+ry*1.5)+4*math.sin(a*.06))*2*math.pi/ridge)
+        lift+=strength*body*(.84+.16*rings)
+    # A finger wipe: a long, slightly bowed streak across the right-hand screen.
+    wipe=y-(238+.11*(x-560)+.00022*(x-760)**2)
+    if 560<x<990:
+        lift+=2.8*math.exp(-(wipe/17)**2)*math.sin(math.pi*(x-560)/430)*(.85+.15*math.sin(x*.023+1.3))
+    return lift
+
 def generate(path):
     width,height=1024,512
     pixels=bytearray()
@@ -23,7 +48,7 @@ def generate(path):
             grain=((x*73+y*151+x*y*3)%19)/19-0.5
             scan=1.8 if y%4==0 else 0
             grid=-1.2 if x%8==4 else 0
-            tone=sheen+reflected+grain*2+scan+grid
+            tone=sheen+reflected+grain*2+scan+grid+smudge(x,y)
             color=[int((v+tone)*(.64+.36*vignette)) for v in (9,24,25)]
             edge_distance=min(x,width-1-x,y,height-1-y)
             fleck=((x*191+y*953+x*y*11)%997)/997

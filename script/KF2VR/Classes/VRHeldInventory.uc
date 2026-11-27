@@ -252,8 +252,10 @@ function bool IsDefensiveItem(VRWeaponRuntime R)
     return R != None && R.Inventory == self && R.IsCurrent()
         && R.PrimaryHand >= 0 && R.PrimaryHand < 2 && GetPrimary(R.PrimaryHand) == R
         && R.Item.IsA('KFWeap_MeleeBase') && R.Item.IsInState('MeleeBlocking')
-        && (R.Presenter == None || R.Presenter.PhysicalMelee == None
-            || R.Presenter.PhysicalMelee.bButtonGuard || R.Presenter.PhysicalMelee.CanDefend())
+        // A physical melee weapon guards by cover (melee spec G1), applied by
+        // the controller's AdjustDamage; it never defends through the stock
+        // block state, even if something left it there.
+        && (R.Presenter == None || R.Presenter.PhysicalMelee == None)
         && R.NativePoseReady == 1 && PoseSequence > 0 && R.PoseSequence == PoseSequence
         && R.OwnershipRevision > 0 && R.PoseOwnershipRevision == R.OwnershipRevision;
 }

@@ -76,7 +76,7 @@ def hand(text, where, allow_both=False):
 def anchor(text, where, default_hand=None):
     """Script anchors -> runner anchors (see ScriptRunner.Resolve)."""
     value = text
-    if value in ('head', 'body', 'world', 'chest', 'door', 'reload.target', 'reload.held', 'reload.seat', 'reload.contact', 'bow.nock', 'reload.target2'):
+    if value in ('head', 'body', 'world', 'chest', 'door', 'reload.target', 'reload.held', 'reload.seat', 'reload.contact', 'reload.straight', 'bow.nock', 'reload.target2'):
         return value
     if value == 'pouch':
         if not default_hand:
@@ -98,7 +98,7 @@ def anchor(text, where, default_hand=None):
         if not default_hand:
             raise ScriptError(where, 'hip needs a hand: hip.left or hip.right')
         return 'hip.'+default_hand
-    match = re.fullmatch(r'(pouch|wrist|hip|pickup)\.(left|right|l|r)', value, re.I)
+    match = re.fullmatch(r'(pouch|wrist|hip|pickup|recovered)\.(left|right|l|r)', value, re.I)
     if match:
         return match[1].lower()+'.'+HANDS[match[2].lower()]
     match = re.fullmatch(r'nearest\(([A-Za-z_][A-Za-z0-9_]*)\)', value)
@@ -124,11 +124,11 @@ def probe(text, where):
     match = re.fullmatch(r'nearest\(([A-Za-z_][A-Za-z0-9_]*)\)\.([a-z_]+)', text)
     if match:
         return f'nearest.{match[1]}.{match[2]}'
-    match = re.fullmatch(r'dist\(([^,]+),([^)]+)\)', text)
+    match = re.fullmatch(r'dist\(([^,]+),(.+)\)', text)   # b may be zed(Class, Bone)
     if match:
         a, b = (anchor(p.strip(), where).replace('.', ':') for p in match.groups())
         return f'dist.{a}.{b}'
-    if re.fullmatch(r'pawn\.(x|y|z|yaw|view_yaw|travel)|frame_ms|graphics_preset|time|health|speed|input|dosh|trader|doors\.spawn|perk|xp|perk_level|xp\.KFPerk_[A-Za-z]+|kills\.[A-Za-z][A-Za-z0-9_]*|reload\.step2?|reload\.actions|props\.(mags|mag_rounds|rounds|cases)|setting\.[A-Za-z][A-Za-z0-9_]*', text):
+    if re.fullmatch(r'pawn\.(x|y|z|yaw|view_yaw|travel)|frame_ms|graphics_preset|time|health|god|speed|input|dosh|trader|doors\.spawn|perk|xp|perk_level|xp\.KFPerk_[A-Za-z]+|kills\.[A-Za-z][A-Za-z0-9_]*|reload\.step2?|reload\.actions|props\.(mags|mag_rounds|mag_speed|rounds|cases)|setting\.[A-Za-z][A-Za-z0-9_]*', text):
         return text
     raise ScriptError(where, f'unknown probe {text!r}')
 
@@ -173,6 +173,12 @@ PRESETS = {'advanced': dict(ReloadPreset='2', bInteractiveReloads='True',
                     bSupportHandCarry='True', bIndependentHands='True', bReloadHints='True',
                     # Scripts say hold/release; toggle grip would flip on every press.
                     bToggleGrip='False', bHoldSupportGrip='True'),
+   # Manual reload mode with the Standard ammo rules (R44, R47, R48).
+   'manual': dict(ReloadPreset='1', bInteractiveReloads='True', bFreeWeaponCycling='False',
+                  bEmptyTriggerReloads='True', bGrabReleasesMagazine='True', bAllowFullMagazineEject='False',
+                  bKeepChamberedRound='False', bLoseReloadAmmo='False', bRecoverMagazineAmmo='False',
+                  bSupportHandCarry='True', bIndependentHands='True', bReloadHints='True',
+                  bToggleGrip='False', bHoldSupportGrip='True'),
    'classic': dict(ReloadPreset='0', bInteractiveReloads='False', bToggleGrip='False')}
 
 
@@ -311,7 +317,7 @@ class Compiler:
 
     def do_preset(self, where, args):
         if len(args) != 1 or args[0] not in PRESETS:
-            raise ScriptError(where, 'preset advanced|classic')
+            raise ScriptError(where, 'preset '+'|'.join(PRESETS))
         self.out.settings.update(PRESETS[args[0]])
 
     def do_include(self, where, args):
@@ -538,19 +544,97 @@ class Compiler:
                   speed=number(found.get('speed', '60'), where, 1, 500), timeout=seconds(found.get('timeout', '8'), where),
                   tol=number(found.get('tol', '0.05'), where, 0.005, 0.5), soft='1' if soft else None)
 
-    # Friendly zed names -> the stock SpawnZed prefixes (KFCheatManager.LoadMonsterByName).
-    ZEDS = {'clot': 'ClotA', 'alpha': 'ClotA', 'cyst': 'ClotC', 'slasher': 'ClotS', 'gorefast': 'GF',
-            'crawler': 'Crawler', 'stalker': 'Stalker', 'bloat': 'Bloat', 'siren': 'Siren', 'husk': 'Husk',
-            'scrake': 'Scrake', 'fleshpound': 'FP', 'fp': 'FP'}
+    # Friendly zed names -> the stock SpawnZed/SpawnAI prefixes (KFCheatManager.LoadMonsterByName,
+    # which may roll a random elite stand-in) and the exact KFGameContent class the runner spawns.
+    ZEDS = {'clot': ('ClotA', 'KFPawn_ZedClot_Alpha'), 'alpha': ('ClotA', 'KFPawn_ZedClot_Alpha'),
+            'cyst': ('ClotC', 'KFPawn_ZedClot_Cyst'), 'slasher': ('ClotS', 'KFPawn_ZedClot_Slasher'),
+            'gorefast': ('GF', 'KFPawn_ZedGorefast'), 'crawler': ('Crawler', 'KFPawn_ZedCrawler'),
+            'stalker': ('Stalker', 'KFPawn_ZedStalker'), 'bloat': ('Bloat', 'KFPawn_ZedBloat'),
+            'siren': ('Siren', 'KFPawn_ZedSiren'), 'husk': ('Husk', 'KFPawn_ZedHusk'),
+            'scrake': ('Scrake', 'KFPawn_ZedScrake'), 'fleshpound': ('FP', 'KFPawn_ZedFleshpound'),
+            'fp': ('FP', 'KFPawn_ZedFleshpound')}
+
+    def do_target(self, where, args):
+        # target [dist D] [size S]: a static grid board D UU ahead of the eye,
+        # facing it, S UU wide (scope zoom checks, #212). target off removes it.
+        if args[:1] == ['off']:
+            self.emit(where, 'target', dist='0', size='0')
+            return
+        found, _ = options(args, where, {'dist', 'size'})
+        self.emit(where, 'target', dist=number(found.get('dist', '300'), where, 20, 5000),
+                  size=number(found.get('size', '300'), where, 10, 5000))
 
     def do_spawn(self, where, args):
-        # spawn <zed> [dist D] [yaw Y]: the stock SpawnZed cheat (standalone),
-        # D UU ahead along the view turned by Y degrees.
+        # spawn <zed> [hostile] [dist D] [yaw Y]: a Zed D UU ahead along the view
+        # turned by Y degrees. A friendly name or KFPawn_ class spawns exactly
+        # that class; other names go to the stock SpawnZed lookup. hostile gives
+        # it its AI, hunting the player.
+        usage = 'spawn <zed> [hostile] [dist D] [yaw Y]'
         if not args or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', args[0]):
-            raise ScriptError(where, 'spawn <zed> [dist D] [yaw Y]')
-        found, _ = options(args[1:], where, {'dist', 'yaw'})
-        self.emit(where, 'spawn', zed=self.ZEDS.get(args[0].lower(), args[0]),
+            raise ScriptError(where, usage)
+        hostile = 'hostile' in args[1:]
+        found, _ = options([a for a in args[1:] if a != 'hostile'], where, {'dist', 'yaw'})
+        prefix, exact = self.ZEDS.get(args[0].lower(), (args[0], None))
+        if args[0].startswith('KFPawn_'):
+            exact = args[0]
+        self.emit(where, 'spawn', zed=prefix, cls=exact, hostile='1' if hostile else None,
                   dist=number(found.get('dist', '300'), where, 50, 5000), yaw=number(found.get('yaw', '0'), where, -180, 180))
+
+    def do_damage(self, where, args):
+        # damage on|off: the player takes hits (replays start in practice mode, invulnerable).
+        if args not in (['on'], ['off']):
+            raise ScriptError(where, 'damage on|off')
+        self.emit(where, 'damage', on='1' if args[0] == 'on' else '0')
+
+    def do_hitch(self, where, args):
+        # hitch <duration>: stall the game thread once for that long (a frame
+        # hitch or load spike; the next frame's delta carries the gap).
+        if len(args) != 1:
+            raise ScriptError(where, 'hitch <duration>   (1ms..5s)')
+        ms = float(seconds(args[0], where)) * 1000
+        if not 1 <= ms <= 5000:
+            raise ScriptError(where, 'hitch takes 1ms..5s')
+        self.emit(where, 'hitch', ms=str(int(round(ms))))
+
+    def do_select(self, where, args):
+        # select <hand> <weapon|hand> [refused] [timeout T]: draw through the
+        # hand's weapon wheel, as a player does (hold Y/B, point, squeeze).
+        if len(args) < 2:
+            raise ScriptError(where, 'select <hand> <weapon|hand> [refused] [timeout T]')
+        refused = 'refused' in args[2:]
+        found, _ = options([a for a in args[2:] if a != 'refused'], where, {'timeout'})
+        pick = args[1]
+        if pick.lower() not in ('hand', 'empty'):
+            try:
+                pick = self.resolve_weapon(pick)
+            except ValueError:
+                if not re.fullmatch(r'[A-Za-z0-9_.]+', pick):
+                    raise ScriptError(where, f'select: unknown weapon {pick!r}') from None
+        else:
+            pick = 'hand'
+        self.emit(where, 'select', hand=hand(args[0], where)[0], act='pick', pick=pick,
+                  refused='1' if refused else None, timeout=seconds(found.get('timeout', '10'), where))
+
+    def do_wheel(self, where, args):
+        # wheel <hand> open|close: open the weapon wheel (held Y/B) or shut it (a Y/B press).
+        if len(args) != 2 or args[1] not in ('open', 'close'):
+            raise ScriptError(where, 'wheel <hand> open|close')
+        self.emit(where, 'select', hand=hand(args[0], where)[0], act=args[1])
+
+    CAMERAS = ('eye', 'front', 'side', 'left', 'behind', 'over')
+
+    def do_camera(self, where, args):
+        # camera eye|front|side|left|behind|over [dist D] [body]: where captures
+        # (and the flat view) look from; eye is the player's own view.
+        usage = 'camera eye|front|side|left|behind|over [dist D] [body]'
+        if not args or args[0] not in self.CAMERAS:
+            raise ScriptError(where, usage)
+        body = 'body' in args[1:]
+        found, _ = options([a for a in args[1:] if a != 'body'], where, {'dist'})
+        if args[0] == 'eye' and (found or body):
+            raise ScriptError(where, usage)
+        self.emit(where, 'camera', mode=args[0], dist=number(found['dist'], where, 30, 1000) if 'dist' in found else None,
+                  body='1' if body else None)
 
     def do_trace(self, where, args):
         # trace <probe>... [every T] [for T]: log probes in the background while later ops run.
@@ -570,12 +654,68 @@ class Compiler:
         self.emit(where, 'setammo', hand=hand(args[0], where)[0],
                   **{k: str(int(number(v, where, 0, 10000))) for k, v in found.items()})
 
+    def do_opticset(self, where, args):
+        # opticset <hand> [view lit|noshadows|unlit] [fps N] [size N] [fog on|off] [prepass on|off]
+        # [far N]: test setup for cost A/B runs; changes that hand's physical optic capture.
+        usage = 'opticset <hand> [view lit|noshadows|unlit] [fps N] [size N] [fog on|off] [prepass on|off] [far N] [every N]'
+        if not args:
+            raise ScriptError(where, usage)
+        found, _ = options(args[1:], where, {'view', 'fps', 'size', 'fog', 'prepass', 'far', 'every'})
+        views = {'lit': '0', 'unlit': '1', 'noshadows': '2'}
+        fields = {}
+        for key, value in found.items():
+            if key == 'view':
+                if value not in views:
+                    raise ScriptError(where, usage)
+                fields[key] = views[value]
+            elif key in ('fog', 'prepass'):
+                if value not in ('on', 'off'):
+                    raise ScriptError(where, usage)
+                fields[key] = '1' if value == 'on' else '0'
+            else:
+                fields[key] = str(number(value, where, 0, 100000))
+        self.emit(where, 'opticset', hand=hand(args[0], where)[0], **fields)
+
     def do_aim(self, where, args):
-        # aim <hand> at <anchor>: point the hand's controller axis (the gravity grab's aim) at it.
-        if len(args) != 3 or args[1] != 'at':
-            raise ScriptError(where, 'aim <hand> at <anchor>')
+        # aim <hand> at <anchor> [bore]: point the hand's controller axis (the
+        # gravity grab's aim) at it, or with `bore` the held gun's shot axis.
+        if len(args) not in (3, 4) or args[1] != 'at' or (len(args) == 4 and args[3] != 'bore'):
+            raise ScriptError(where, 'aim <hand> at <anchor> [bore]')
         side = hand(args[0], where)[0]
-        self.emit(where, 'aim', hand=side, a=anchor(args[2], where, side))
+        fields = {'bore': '1'} if len(args) == 4 else {}
+        self.emit(where, 'aim', hand=side, a=anchor(args[2], where, side), **fields)
+
+    def do_attacksides(self, where, args):
+        # attacksides <Class>: log which arm strikes at each melee impact of the
+        # nearest pawn's attack clips (VRAttackSampler, #210).
+        if len(args) != 1 or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', args[0]):
+            raise ScriptError(where, 'attacksides <Class>')
+        self.emit(where, 'attacksides', cls=args[0])
+    def do_hurt(self, where, args):
+        # hurt <Class> zone <zone> [damage N] [dt <DamageTypePath>]: test setup, one
+        # stock TakeDamage hit on that hit zone of the nearest pawn (standalone).
+        if not args or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', args[0]):
+            raise ScriptError(where, 'hurt <Class> zone <zone> [damage N] [dt <path>]')
+        found, _ = options(args[1:], where, {'zone', 'damage', 'dt'})
+        if 'zone' not in found or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', found['zone']):
+            raise ScriptError(where, 'hurt <Class> zone <zone> [damage N] [dt <path>]')
+        dt = found.get('dt', 'KFGameContent.KFDT_Ballistic_AR15')
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*', dt):
+            raise ScriptError(where, 'hurt: dt must be Package.Class')
+        self.emit(where, 'hurt', cls=args[0], zone=found['zone'],
+                  n=str(int(number(found.get('damage', '30'), where, 1, 100000))), dt=dt)
+    def do_headshot(self, where, args):
+        # headshot <Class> [damage N] [dt <path>]: a stock head hit on the
+        # nearest pawn of that class, also reported to the perk's head-shot
+        # counter as a weapon impact would be (Rack 'em Up, #224).
+        if not args:
+            raise ScriptError(where, 'headshot <Class> [damage N] [dt <path>]')
+        found, _ = options(args[1:], where, {'damage', 'dt'})
+        dt = found.get('dt', 'KFGameContent.KFDT_Ballistic_Deagle')
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*', dt):
+            raise ScriptError(where, 'headshot: dt must be Package.Class')
+        self.emit(where, 'headshot', cls=args[0], zone='head',
+                  n=str(int(number(found.get('damage', '5'), where, 1, 100000))), dt=dt, perkhit='1')
 
     def do_dosh(self, where, args):
         if len(args) != 1:
@@ -594,6 +734,13 @@ class Compiler:
         if len(args) != 1 or not re.fullmatch(r'KFPerk_[A-Za-z0-9_]+', args[0]):
             raise ScriptError(where, 'perk <KFPerk_...>')
         self.emit(where, 'perk', perk=args[0])
+
+    def do_skill(self, where, args):
+        # skill <index> on|off: switch the current perk's PerkSkills entry
+        # (test setup, e.g. Support's Tactical Reload is index 1).
+        if len(args) != 2 or args[1] not in ('on', 'off'):
+            raise ScriptError(where, 'skill <index> on|off')
+        self.emit(where, 'skill', index=str(int(number(args[0], where, 0, 31))), on='1' if args[1] == 'on' else '0')
 
     def do_buy(self, where, args):
         # buy <weapon>: a trader purchase through the stock server path.
@@ -741,6 +888,12 @@ class Compiler:
     def do_end(self, where, args):
         if args: raise ScriptError(where, 'end takes no arguments')
         self.emit(where, 'end')
+
+    def do_live(self, where, args):
+        # Hand control to a live session (tools/replay/live.py fills in its
+        # port); under plain scripted.py the runner skips it.
+        if args: raise ScriptError(where, 'live takes no arguments')
+        self.emit(where, 'live')
 
 
 def compile_script(path, variables=None, resolve_weapon=None):

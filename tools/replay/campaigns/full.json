@@ -1,0 +1,1652 @@
+[
+  {
+    "id": "reload-hints-advanced",
+    "runner": "solo",
+    "script": "tools/replay/scripts/reload-hints.kfs",
+    "weapons": ["all"],
+    "matrix": {
+      "preset": ["advanced"],
+      "var.start": ["empty", "partial"]
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "tier": "core",
+    "notes": "Every registered weapon from the in-game catalog, advanced preset, from empty and from a partial magazine. One entry per preset so lanes share the load. The catalog also lists melee weapons, tools and other items that have no reload; add \"extra\": [\"--families\", \"detachable,pump,break,finish,lever,revolver,bolt,bow\"] to leave the \"other\" family out."
+  },
+  {
+    "id": "reload-hints-classic",
+    "runner": "solo",
+    "script": "tools/replay/scripts/reload-hints.kfs",
+    "weapons": ["all"],
+    "matrix": {
+      "preset": ["classic"],
+      "var.start": ["empty", "partial"]
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "tier": "core",
+    "notes": "Every registered weapon from the in-game catalog, classic preset, from empty and from a partial magazine. One entry per preset so lanes share the load. The catalog also lists melee weapons, tools and other items that have no reload; add \"extra\": [\"--families\", \"detachable,pump,break,finish,lever,revolver,bolt,bow\"] to leave the \"other\" family out."
+  },
+  {
+    "id": "reload-hints-manual",
+    "runner": "solo",
+    "script": "tools/replay/scripts/reload-hints.kfs",
+    "weapons": ["all"],
+    "matrix": {
+      "preset": ["manual"],
+      "var.start": ["empty", "partial"]
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "tier": "core",
+    "notes": "Every registered weapon from the in-game catalog, manual preset, from empty and from a partial magazine. One entry per preset so lanes share the load. The catalog also lists melee weapons, tools and other items that have no reload; add \"extra\": [\"--families\", \"detachable,pump,break,finish,lever,revolver,bolt,bow\"] to leave the \"other\" family out."
+  },
+  {
+    "id": "reload-dual-hip",
+    "runner": "solo",
+    "script": "tools/replay/scripts/reload-dual-hip.kfs",
+    "weapons": ["KFGameContent.KFWeap_Pistol_Dual9mm", "KFGameContent.KFWeap_Pistol_DualDeagle", "KFGameContent.KFWeap_Pistol_DualColt1911", "KFGameContent.KFWeap_Pistol_DualAF2011", "KFGameContent.KFWeap_Pistol_DualG18", "KFGameContent.KFWeap_Pistol_DualBladed", "KFGameContent.KFWeap_HRG_93R_Dual"],
+    "areas": ["reload", "dual"],
+    "kind": "logic",
+    "tier": "core",
+    "notes": "Explicit stock dual classes, not --weapons all --dual-only: the catalog lists the singles, and the script must draw the dual class to fill both hands. Magazine-fed pairs only (the Bladed Pistol's container counts); the revolver pairs are reload-dual-hip-cylinder."
+  },
+  {
+    "id": "reload-dual-hip-cylinder",
+    "runner": "solo",
+    "script": "tools/replay/scripts/reload-dual-hip.kfs",
+    "weapons": ["KFGameContent.KFWeap_Pistol_DualFlare", "KFGameContent.KFWeap_Pistol_DualHRGWinterbite", "KFGameContent.KFWeap_HRG_Revolver_DualBuckshot", "KFGameContent.KFWeap_Revolver_DualRem1858", "KFGameContent.KFWeap_Revolver_DualSW500", "KFGameContent.KFWeap_Pistol_ChiappaRhinoDual"],
+    "areas": ["reload", "dual"],
+    "kind": "logic",
+    "tier": "core",
+    "notes": "The revolver pairs at the hip. Each draws both guns (the Chiappa Rhino pair too, since the runner's dual draw), then stops at reload-dual-hip.kfs's magazine wait: none of them drops a magazine.",
+    "skip": "No script yet: a hip cylinder reload (open on X/A, dump, seat the cylinder or speedloader at the hip, flick shut; the 1858 swaps its cylinder) needs its own flow, not reload-dual-hip.kfs's magazine steps."
+  },
+  {
+    "id": "drop-throw-catch-spread",
+    "runner": "solo",
+    "script": "tools/replay/scripts/drop-throw-catch.kfs",
+    "weapons": ["9mm", "KFGameContent.KFWeap_Revolver_SW500", "KFGameContent.KFWeap_SMG_MP7", "ar15", "KFGameContent.KFWeap_Rifle_M14EBR", "mb500", "KFGameContent.KFWeap_Rifle_Winchester1894", "KFGameContent.KFWeap_LMG_Stoner63A", "KFGameContent.KFWeap_GrenadeLauncher_M79", "KFGameContent.KFWeap_RocketLauncher_RPG7", "KFGameContent.KFWeap_Bow_Crossbow", "KFGameContent.KFWeap_Edged_Katana", "KFGameContent.KFWeap_Knife_Commando"],
+    "areas": ["drop-throw", "gravity"],
+    "kind": "logic",
+    "tier": "core",
+    "issues": [104, 115, 42],
+    "notes": "Chosen spread: pistol, revolver, SMG, rifles, pump, lever, belt LMG, break launcher, rocket launcher, crossbow, two-handed and knife melee (the script is generic; mp/drop-throw.kfs already drops the Commando knife)."
+  },
+  {
+    "id": "movement",
+    "runner": "solo",
+    "script": "tools/replay/scripts/movement.kfs",
+    "weapons": ["9mm", "ar15", "KFGameContent.KFWeap_LMG_Stoner63A"],
+    "areas": ["movement"],
+    "kind": "logic",
+    "tier": "core",
+    "notes": "Header names no gun: a pistol, a rifle and a heavy LMG."
+  },
+  {
+    "id": "big-inventory",
+    "runner": "solo",
+    "script": "tools/replay/scripts/big-inventory.kfs",
+    "areas": ["inventory", "perf"],
+    "kind": "logic",
+    "tier": "core",
+    "issues": [67]
+  },
+  {
+    "id": "reload-support-only",
+    "runner": "solo",
+    "script": "tools/replay/scripts/reload-support-only.kfs",
+    "weapons": ["ar15", "KFGameContent.KFWeap_AssaultRifle_AK12", "KFGameContent.KFWeap_Rifle_M99"],
+    "areas": ["reload", "hands"],
+    "kind": "logic",
+    "tier": "core",
+    "issues": [77, 79],
+    "notes": "Long guns only: pistols have no support-hand carry (VRHandsBridge.SupportsCarryWeapon), so the 9mm never left the trigger hand. The M99 is #79's gun. #77's pump guns (SG500/MB500) are left out: follow-reload's pump step takes the support grip with the worker hand, which a support-only carry already holds; a support-hand pump flow is still to write."
+  },
+  {
+    "id": "reload-tactical-commando",
+    "runner": "solo",
+    "script": "tools/replay/scripts/reload-tactical.kfs",
+    "weapons": ["ar15", "KFGameContent.KFWeap_AssaultRifle_AK12", "KFGameContent.KFWeap_AssaultRifle_SCAR"],
+    "vars": {
+      "perk": "KFPerk_Commando",
+      "skill": "0"
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "tier": "core",
+    "notes": "Header: Commando skill 0. AK12 and SCAR added as other Commando magazine rifles."
+  },
+  {
+    "id": "reload-tactical-support",
+    "runner": "solo",
+    "script": "tools/replay/scripts/reload-tactical.kfs",
+    "weapons": ["mb500", "KFGameContent.KFWeap_Shotgun_DragonsBreath", "KFGameContent.KFWeap_Shotgun_M4", "KFGameContent.KFWeap_Shotgun_AA12"],
+    "vars": {
+      "perk": "KFPerk_Support",
+      "skill": "1"
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "tier": "core",
+    "notes": "Header: Support skill 1. Guns chosen from the Support shotguns."
+  },
+  {
+    "id": "reload-tactical-demo",
+    "runner": "solo",
+    "script": "tools/replay/scripts/reload-tactical.kfs",
+    "weapons": ["hx25", "KFGameContent.KFWeap_GrenadeLauncher_M79", "KFGameContent.KFWeap_RocketLauncher_RPG7"],
+    "vars": {
+      "perk": "KFPerk_Demolitionist",
+      "skill": "1"
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "tier": "core",
+    "notes": "Header: Demolitionist skill 1. Guns chosen from the Demolitionist launchers."
+  },
+  {
+    "id": "reload-timing",
+    "runner": "solo",
+    "script": "tools/replay/scripts/reload-timing.kfs",
+    "weapons": ["KFGameContent.KFWeap_Shotgun_ElephantGun", "KFGameContent.KFWeap_Shotgun_DoubleBarrel"],
+    "areas": ["reload"],
+    "kind": "evidence",
+    "issues": [21],
+    "notes": "Traces only; compare the clip pacing by hand.",
+    "tier": "issue"
+  },
+  {
+    "id": "attack-sides",
+    "runner": "solo",
+    "script": "tools/replay/scripts/attack-sides.kfs",
+    "areas": ["melee"],
+    "kind": "evidence",
+    "issues": [210],
+    "notes": "Data dump for tools/replay/attack_sides.py; no checks.",
+    "tier": "issue"
+  },
+  {
+    "id": "gravity-9mm-control",
+    "runner": "solo",
+    "script": "tools/replay/scripts/gravity-9mm-control.kfs",
+    "areas": ["gravity"],
+    "kind": "logic",
+    "issues": [34],
+    "tier": "issue"
+  },
+  {
+    "id": "grenade-grip",
+    "runner": "solo",
+    "script": "tools/replay/scripts/grenade-grip.kfs",
+    "matrix": {
+      "var.perk": ["KFPerk_Commando", "KFPerk_Demolitionist", "KFPerk_Firebug", "KFPerk_FieldMedic"]
+    },
+    "areas": ["grenade", "hands"],
+    "kind": "visual",
+    "notes": "Header says run per perk: four perks with different grenades.",
+    "tier": "issue"
+  },
+  {
+    "id": "hip-chest-rack",
+    "runner": "solo",
+    "script": "tools/replay/scripts/hip-chest-rack.kfs",
+    "areas": ["reload", "dual"],
+    "kind": "logic",
+    "issues": [114],
+    "tier": "issue"
+  },
+  {
+    "id": "hm501-secondary",
+    "runner": "solo",
+    "script": "tools/replay/scripts/hm501-secondary.kfs",
+    "areas": ["reload", "secondary"],
+    "kind": "logic",
+    "issues": [40],
+    "tier": "issue"
+  },
+  {
+    "id": "katana-slash-recipe",
+    "runner": "solo",
+    "script": "tools/replay/scripts/katana-slash-recipe.kfs",
+    "areas": ["melee"],
+    "kind": "logic",
+    "issues": [133],
+    "tier": "issue"
+  },
+  {
+    "id": "m32-flick-slap",
+    "runner": "solo",
+    "script": "tools/replay/scripts/m32-flick-slap.kfs",
+    "matrix": {
+      "var.close": ["flick", "slap", "grip"]
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "tier": "issue"
+  },
+  {
+    "id": "xp-persist-earn",
+    "runner": "solo",
+    "script": "tools/replay/scripts/xp-persist.kfs",
+    "vars": {
+      "phase": "earn"
+    },
+    "areas": ["xp", "melee"],
+    "kind": "evidence",
+    "issues": [74, 138],
+    "notes": "Phase 1 of 2; compare its after line with xp-persist-check.",
+    "tier": "issue"
+  },
+  {
+    "id": "xp-persist-check",
+    "runner": "solo",
+    "script": "tools/replay/scripts/xp-persist.kfs",
+    "vars": {
+      "phase": "check"
+    },
+    "after": "xp-persist-earn",
+    "areas": ["xp"],
+    "kind": "evidence",
+    "issues": [74, 138],
+    "notes": "Phase 2: a fresh launch after xp-persist-earn on the same lane.",
+    "tier": "issue"
+  },
+  {
+    "id": "10-see-through-hands",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/10-see-through-hands.kfs",
+    "areas": ["hands", "render"],
+    "kind": "visual",
+    "issues": [10],
+    "notes": "Header passes --weapons 9mm, but the script never reads $weapon; run once without.",
+    "tier": "issue"
+  },
+  {
+    "id": "104-115-drop-throw",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/104-115-drop-throw.kfs",
+    "weapons": ["KFGameContent.KFWeap_Rifle_M14EBR", "KFGameContent.KFWeap_Rifle_Winchester1894", "KFGameContent.KFWeap_AssaultRifle_AK12", "9mm"],
+    "areas": ["drop-throw"],
+    "kind": "logic",
+    "issues": [104, 115],
+    "tier": "issue"
+  },
+  {
+    "id": "105-dry-fire-keeps-mag",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/105-dry-fire-keeps-mag.kfs",
+    "weapons": ["9mm", "deagle", "ar15"],
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [105],
+    "tier": "issue"
+  },
+  {
+    "id": "109-revolver-free-hand-reload",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/109-revolver-free-hand-reload.kfs",
+    "weapons": ["KFGameContent.KFWeap_HRG_Revolver_Buckshot", "KFGameContent.KFWeap_Pistol_ChiappaRhino"],
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [109],
+    "tier": "issue"
+  },
+  {
+    "id": "109-revolver-stock-reload-pays",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/109-revolver-stock-reload-pays.kfs",
+    "weapons": ["KFGameContent.KFWeap_HRG_Revolver_Buckshot", "KFGameContent.KFWeap_Pistol_ChiappaRhino", "KFGameContent.KFWeap_Revolver_SW500", "KFGameContent.KFWeap_Revolver_Rem1858"],
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [109],
+    "notes": "Header says Buckshot and Rhino; SW500 and 1858 as in its earlier run.",
+    "tier": "issue"
+  },
+  {
+    "id": "110-rhino-aims-from-muzzle",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/110-rhino-aims-from-muzzle.kfs",
+    "weapons": ["KFGameContent.KFWeap_Pistol_ChiappaRhino", "KFGameContent.KFWeap_Revolver_SW500"],
+    "areas": ["fire"],
+    "kind": "logic",
+    "issues": [110],
+    "tier": "issue"
+  },
+  {
+    "id": "114-scar-deagle-chest-rack",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/114-scar-deagle-chest-rack.kfs",
+    "areas": ["reload", "dual"],
+    "kind": "logic",
+    "issues": [114],
+    "tier": "issue"
+  },
+  {
+    "id": "118-walk-over-mags",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/118-walk-over-mags.kfs",
+    "weapons": ["9mm", "ar15"],
+    "areas": ["reload", "drop-throw"],
+    "kind": "logic",
+    "issues": [118],
+    "notes": "Header names no gun: 9mm and ar15, as its earlier run.",
+    "tier": "issue"
+  },
+  {
+    "id": "12-revolver-case-spawn",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/12-revolver-case-spawn.kfs",
+    "weapons": ["KFGameContent.KFWeap_Revolver_SW500", "KFGameContent.KFWeap_Pistol_ChiappaRhino"],
+    "areas": ["reload", "render"],
+    "kind": "visual",
+    "issues": [12],
+    "tier": "issue"
+  },
+  {
+    "id": "12-sw500-grab-mid-swing",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/12-sw500-grab-mid-swing.kfs",
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [12],
+    "tier": "issue"
+  },
+  {
+    "id": "12-sw500-open-state",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/12-sw500-open-state.kfs",
+    "areas": ["reload"],
+    "kind": "evidence",
+    "issues": [12],
+    "notes": "Logs the reload state only; no checks.",
+    "tier": "issue"
+  },
+  {
+    "id": "122-mags-stay-while-gun-owned",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/122-mags-stay-while-gun-owned.kfs",
+    "weapons": ["9mm", "ar15"],
+    "areas": ["drop-throw", "reload"],
+    "kind": "logic",
+    "issues": [122],
+    "notes": "Header names no gun: 9mm and ar15.",
+    "tier": "issue"
+  },
+  {
+    "id": "124-laser-distance",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/124-laser-distance.kfs",
+    "weapons": ["9mm"],
+    "areas": ["render"],
+    "kind": "visual",
+    "issues": [124],
+    "tier": "issue"
+  },
+  {
+    "id": "126-busy-hand-xa-reload",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/126-busy-hand-xa-reload.kfs",
+    "weapons": ["ar15", "KFGameContent.KFWeap_AssaultRifle_SCAR"],
+    "matrix": {
+      "bLoseReloadAmmo": ["True", "False"],
+      "bKeepChamberedRound": ["True", "False"]
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [126],
+    "notes": "Header lists \"ar15,scar,...\"; the two it names.",
+    "tier": "issue"
+  },
+  {
+    "id": "133-held-corpse-dismember",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/133-held-corpse-dismember.kfs",
+    "areas": ["melee", "corpse"],
+    "kind": "logic",
+    "issues": [133],
+    "tier": "issue"
+  },
+  {
+    "id": "136-preset-custom",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/136-preset-custom.kfs",
+    "areas": ["render"],
+    "kind": "evidence",
+    "issues": [136],
+    "notes": "Logs the graphics preset label; no checks. Header passes --weapons 9mm, which the script never reads.",
+    "tier": "issue"
+  },
+  {
+    "id": "137-no-top-hud",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/137-no-top-hud.kfs",
+    "weapons": ["9mm"],
+    "matrix": {
+      "bWristwatchHUD": ["True", "False"]
+    },
+    "areas": ["hud"],
+    "kind": "visual",
+    "issues": [137],
+    "tier": "issue"
+  },
+  {
+    "id": "138-bare-hands-kill",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/138-bare-hands-kill.kfs",
+    "areas": ["melee", "xp"],
+    "kind": "logic",
+    "issues": [138],
+    "tier": "issue"
+  },
+  {
+    "id": "138-fists-kill-clot",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/138-fists-kill-clot.kfs",
+    "areas": ["melee"],
+    "kind": "logic",
+    "issues": [138],
+    "tier": "issue"
+  },
+  {
+    "id": "143-glow-colours",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/143-glow-colours.kfs",
+    "weapons": ["9mm"],
+    "areas": ["render", "reload"],
+    "kind": "visual",
+    "issues": [143],
+    "skip": "Needs a hand-made --user-config whose KFGame.ini carries a [KF2VR.VRInteractionColours] section.",
+    "tier": "issue"
+  },
+  {
+    "id": "145-fire-after-reload",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/145-fire-after-reload.kfs",
+    "weapons": ["KFGameContent.KFWeap_SMG_G18", "KFGameContent.KFWeap_AssaultRifle_MedicRifleGrenadeLauncher", "KFGameContent.KFWeap_AssaultRifle_HRGTeslauncher", "ar15"],
+    "areas": ["reload", "fire"],
+    "kind": "logic",
+    "issues": [145],
+    "tier": "issue"
+  },
+  {
+    "id": "158-mixed-support-release",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/158-mixed-support-release.kfs",
+    "weapons": ["KFGameContent.KFWeap_AssaultRifle_AK12"],
+    "areas": ["hands"],
+    "kind": "logic",
+    "issues": [158],
+    "tier": "issue"
+  },
+  {
+    "id": "160-161-pistol-reload-anim",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/160-161-pistol-reload-anim.kfs",
+    "weapons": ["9mm", "deagle"],
+    "matrix": {
+      "var.mode": ["chambered", "partial", "empty", "left", "button", "held", "fired", "fired-trigger", "fired-button", "recovered"]
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [160, 161],
+    "notes": "Every --var mode the header lists.",
+    "tier": "issue"
+  },
+  {
+    "id": "164-sw500-tilt-eject",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/164-sw500-tilt-eject.kfs",
+    "weapons": ["KFGameContent.KFWeap_Revolver_SW500", "KFGameContent.KFWeap_HRG_Revolver_Buckshot"],
+    "matrix": {
+      "var.mode": ["raised", "snap", "loader"]
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [164],
+    "tier": "issue"
+  },
+  {
+    "id": "166-1858-release",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/166-1858-release.kfs",
+    "areas": ["drop-throw", "dual"],
+    "kind": "evidence",
+    "issues": [166],
+    "weapons": ["KFGameContent.KFWeap_Revolver_DualRem1858", "KFGameContent.KFWeap_Revolver_SW500"],
+    "notes": "The dual 1858 and a single .500 as the control, as the header says. Evidence: the drop's orientation as it leaves the hand and once it lands, in the captures and logged angles.",
+    "tier": "issue"
+  },
+  {
+    "id": "167-crossbow-pump-forward",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/167-crossbow-pump-forward.kfs",
+    "weapons": ["KFGameContent.KFWeap_Bow_Crossbow", "KFGameContent.KFWeap_HRG_Crossboom"],
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [167],
+    "tier": "issue"
+  },
+  {
+    "id": "168-crossbow-parked-bolt",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/168-crossbow-parked-bolt.kfs",
+    "weapons": ["KFGameContent.KFWeap_Bow_Crossbow", "KFGameContent.KFWeap_HRG_Crossboom"],
+    "areas": ["reload", "render"],
+    "kind": "visual",
+    "issues": [168],
+    "tier": "issue"
+  },
+  {
+    "id": "169-m99-bolt-waits",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/169-m99-bolt-waits.kfs",
+    "weapons": ["KFGameContent.KFWeap_Rifle_M99"],
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [169],
+    "tier": "issue"
+  },
+  {
+    "id": "17-vr-training",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/17-vr-training.kfs",
+    "areas": ["training"],
+    "kind": "logic",
+    "tier": "long",
+    "issues": [17],
+    "notes": "The whole first-run walkthrough: a 900 s case."
+  },
+  {
+    "id": "170-hm501-rack-pose",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/170-hm501-rack-pose.kfs",
+    "weapons": ["KFGameContent.KFWeap_AssaultRifle_MedicRifleGrenadeLauncher"],
+    "areas": ["reload", "hands"],
+    "kind": "visual",
+    "issues": [170],
+    "tier": "issue"
+  },
+  {
+    "id": "173-gravity-target-shell",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/173-gravity-target-shell.kfs",
+    "weapons": ["9mm", "KFGameContent.KFWeap_AssaultRifle_AK12"],
+    "areas": ["gravity", "render"],
+    "kind": "visual",
+    "issues": [173],
+    "tier": "issue"
+  },
+  {
+    "id": "175-grounded-gun-mag-gravity",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/175-grounded-gun-mag-gravity.kfs",
+    "areas": ["gravity"],
+    "kind": "logic",
+    "issues": [175],
+    "notes": "Header says --weapons 9mm; the script draws its own 9mm.",
+    "tier": "issue"
+  },
+  {
+    "id": "206-elite-shell-right-hand",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/206-elite-shell-hands.kfs",
+    "weapons": ["mb500", "KFGameContent.KFWeap_Shotgun_DragonsBreath"],
+    "vars": {},
+    "matrix": {
+      "var.mag": ["2", "0"]
+    },
+    "areas": ["reload"],
+    "kind": "evidence",
+    "issues": [206],
+    "notes": "Gun in the right hand, partial (mag 2) and empty (mag 0) tube; logs the entry ring against the gun.",
+    "tier": "issue"
+  },
+  {
+    "id": "206-elite-shell-left-hand",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/206-elite-shell-hands.kfs",
+    "weapons": ["mb500", "KFGameContent.KFWeap_Shotgun_DragonsBreath"],
+    "vars": {
+      "gh": "left",
+      "wk": "right",
+      "hx": "L"
+    },
+    "matrix": {
+      "var.mag": ["2", "0"]
+    },
+    "areas": ["reload"],
+    "kind": "evidence",
+    "issues": [206],
+    "notes": "Gun in the left hand, partial (mag 2) and empty (mag 0) tube; logs the entry ring against the gun.",
+    "tier": "issue"
+  },
+  {
+    "id": "210-arm-loss",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/210-arm-loss.kfs",
+    "areas": ["gore"],
+    "kind": "logic",
+    "issues": [210],
+    "tier": "issue"
+  },
+  {
+    "id": "211-lmg-box-approach",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/211-lmg-box-approach.kfs",
+    "weapons": ["KFGameContent.KFWeap_LMG_Stoner63A", "KFGameContent.KFWeap_HRG_BarrierRifle", "KFGameContent.KFWeap_LMG_MG3"],
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [211],
+    "tier": "issue"
+  },
+  {
+    "id": "212-scope-cost",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/212-scope-cost.kfs",
+    "areas": ["perf", "render"],
+    "kind": "evidence",
+    "issues": [212],
+    "notes": "Traces frame_ms with the optic off and on (flat replay timing). Header passes --weapons ebr, which is not an alias and is never read: the script draws the M14 EBR itself.",
+    "tier": "issue"
+  },
+  {
+    "id": "212-scope-pupil",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/212-scope-pupil.kfs",
+    "weapons": ["KFGameContent.KFWeap_Rifle_M14EBR"],
+    "areas": ["render"],
+    "kind": "visual",
+    "issues": [212],
+    "tier": "issue"
+  },
+  {
+    "id": "212-scope-zoom",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/212-scope-zoom.kfs",
+    "weapons": ["KFGameContent.KFWeap_Rifle_M14EBR", "KFGameContent.KFWeap_AssaultRifle_FNFal", "KFGameContent.KFWeap_Rifle_M99", "KFGameContent.KFWeap_Rifle_RailGun", "KFGameContent.KFWeap_Bow_Crossbow"],
+    "areas": ["render"],
+    "kind": "visual",
+    "issues": [212],
+    "notes": "Measure with tools/replay/measure_scope_zoom.py.",
+    "tier": "issue"
+  },
+  {
+    "id": "213-melee-contact-feel",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/213-melee-contact-feel.kfs",
+    "weapons": ["KFGameContent.KFWeap_Blunt_Crovel", "KFGameContent.KFWeap_Edged_Katana", "KFGameContent.KFWeap_Edged_FireAxe"],
+    "areas": ["melee"],
+    "kind": "visual",
+    "issues": [213],
+    "notes": "Header uses the aliases crovel,katana,fireaxe, which weapons.py does not know; class paths instead.",
+    "tier": "issue"
+  },
+  {
+    "id": "213-melee-swing-sweep",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/213-melee-swing-sweep.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_Katana", "KFGameContent.KFWeap_Edged_Zweihander"],
+    "areas": ["melee"],
+    "kind": "evidence",
+    "issues": [213],
+    "notes": "Header says a case passes when a swing lands, but the script has no check: read the KF2VR_MELEE hit counts.",
+    "tier": "issue"
+  },
+  {
+    "id": "214-m1014-empty-one-shell",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/214-m1014-empty-one-shell.kfs",
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [214],
+    "tier": "issue"
+  },
+  {
+    "id": "215-blunderbuss-foregrip",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/215-blunderbuss-foregrip.kfs",
+    "areas": ["hands"],
+    "kind": "logic",
+    "issues": [215],
+    "tier": "issue"
+  },
+  {
+    "id": "216-bouncer-tail-replay",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/216-bouncer-tail-replay.kfs",
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [216],
+    "tier": "issue"
+  },
+  {
+    "id": "217-crossbow-pouch",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/217-crossbow-pouch.kfs",
+    "weapons": ["KFGameContent.KFWeap_Bow_Crossbow", "KFGameContent.KFWeap_HRG_Crossboom"],
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [217],
+    "tier": "issue"
+  },
+  {
+    "id": "218-launcher-option",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/218-launcher-option.kfs",
+    "areas": ["secondary"],
+    "kind": "logic",
+    "issues": [218],
+    "tier": "issue"
+  },
+  {
+    "id": "218-launcher-trigger",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/218-launcher-trigger.kfs",
+    "weapons": ["KFGameContent.KFWeap_AssaultRifle_M16M203", "KFGameContent.KFWeap_AssaultRifle_HRGIncendiaryRifle", "KFGameContent.KFWeap_AssaultRifle_FAMAS"],
+    "areas": ["secondary"],
+    "kind": "logic",
+    "issues": [218],
+    "tier": "issue"
+  },
+  {
+    "id": "218-m16-m203",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/218-m16-m203.kfs",
+    "areas": ["secondary", "reload"],
+    "kind": "logic",
+    "issues": [218],
+    "tier": "issue"
+  },
+  {
+    "id": "221-dual-1858-draw",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/221-dual-1858-draw.kfs",
+    "weapons": ["KFGameContent.KFWeap_Revolver_DualRem1858"],
+    "areas": ["dual"],
+    "kind": "logic",
+    "issues": [221],
+    "tier": "issue"
+  },
+  {
+    "id": "222-straight-insert-straight",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/222-straight-insert.kfs",
+    "weapons": ["KFGameContent.KFWeap_Rifle_M14EBR"],
+    "vars": {
+      "mode": "straight"
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [222],
+    "tier": "issue"
+  },
+  {
+    "id": "222-straight-insert-stock",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/222-straight-insert.kfs",
+    "weapons": ["KFGameContent.KFWeap_Rifle_M14EBR", "ar15"],
+    "vars": {
+      "mode": "stock"
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [222],
+    "notes": "Control: the stock entry angle.",
+    "tier": "issue"
+  },
+  {
+    "id": "223-m14-semi-hold",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/223-m14-semi-hold.kfs",
+    "weapons": ["KFGameContent.KFWeap_Rifle_M14EBR"],
+    "areas": ["fire"],
+    "kind": "logic",
+    "issues": [223],
+    "tier": "issue"
+  },
+  {
+    "id": "224-rack-em-up",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/224-rack-em-up.kfs",
+    "weapons": ["KFGameContent.KFWeap_Pistol_Deagle"],
+    "areas": ["hud"],
+    "kind": "visual",
+    "issues": [224],
+    "tier": "issue"
+  },
+  {
+    "id": "224-rack-em-up-target-switch",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/224-rack-em-up-target-switch.kfs",
+    "weapons": ["KFGameContent.KFWeap_Pistol_Deagle"],
+    "areas": ["hud"],
+    "kind": "logic",
+    "issues": [224],
+    "notes": "Header gives only a --plan line; it runs like 224-rack-em-up.",
+    "tier": "issue"
+  },
+  {
+    "id": "227-melee-bench",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/227-melee-bench.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_Katana", "KFGameContent.KFWeap_Edged_FireAxe", "KFGameContent.KFWeap_Blunt_Crovel", "KFGameContent.KFWeap_Edged_Zweihander"],
+    "areas": ["melee", "guard"],
+    "kind": "logic",
+    "issues": [227],
+    "tier": "issue"
+  },
+  {
+    "id": "227-melee-frametime",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/227-melee-frametime.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_Katana", "KFGameContent.KFWeap_Edged_AbominationAxe", "KFGameContent.KFWeap_Edged_Scythe"],
+    "areas": ["melee", "perf"],
+    "kind": "evidence",
+    "issues": [227],
+    "notes": "Flat replay frame_ms traces; compare by hand.",
+    "tier": "issue"
+  },
+  {
+    "id": "227-melee-parts",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/227-melee-parts.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_Katana", "KFGameContent.KFWeap_Edged_FireAxe"],
+    "areas": ["melee"],
+    "kind": "logic",
+    "issues": [227],
+    "tier": "issue"
+  },
+  {
+    "id": "227-melee-parts-knife",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/227-melee-parts.kfs",
+    "weapons": ["KFGameContent.KFWeap_Knife_Commando"],
+    "vars": {
+      "back": "30",
+      "end": "25",
+      "dist": "80"
+    },
+    "areas": ["melee"],
+    "kind": "logic",
+    "issues": [227],
+    "notes": "Knife distances from the header comment.",
+    "tier": "issue"
+  },
+  {
+    "id": "227-melee-physics-probe",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/227-melee-physics-probe.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_Katana"],
+    "areas": ["melee", "perf"],
+    "kind": "evidence",
+    "tier": "long",
+    "issues": [227],
+    "skip": "Experiment (docs/re/MELEE_PHYSICS_PATH.md): its Zed-contact expectations are known to fail until that path is solved."
+  },
+  {
+    "id": "227-melee-player-swings",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/227-melee-player-swings.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_Katana", "KFGameContent.KFWeap_Edged_FireAxe", "KFGameContent.KFWeap_Blunt_Crovel", "KFGameContent.KFWeap_Edged_Zweihander", "KFGameContent.KFWeap_Blunt_Pulverizer"],
+    "areas": ["melee"],
+    "kind": "logic",
+    "issues": [227],
+    "notes": "Header says <melee classes...>: the long weapons its bench uses plus the Pulverizer.",
+    "tier": "issue"
+  },
+  {
+    "id": "227-melee-player-swings-knife",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/227-melee-player-swings.kfs",
+    "weapons": ["KFGameContent.KFWeap_Knife_Commando", "KFGameContent.KFWeap_Knife_Berserker"],
+    "vars": {
+      "dist": "80"
+    },
+    "areas": ["melee"],
+    "kind": "logic",
+    "issues": [227],
+    "notes": "Knives at --var dist=80, as the header says.",
+    "tier": "issue"
+  },
+  {
+    "id": "227-melee-two-handed",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/227-melee-two-handed.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_Zweihander", "KFGameContent.KFWeap_Blunt_Pulverizer"],
+    "areas": ["melee", "guard"],
+    "kind": "logic",
+    "issues": [227],
+    "tier": "issue"
+  },
+  {
+    "id": "227-melee-two-handed-grip-up",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/227-melee-two-handed.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_FireAxe"],
+    "vars": {
+      "grip": "up"
+    },
+    "areas": ["melee", "guard"],
+    "kind": "logic",
+    "issues": [227],
+    "tier": "issue"
+  },
+  {
+    "id": "227-melee-zone-view",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/227-melee-zone-view.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_Katana", "KFGameContent.KFWeap_Edged_FireAxe", "KFGameContent.KFWeap_Blunt_Crovel", "KFGameContent.KFWeap_Edged_Zweihander", "KFGameContent.KFWeap_Blunt_Pulverizer", "KFGameContent.KFWeap_Edged_Scythe", "KFGameContent.KFWeap_Edged_AbominationAxe", "KFGameContent.KFWeap_Knife_Commando"],
+    "areas": ["melee"],
+    "kind": "visual",
+    "issues": [227],
+    "notes": "Header says <melee classes...>: a spread of shapes.",
+    "tier": "issue"
+  },
+  {
+    "id": "227-reverse-grip-knife",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/227-reverse-grip.kfs",
+    "weapons": ["KFGameContent.KFWeap_Knife_Commando"],
+    "areas": ["melee"],
+    "kind": "visual",
+    "issues": [227],
+    "tier": "issue"
+  },
+  {
+    "id": "227-reverse-grip-katana",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/227-reverse-grip.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_Katana"],
+    "vars": {
+      "up": "140"
+    },
+    "areas": ["melee"],
+    "kind": "visual",
+    "issues": [227],
+    "notes": "--var up=140 for the long blade, as the header says.",
+    "tier": "issue"
+  },
+  {
+    "id": "23-doomstick-close",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/23-doomstick-close.kfs",
+    "weapons": ["KFGameContent.KFWeap_Shotgun_ElephantGun"],
+    "areas": ["reload", "render"],
+    "kind": "visual",
+    "issues": [23],
+    "notes": "Header uses --weapons doomstick, which weapons.py does not know; the class path instead.",
+    "tier": "issue"
+  },
+  {
+    "id": "230-energy-gun-frametime",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/230-energy-gun-frametime.kfs",
+    "weapons": ["KFGameContent.KFWeap_AssaultRifle_AR15", "KFGameContent.KFWeap_HRG_EMP_ArcGenerator", "KFGameContent.KFWeap_AssaultRifle_LazerCutter", "KFGameContent.KFWeap_ShrinkRayGun", "KFGameContent.KFWeap_Ice_FreezeThrower", "KFGameContent.KFWeap_Flame_Flamethrower", "KFGameContent.KFWeap_Beam_Microwave"],
+    "areas": ["perf"],
+    "kind": "evidence",
+    "issues": [230],
+    "notes": "Flat replay frame_ms traces; compare by hand.",
+    "tier": "issue"
+  },
+  {
+    "id": "231-guard-bench",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/231-guard-bench.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_Katana", "KFGameContent.KFWeap_Edged_FireAxe", "KFGameContent.KFWeap_Knife_Commando"],
+    "areas": ["guard", "melee"],
+    "kind": "logic",
+    "issues": [231],
+    "tier": "issue"
+  },
+  {
+    "id": "233-scythe-unfold",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/233-scythe-unfold.kfs",
+    "areas": ["melee"],
+    "kind": "logic",
+    "issues": [233],
+    "tier": "issue"
+  },
+  {
+    "id": "234-living-gut-wound",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/234-living-gut-wound.kfs",
+    "areas": ["gore"],
+    "kind": "logic",
+    "issues": [234],
+    "tier": "issue"
+  },
+  {
+    "id": "235-hands-material-view",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/235-hands-material-view.kfs",
+    "weapons": ["9mm"],
+    "areas": ["hands", "render"],
+    "kind": "visual",
+    "issues": [235],
+    "tier": "issue"
+  },
+  {
+    "id": "235-right-cuff-guns",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/235-right-cuff-guns.kfs",
+    "weapons": ["9mm", "thompson", "KFGameContent.KFWeap_AssaultRifle_AK12"],
+    "areas": ["hands"],
+    "kind": "visual",
+    "issues": [235],
+    "tier": "issue"
+  },
+  {
+    "id": "29-c4-buy",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/29-c4-buy.kfs",
+    "areas": ["trader"],
+    "kind": "logic",
+    "issues": [29],
+    "tier": "issue"
+  },
+  {
+    "id": "31-buy-into-inventory",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/31-buy-into-inventory.kfs",
+    "areas": ["trader", "inventory"],
+    "kind": "logic",
+    "issues": [31],
+    "tier": "issue"
+  },
+  {
+    "id": "35-demo-chest",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/35-demo-chest.kfs",
+    "areas": ["grenade"],
+    "kind": "visual",
+    "issues": [35],
+    "tier": "issue"
+  },
+  {
+    "id": "41-walk-hitch",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/41-walk-hitch.kfs",
+    "weapons": ["KFGameContent.KFWeap_AssaultRifle_FAMAS"],
+    "areas": ["movement", "perf"],
+    "kind": "logic",
+    "issues": [41],
+    "tier": "issue"
+  },
+  {
+    "id": "58-handling-cues",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/58-handling-cues.kfs",
+    "weapons": ["9mm", "KFGameContent.KFWeap_AssaultRifle_AK12"],
+    "areas": ["gravity", "drop-throw"],
+    "kind": "logic",
+    "issues": [58],
+    "tier": "issue"
+  },
+  {
+    "id": "60-partial-reloads",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/60-partial-reloads.kfs",
+    "weapons": ["9mm", "KFGameContent.KFWeap_Ice_FreezeThrower", "KFGameContent.KFWeap_HRG_Healthrower"],
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [60],
+    "tier": "issue"
+  },
+  {
+    "id": "63-floor-mag-green-fade",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/63-floor-mag-green-fade.kfs",
+    "weapons": ["9mm"],
+    "areas": ["render", "reload"],
+    "kind": "visual",
+    "issues": [63],
+    "tier": "issue"
+  },
+  {
+    "id": "68-thermite-famas",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/68-thermite-famas.kfs",
+    "weapons": ["KFGameContent.KFWeap_RocketLauncher_ThermiteBore", "KFGameContent.KFWeap_AssaultRifle_FAMAS"],
+    "areas": ["reload", "secondary"],
+    "kind": "logic",
+    "issues": [68],
+    "tier": "issue"
+  },
+  {
+    "id": "76-mosin-bolt-back",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/76-mosin-bolt-back.kfs",
+    "weapons": ["KFGameContent.KFWeap_Rifle_MosinNagant"],
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [76],
+    "tier": "issue"
+  },
+  {
+    "id": "9-famas-left-held-rack",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/9-famas-left-held-rack.kfs",
+    "weapons": ["KFGameContent.KFWeap_AssaultRifle_FAMAS"],
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [9],
+    "tier": "issue"
+  },
+  {
+    "id": "doomstick-handful",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/doomstick-handful.kfs",
+    "weapons": ["KFGameContent.KFWeap_Shotgun_ElephantGun"],
+    "matrix": {
+      "var.tactical": ["off", "on"]
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "notes": "Ruling R58, with and without the tactical clips.",
+    "tier": "issue"
+  },
+  {
+    "id": "elite-shell-insert",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/elite-shell-insert.kfs",
+    "weapons": ["mb500", "KFGameContent.KFWeap_Shotgun_DragonsBreath"],
+    "matrix": {
+      "var.tactical": ["on", "off"]
+    },
+    "areas": ["reload"],
+    "kind": "evidence",
+    "issues": [206],
+    "notes": "Logs where the entry ring sits against the gun; tactical off is the header's comparison.",
+    "tier": "issue"
+  },
+  {
+    "id": "logic-batch",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/logic-batch.kfs",
+    "weapons": ["KFGameContent.KFWeap_Shotgun_ElephantGun", "KFGameContent.KFWeap_Pistol_HRGScorcher", "KFGameContent.KFWeap_AssaultRifle_FAMAS", "KFGameContent.KFWeap_Flame_Flamethrower", "KFGameContent.KFWeap_Rifle_RailGun", "KFGameContent.KFWeap_Revolver_SW500", "KFGameContent.KFWeap_HRG_Revolver_Buckshot", "9mm", "KFGameContent.KFWeap_Ice_FreezeThrower", "KFGameContent.KFWeap_HRG_Healthrower", "KFGameContent.KFWeap_HRG_CranialPopper", "KFGameContent.KFWeap_Rifle_Winchester1894", "KFGameContent.KFWeap_Rifle_CenterfireMB464", "KFGameContent.KFWeap_Pistol_ChiappaRhino", "KFGameContent.KFWeap_HRG_BlastBrawlers", "KFGameContent.KFWeap_Shotgun_DoubleBarrel", "ar15"],
+    "areas": ["reload", "drop-throw"],
+    "kind": "logic",
+    "issues": [22, 36, 38, 39, 46, 81, 82, 132, 135, 31, 60],
+    "notes": "Every weapon the script body branches on.",
+    "tier": "issue"
+  },
+  {
+    "id": "logic-batch-135-releases",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/logic-batch.kfs",
+    "weapons": ["9mm"],
+    "vars": {
+      "grab": "releases"
+    },
+    "matrix": {
+      "bGrabReleasesMagazine": ["True"]
+    },
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [135],
+    "notes": "The #135 on half, as the header says.",
+    "tier": "issue"
+  },
+  {
+    "id": "logic-batch2",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/logic-batch2.kfs",
+    "weapons": ["KFGameContent.KFWeap_Shotgun_M4", "KFGameContent.KFWeap_RocketLauncher_ThermiteBore", "KFGameContent.KFWeap_Shotgun_DragonsBreath", "KFGameContent.KFWeap_Pistol_G18C", "KFGameContent.KFWeap_SMG_G18", "KFGameContent.KFWeap_GrenadeLauncher_M32", "KFGameContent.KFWeap_Minigun", "KFGameContent.KFWeap_Rifle_ParasiteImplanter", "KFGameContent.KFWeap_Rifle_MosinNagant", "KFGameContent.KFWeap_AssaultRifle_Thompson", "KFGameContent.KFWeap_LMG_MG3", "KFGameContent.KFWeap_HRG_BarrierRifle", "KFGameContent.KFWeap_LMG_Stoner63A"],
+    "areas": ["reload"],
+    "kind": "logic",
+    "issues": [68, 72, 73, 75, 76, 78, 106, 107],
+    "notes": "Header lists the guns by name with \"...\"; mapped to classes (Riot Shield & Glock = SMG_G18, Bastion = HRG_BarrierRifle, Corrupter Carbine = Rifle_ParasiteImplanter) plus the Stoner its last run used.",
+    "tier": "issue"
+  },
+  {
+    "id": "logic-batch3",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/logic-batch3.kfs",
+    "weapons": ["KFGameContent.KFWeap_Rifle_M99", "KFGameContent.KFWeap_AssaultRifle_MedicRifleGrenadeLauncher", "KFGameContent.KFWeap_Pistol_ChiappaRhino", "9mm"],
+    "areas": ["gravity", "secondary", "reload", "drop-throw"],
+    "kind": "logic",
+    "issues": [34, 40, 110, 116],
+    "tier": "issue"
+  },
+  {
+    "id": "shell-eject-origin",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/shell-eject-origin.kfs",
+    "weapons": ["9mm", "ar15"],
+    "areas": ["render", "fire"],
+    "kind": "visual",
+    "notes": "Playtest 011320 finding 4.",
+    "tier": "issue"
+  },
+  {
+    "id": "visual-sweep",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/visual-sweep.kfs",
+    "weapons": ["mg3", "stoner", "caulk", "sw500", "rhino", "hunting", "doomstick", "ebr", "spx", "pistol", "deagle", "belt", "floormag", "ammobox"],
+    "areas": ["render", "reload"],
+    "kind": "visual",
+    "issues": [4, 5, 7, 12, 15, 23, 45, 49, 56, 63, 121],
+    "notes": "Scene names, not guns: every scene-* the script defines (rhino is defined but missing from the header line).",
+    "tier": "issue"
+  },
+  {
+    "id": "visual-sweep-b",
+    "runner": "solo",
+    "script": "tools/replay/scripts/issues/visual-sweep-b.kfs",
+    "weapons": ["laser", "tommy", "ak12", "bow", "damage"],
+    "areas": ["render", "hands", "hud"],
+    "kind": "visual",
+    "issues": [124, 16, 134, 18, 19, 50],
+    "notes": "Scene names, not guns.",
+    "tier": "issue"
+  },
+  {
+    "id": "51-64-trader-open-solo",
+    "runner": "solo",
+    "script": "tools/replay/scripts/mp/51-64-trader-open.kfs",
+    "areas": ["trader"],
+    "kind": "logic",
+    "issues": [51, 64],
+    "notes": "The header's standalone line.",
+    "tier": "issue"
+  },
+  {
+    "id": "64-door-welder-solo",
+    "runner": "solo",
+    "script": "tools/replay/scripts/mp/64-door-welder.kfs",
+    "areas": ["welder"],
+    "kind": "logic",
+    "issues": [64],
+    "notes": "The header says it also runs standalone.",
+    "tier": "issue"
+  },
+  {
+    "id": "flamethrower-solo",
+    "runner": "solo",
+    "script": "tools/replay/scripts/mp/flamethrower.kfs",
+    "vars": {
+      "rebind": "0"
+    },
+    "areas": ["fire", "remote-view"],
+    "kind": "visual",
+    "issues": [3],
+    "notes": "The header's solo control (actor only); rebind=0: Solo leaves the sprays on the mesh, so no rebind is logged.",
+    "tier": "issue"
+  },
+  {
+    "id": "mp-115-thrown-gun-lit",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/115-thrown-gun-lit.kfs",
+    "matrix": {
+      "var.role": ["thrower", "observer"]
+    },
+    "clients": 2,
+    "areas": ["remote-view", "drop-throw", "render"],
+    "kind": "visual",
+    "issues": [115],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-144-support-hold",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/144-support-hold.kfs",
+    "matrix": {
+      "var.role": ["actor", "observer"]
+    },
+    "clients": 2,
+    "areas": ["remote-view", "hands"],
+    "kind": "visual",
+    "issues": [144],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-146-dosh-ammo-trace",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/146-dosh-ammo-trace.kfs",
+    "clients": 1,
+    "areas": ["mp-agree", "reload"],
+    "kind": "logic",
+    "issues": [146],
+    "notes": "Owner and authority agree after an online Doshinegun reload and it fires again; the trace stays for triage.",
+    "tier": "issue"
+  },
+  {
+    "id": "mp-177-zed-grab-repeat",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/177-zed-grab-repeat.kfs",
+    "clients": 1,
+    "areas": ["zed-grab"],
+    "kind": "logic",
+    "issues": [177],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-216-bouncer-remote",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/216-bouncer-remote.kfs",
+    "matrix": {
+      "var.role": ["actor", "observer"]
+    },
+    "clients": 2,
+    "areas": ["remote-view", "reload", "mp-agree"],
+    "kind": "visual",
+    "issues": [216],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-227-melee-online",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/227-melee-online.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_Katana", "KFGameContent.KFWeap_Edged_FireAxe"],
+    "clients": 1,
+    "areas": ["melee"],
+    "kind": "logic",
+    "issues": [227],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-228-held-corpse-online",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/228-held-corpse-online.kfs",
+    "matrix": {
+      "var.role": ["actor", "observer"]
+    },
+    "clients": 2,
+    "areas": ["corpse", "remote-view"],
+    "kind": "logic",
+    "issues": [226, 228],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-233-scythe-unfold-online",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/233-scythe-unfold-online.kfs",
+    "clients": 1,
+    "areas": ["melee"],
+    "kind": "logic",
+    "issues": [233],
+    "notes": "Also read the KF2VR_SCYTHE phase=server lines in server-game.log.",
+    "tier": "issue"
+  },
+  {
+    "id": "mp-29-buy-c4",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/29-buy-c4.kfs",
+    "areas": ["trader"],
+    "kind": "logic",
+    "issues": [29],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-31-buy-into-inventory",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/31-buy-into-inventory.kfs",
+    "areas": ["trader", "inventory"],
+    "kind": "logic",
+    "issues": [31],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-43-lost-reply",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/43-lost-reply.kfs",
+    "weapons": ["9mm"],
+    "clients": 1,
+    "areas": ["mp-agree", "reload"],
+    "kind": "logic",
+    "issues": [43],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-51-64-trader-open",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/51-64-trader-open.kfs",
+    "clients": 2,
+    "areas": ["trader"],
+    "kind": "logic",
+    "issues": [51, 64],
+    "notes": "One case, so only one of the two clients plays it.",
+    "tier": "issue"
+  },
+  {
+    "id": "mp-53-launcher-origin",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/53-launcher-origin.kfs",
+    "weapons": ["KFGameContent.KFWeap_RocketLauncher_SealSqueal", "KFGameContent.KFWeap_GrenadeLauncher_M79", "KFGameContent.KFWeap_RocketLauncher_RPG7"],
+    "clients": 1,
+    "areas": ["fire"],
+    "kind": "logic",
+    "issues": [53],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-63-floor-mag-green-fade",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/63-floor-mag-green-fade.kfs",
+    "weapons": ["9mm"],
+    "areas": ["render", "reload"],
+    "kind": "visual",
+    "issues": [63],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-64-door-welder",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/64-door-welder.kfs",
+    "clients": 1,
+    "areas": ["welder"],
+    "kind": "logic",
+    "issues": [64],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-65-zed-grab-cleanup",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/65-zed-grab-cleanup.kfs",
+    "clients": 1,
+    "areas": ["zed-grab"],
+    "kind": "logic",
+    "issues": [65],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-65-zed-grab-online",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/65-zed-grab-online.kfs",
+    "clients": 1,
+    "areas": ["zed-grab"],
+    "kind": "logic",
+    "issues": [65],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-65-zed-grab-permission-off",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/65-zed-grab-permission-off.kfs",
+    "clients": 1,
+    "areas": ["zed-grab"],
+    "kind": "logic",
+    "issues": [65],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-airborne-catch",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/airborne-catch.kfs",
+    "weapons": ["9mm", "ar15"],
+    "clients": 2,
+    "areas": ["drop-throw", "gravity"],
+    "kind": "logic",
+    "issues": [6],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-broken-pair-drop",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/broken-pair-drop.kfs",
+    "weapons": ["KFGameContent.KFWeap_Pistol_Dual9mm", "KFGameContent.KFWeap_Pistol_DualDeagle"],
+    "areas": ["dual", "drop-throw", "mp-agree"],
+    "kind": "logic",
+    "issues": [14],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-buy-draw-deagle",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/buy-draw-deagle.kfs",
+    "areas": ["trader"],
+    "kind": "logic",
+    "issues": [31],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-buy-new-class",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/buy-new-class.kfs",
+    "areas": ["trader"],
+    "kind": "logic",
+    "tier": "issue"
+  },
+  {
+    "id": "mp-drop-throw",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/drop-throw.kfs",
+    "weapons": ["KFGameContent.KFWeap_Knife_Commando", "9mm"],
+    "areas": ["drop-throw"],
+    "kind": "logic",
+    "issues": [13, 32],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-dual-hip-agree",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/dual-hip-agree.kfs",
+    "weapons": ["KFGameContent.KFWeap_Pistol_Dual9mm", "KFGameContent.KFWeap_Pistol_DualDeagle"],
+    "areas": ["dual", "reload", "mp-agree"],
+    "kind": "logic",
+    "issues": [30, 43],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-flamethrower",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/flamethrower.kfs",
+    "matrix": {
+      "var.role": ["actor", "observer"]
+    },
+    "clients": 2,
+    "areas": ["fire", "remote-view"],
+    "kind": "visual",
+    "issues": [3],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-pouch-return-above",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/pouch-return-above.kfs",
+    "weapons": ["9mm", "ar15"],
+    "areas": ["reload", "mp-agree"],
+    "kind": "logic",
+    "issues": [33],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-pump-after-shot",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/pump-after-shot.kfs",
+    "weapons": ["KFGameContent.KFWeap_HRG_SonicGun", "KFGameContent.KFWeap_RocketLauncher_SealSqueal"],
+    "clients": 2,
+    "areas": ["reload", "mp-agree"],
+    "kind": "logic",
+    "issues": [53],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-reload-agree",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/reload-agree.kfs",
+    "weapons": ["9mm", "KFGameContent.KFWeap_Rifle_M14EBR", "mb500"],
+    "areas": ["reload", "mp-agree"],
+    "kind": "logic",
+    "issues": [54, 43, 53],
+    "tier": "issue"
+  },
+  {
+    "id": "mp-remote-view",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/remote-view.kfs",
+    "matrix": {
+      "var.role": ["actor", "observer"]
+    },
+    "clients": 2,
+    "areas": ["remote-view", "reload"],
+    "kind": "visual",
+    "tier": "long",
+    "issues": [28]
+  },
+  {
+    "id": "mp-xp-persist-earn",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/xp-persist.kfs",
+    "vars": {
+      "phase": "earn"
+    },
+    "zeds": true,
+    "areas": ["xp"],
+    "kind": "evidence",
+    "tier": "long",
+    "issues": [74],
+    "notes": "Phase 1 of 2 with wave Zeds; compare its last log line with mp-xp-persist-check."
+  },
+  {
+    "id": "mp-xp-persist-check",
+    "runner": "mp",
+    "script": "tools/replay/scripts/mp/xp-persist.kfs",
+    "vars": {
+      "phase": "check"
+    },
+    "zeds": true,
+    "after": "mp-xp-persist-earn",
+    "areas": ["xp"],
+    "kind": "evidence",
+    "tier": "long",
+    "issues": [74],
+    "notes": "Phase 2: a fresh client launch after the earn run."
+  },
+  {
+    "id": "mp-160-161-pistol-reload-anim",
+    "runner": "mp",
+    "script": "tools/replay/scripts/issues/160-161-pistol-reload-anim.kfs",
+    "weapons": ["9mm", "deagle"],
+    "areas": ["reload", "mp-agree"],
+    "kind": "logic",
+    "issues": [160, 161],
+    "notes": "The header's online line (default mode=partial).",
+    "tier": "issue"
+  },
+  {
+    "id": "mp-206-elite-shell-hands",
+    "runner": "mp",
+    "script": "tools/replay/scripts/issues/206-elite-shell-hands.kfs",
+    "weapons": ["mb500", "KFGameContent.KFWeap_Shotgun_DragonsBreath"],
+    "areas": ["reload"],
+    "kind": "evidence",
+    "issues": [206],
+    "notes": "The header says it runs on the dedicated server too.",
+    "tier": "issue"
+  },
+  {
+    "id": "mp-227-melee-player-swings",
+    "runner": "mp",
+    "script": "tools/replay/scripts/issues/227-melee-player-swings.kfs",
+    "weapons": ["KFGameContent.KFWeap_Edged_Katana", "KFGameContent.KFWeap_Edged_FireAxe"],
+    "clients": 1,
+    "areas": ["melee"],
+    "kind": "logic",
+    "issues": [227],
+    "notes": "The header says the same script runs online.",
+    "tier": "issue"
+  }
+]

@@ -112,13 +112,22 @@ function Update(float Delta)
         if (!IsHeld(Hand)) continue;
         Elapsed = Now - LastTime[Hand];
         if (!InputOwner.ContextValid() || InputOwner.IsSelectorOpen(0) || InputOwner.IsSelectorOpen(1)
-            || !Ready(Hand, Held[Hand]) || Elapsed < 0 || Elapsed > 0.1) { Cancel(Hand); continue; }
+            || !Ready(Hand, Held[Hand]) || Elapsed < 0) { Cancel(Hand); continue; }
         if (Elapsed <= 0) continue;
         Position = Bridge.PalmPosition(Hand);
         // Positions and RealTimeSeconds are sampled together; locomotion is
         // removed so walking forward does not add to the throw.
         Velocity = (Position - LastPosition[Hand] - (Bridge.Human.Location - LastPawnPosition[Hand])) / Elapsed;
-        if (VSize(Velocity) > 1800) { Cancel(Hand); continue; }
+        // R69: a long frame, a snap turn or a tracking jump keeps the hold;
+        // the throw history restarts here so the gap cannot launch it.
+        if (Elapsed > 0.1 || VSize(Velocity) > 1800)
+        {
+            ThrowVelocity[Hand] = vect(0,0,0); Samples[Hand] = 0;
+            if (Thrower != None) Thrower.Reset(Hand);
+            LastPosition[Hand] = Position; LastPawnPosition[Hand] = Bridge.Human.Location;
+            LastTime[Hand] = Now;
+            continue;
+        }
         ThrowVelocity[Hand] = Velocity * 0.65 + ThrowVelocity[Hand] * 0.35;
         if (Thrower != None) Thrower.Add(Hand, Velocity, Now);
         LastPosition[Hand] = Position; LastPawnPosition[Hand] = Bridge.Human.Location;

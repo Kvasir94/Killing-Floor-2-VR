@@ -38,7 +38,7 @@ LAUNCHER_MODULES = (
 # Release line the public GitHub tags use (v<RELEASE_VERSION>.<UTC date>); the
 # launcher's update notice compares release.json's version against those tags,
 # so bump this with every new public release line.
-RELEASE_VERSION = "0.3.0-alpha"
+RELEASE_VERSION = "0.3.1-alpha"
 # The ZIP's only top-level entries; everything else lives in app/.
 START_FILE = "Start KF2-VR.cmd"
 START_SCRIPT = ('@echo off\r\nstart "" "%~dp0app\\runtime\\pythonw.exe" '
