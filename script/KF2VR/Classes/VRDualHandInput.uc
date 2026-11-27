@@ -80,6 +80,9 @@ var VRArcFenceInput ArcFence;
 var int NativeFocusRequested;
 var float SprintResumeTime;
 var float NextFireDiagTime[2];
+// B and A together: one wheel for both hands, drawn by the left selector.
+var bool bSharedWheel;
+var float SharedWheelWindow, SharedWheelChord;
 // Raw turn-stick deflection that counts as the outer rim for a jump.
 const JumpRimMagnitude = 0.95;
 // Forty degrees to either side of up owns jump, including the approach to
@@ -505,7 +508,7 @@ function bool BodySlotNearer(int Hand, vector Other, optional float OtherReach)
     Slots = Inventory != None ? Inventory.BodySlots : None;
     if (Slots == None || Hand < 0 || Hand > 1 || Slots.Hover[Hand] < 0) return false;
     if (OtherReach <= 0) OtherReach = Slots.SlotRadius;
-    return PrefersTarget(Hand, Slots.Positions[Slots.Hover[Hand]], Slots.SlotRadius, Other, OtherReach);
+    return PrefersTarget(Hand, Slots.Positions[Slots.Hover[Hand]], Slots.RadiusFor(Slots.Hover[Hand]), Other, OtherReach);
 }
 
 // Reload reach may overlap a configured body contact. Compare only contacts
@@ -547,11 +550,14 @@ function bool TryBodyAnchor(int Hand)
     local int Slot;
     Slots = Inventory != None ? Inventory.BodySlots : None;
     if (Slots == None || Hand < 0 || Hand > 1) return false;
-    Slot = Slots.Hover[Hand];
-    if (Slot < 0 || Slot >= 5) return false;
-    if (Grenade != None && Grenade.Retrievable(Hand)
+    Slot = Slots.ActiveSlot(Hand);
+    // Every body slot, the knife (5) included.
+    if (Slot < 0 || Slot >= class'VRBodySlots'.const.SLOTS) return false;
+    // The grenade only competes from inside its own zone: aimed at but out of
+    // reach, it must not swallow a squeeze at the knife beside it.
+    if (Grenade != None && Grenade.Retrievable(Hand) && Grenade.InGrabZone(Hand)
         && PrefersTarget(Hand, Grenade.SlotGrabPosition(), Grenade.ChestGrabRadius(),
-            Slots.Positions[Slot], Slots.SlotRadius)) return false;
+            Slots.Positions[Slot], Slots.RadiusFor(Slot))) return false;
     return Slots.Grip(Hand);
 }
 
@@ -810,6 +816,11 @@ function UpdateSupportCarry()
         if ((Bridge.NativeGripMask & Bit) != 0 && Value >= 0.65 && Value <= 1
             && (!Bridge.bToggleGrip || R.bCarrySawRelease))
             R.bCarryReleaseArmed = true;
+        // Hold mode: letting go of a gun at its holster stows it there rather
+        // than dropping it.
+        else if (GripReleased(Hand) && R.bCarryReleaseArmed && !Bridge.bToggleGrip
+            && Inventory.BodySlots != None && Inventory.BodySlots.TakeRelease(Hand))
+            R.bCarryReleaseArmed = false;
         else if (GripReleased(Hand) && R.bCarryReleaseArmed)
         {
             if (R.Item.Class==class'KFWeap_SMG_G18' && !Bridge.bToggleGrip)
@@ -854,7 +865,9 @@ function UpdateLocomotion(float RealDelta)
     for (Hand = 0; Hand < 2; ++Hand)
     {
         Bit = 1 << Hand;
-        if (IsSelectorOpen(Hand) && Hand != MoveHand)
+        // A hand carrying a holster in HOLSTER FIT sizes it with its stick.
+        if ((IsSelectorOpen(Hand) && Hand != MoveHand)
+            || (Inventory.BodySlots != None && Inventory.BodySlots.CarryingSlot(Hand)))
         {
             // Releasing a latched selector with its stick still displaced
             // must not turn into a movement or turn edge.
@@ -1031,6 +1044,56 @@ function bool TossDosh(int Hand)
     return Thrown;
 }
 
+// B held with A on the same (right) controller, A pressed together with B
+// (within SharedWheelWindow), neither wheel open yet: the shared wheel. Both
+// thumbs stay where they are; the left one keeps moving.
+function bool SharedWheelWanted(int Hand)
+{
+    if (Hand != 1 || Bridge.bNoSharedWheel || (Bridge.NativeValidMask & 3) != 3
+        || IsSelectorOpen(0) || IsSelectorOpen(1)) return false;
+    // Both held SharedWheelChord, pressed within SharedWheelWindow of each other.
+    return (Bridge.NativePhysicalButtonMask & Bridge.NativePhysicalButtonActiveMask & 8) != 0
+        && InputState[1].bLowerArmed && InputState[1].bLowerWasDown
+        && UpperTime[1] >= SharedWheelChord && LowerTime[1] >= SharedWheelChord
+        && Abs(LowerTime[1] - UpperTime[1]) <= SharedWheelWindow
+        && !Inventory.HasWorldGrab(0) && (Reloads == None || !Reloads.OwnsHand(0));
+}
+
+function OpenHeldWheel(int Hand)
+{
+    InputState[Hand].bUpperTapPending = false;
+    InputState[Hand].bUpperDoubleTap = false;
+    Inventory.CancelTransfer();
+    StopWeapon(Hand);
+    Bridge.Hands[Hand].bTriggerArmed = false;
+    InputState[Hand].bSelectorOpen = true;
+    InputState[Hand].bSelectorTriggerArmed = false;
+    InputState[Hand].bSelectorConfirmPending = false;
+    InputState[Hand].bSelectorInitAttempted = false;
+    EnsureSelectors();
+    if (Selectors[Hand] != None) Selectors[Hand].OpenSelection();
+    InputState[Hand].bUpperUsed = true;
+}
+
+// A wheel closed by a choice falls into its hand. The shared wheel stays until
+// both hands are done, then falls into the left hand that draws it.
+function CollapseWheel(int Hand)
+{
+    if (!bSharedWheel) { Selectors[Hand].BeginCollapse(); return; }
+    if (IsSelectorOpen(1 - Hand)) return;
+    bSharedWheel = false;
+    if (Selectors[0] != None) Selectors[0].BeginCollapse();
+}
+
+// The surface a hand's wheel shows on: in the shared wheel only the left one,
+// for as long as either hand is still choosing.
+function bool WheelShown(int Hand)
+{
+    if (Selectors[Hand] == None) return false;
+    if (bSharedWheel) return Hand == 0 && (IsSelectorOpen(0) || IsSelectorOpen(1));
+    return IsSelectorOpen(Hand) || Selectors[Hand].Collapsing();
+}
+
 function UpdateSelection(float DeltaTime)
 {
     local int Hand, Bit, UpperBit;
@@ -1044,6 +1107,7 @@ function UpdateSelection(float DeltaTime)
         if ((Bridge.NativeValidMask & Bit) == 0 || (Bridge.NativePhysicalButtonActiveMask & UpperBit) == 0
             || Inventory.HasWorldGrab(Hand) || (Reloads != None && Reloads.OwnsHand(Hand)))
         {
+            if (bSharedWheel && IsSelectorOpen(Hand) && !IsSelectorOpen(1 - Hand)) bSharedWheel = false;
             InputState[Hand].bSelectorOpen = false;
             InputState[Hand].bUpperArmed = false;
             InputState[Hand].bUpperGesture = false;
@@ -1095,13 +1159,26 @@ function UpdateSelection(float DeltaTime)
                 InputState[Hand].bSelectorTriggerArmed = false;
                 InputState[Hand].bSelectorConfirmPending = false;
                 Bridge.Hands[Hand].bTriggerArmed = false;
+                if (bSharedWheel) { CloseSelector(1 - Hand); bSharedWheel = false; }
             }
             UpperTime[Hand] = 0;
         }
         if (Upper && InputState[Hand].bUpperGesture && !InputState[Hand].bUpperUsed)
         {
             UpperTime[Hand] += DeltaTime;
-            if (UpperTime[Hand] >= UPPER_HOLD_SECONDS && InputState[Hand].bUpperDoubleTap)
+            // B + A held together: one wheel for both hands, opened before
+            // either button's own hold (wheel, fire mode) can act.
+            if (SharedWheelWanted(Hand))
+            {
+                // The A of the chord is spent: no reload tap, no fire mode.
+                InputState[1].bLowerConsumed = true;
+                InputState[1].bLowerArmed = false;
+                ClearModeHold(1);
+                bSharedWheel = true;
+                OpenHeldWheel(0);
+                OpenHeldWheel(1);
+            }
+            else if (UpperTime[Hand] >= UPPER_HOLD_SECONDS && InputState[Hand].bUpperDoubleTap)
             {
                 // Tap then hold: quick heal rather than a second way to the wheel.
                 StopWeapon(Hand);
@@ -1109,20 +1186,7 @@ function UpdateSelection(float DeltaTime)
                 DrawSyringe(Hand);
                 InputState[Hand].bUpperUsed = true;
             }
-            else if (UpperTime[Hand] >= UPPER_HOLD_SECONDS)
-            {
-                InputState[Hand].bUpperTapPending = false;
-                Inventory.CancelTransfer();
-                StopWeapon(Hand);
-                Bridge.Hands[Hand].bTriggerArmed = false;
-                InputState[Hand].bSelectorOpen = true;
-                InputState[Hand].bSelectorTriggerArmed = false;
-                InputState[Hand].bSelectorConfirmPending = false;
-                InputState[Hand].bSelectorInitAttempted = false;
-                EnsureSelectors();
-                if (Selectors[Hand] != None) Selectors[Hand].OpenSelection();
-                InputState[Hand].bUpperUsed = true;
-            }
+            else if (UpperTime[Hand] >= UPPER_HOLD_SECONDS) OpenHeldWheel(Hand);
         }
         if (IsSelectorOpen(Hand) && Selectors[Hand] != None)
         {
@@ -1148,7 +1212,7 @@ function UpdateSelection(float DeltaTime)
                     InputState[Hand].bSelectorConfirmPending = false;
                     InputState[Hand].bSelectorOpen = false;
                     if (!Selectors[Hand].CommitSelection()) InputState[Hand].bSelectorOpen = true;
-                    else Selectors[Hand].BeginCollapse();
+                    else CollapseWheel(Hand);
                     Bridge.Hands[Hand].bTriggerArmed = false;
                 }
                 InputState[Hand].bSelectorTriggerArmed = true;
@@ -1163,7 +1227,7 @@ function UpdateSelection(float DeltaTime)
                     InputState[Hand].bSelectorConfirmPending = false;
                     InputState[Hand].bSelectorOpen = false;
                     if (!Selectors[Hand].CommitSelection()) InputState[Hand].bSelectorOpen = true;
-                    else Selectors[Hand].BeginCollapse();
+                    else CollapseWheel(Hand);
                     DisarmDrawInputs(Hand); // consume confirm before catches/support
                 }
                 else if (!HeldWheel) InputState[Hand].bSelectorConfirmPending = true;
@@ -1195,6 +1259,8 @@ function UpdateSelection(float DeltaTime)
         // weapon/grip dispatch returns early for another interaction.
         InputState[Hand].bUpperWasDown = Upper;
     }
+    // Both hands left the shared wheel some other way (tracking, a grab).
+    if (bSharedWheel && !IsSelectorOpen(0) && !IsSelectorOpen(1)) bSharedWheel = false;
 }
 
 function UpdateHand(int Hand, float DeltaTime)
@@ -1264,6 +1330,23 @@ function UpdateHand(int Hand, float DeltaTime)
         InputState[Hand].bLowerConsumed = true;
         return;
     }
+    // HOLSTER FIT owns both hands: either trigger puts the slot down, Y/B
+    // cancels. Held weapons neither fire nor drop meanwhile.
+    if (Inventory.BodySlots != None && Inventory.BodySlots.Placing())
+    {
+        Grip = (Bridge.NativeGripMask & Bit) != 0;
+        Inventory.BodySlots.PlacementInput(Hand,
+            (Bridge.NativeTriggerMask & Bridge.NativeTriggerActiveMask & Bit) != 0,
+            (Bridge.NativePhysicalButtonMask & Bridge.NativePhysicalButtonActiveMask & UpperBit) != 0, Grip);
+        StopWeapon(Hand);
+        Bridge.Hands[Hand].bTriggerArmed = false;
+        Bridge.Hands[Hand].bGrip = Grip;
+        InputState[Hand].bGripWasDown = Grip;
+        InputState[Hand].bPhysicalTriggerWasDown = true;
+        InputState[Hand].bLowerConsumed = true;
+        InputState[Hand].bUpperArmed = false;
+        return;
+    }
     Buttons = Bridge.NativePhysicalButtonMask;
     ActiveButtons = Bridge.NativePhysicalButtonActiveMask;
     Grip = (Bridge.NativeGripMask & Bit) != 0;
@@ -1315,6 +1398,10 @@ function UpdateHand(int Hand, float DeltaTime)
     // Returning to this carried gun's primary contact takes the fresh squeeze
     // before nearby headlamp, welder or world-grab acquisition zones.
     if (GripEdge && !HadSelector && Inventory.TryRegripCarry(Hand))
+    { GripEdge = false; OwnershipCommand = true; }
+    // Toggle grip: squeezing again with the syringe or knife from the body
+    // rig puts it back in its slot.
+    if (GripEdge && !HadSelector && Inventory.BodySlots != None && Inventory.BodySlots.TempGrip(Hand))
     { GripEdge = false; OwnershipCommand = true; }
     // The temple gesture owns only a fresh squeeze of a genuinely free hand.
     // Reload and world holds returned above; body contacts and transfers keep
@@ -1392,7 +1479,8 @@ function UpdateHand(int Hand, float DeltaTime)
             else if (!Inventory.TryGrab(Hand)
                 && (Wallet == None || BodySlotNearer(Hand, Wallet.PocketPosition(Hand), Wallet.PocketRadius) || !Wallet.TryGrab(Hand))
                 && (Pouch == None || (Grenade != None && Grenade.PrefersOver(Hand, Pouch.PouchPosition())) || !Pouch.TryGrab(Hand))
-                && !TryBodyAnchor(Hand)) Grenade.TryGrab(Hand);
+                && !TryBodyAnchor(Hand) && !Grenade.TryGrab(Hand)
+                && Inventory.BodySlots != None) Inventory.BodySlots.GrenadeWithItem(Hand);
         }
     }
     if (GripReleased(Hand) && !HadSelector && Inventory.Registry.GetSupport(Hand) != None
@@ -2073,8 +2161,7 @@ function PlaceSelectors()
     {
         if (Selectors[Hand] == None) continue;
         // A closed wheel keeps placing itself while it collapses into the hand.
-        if (!ContextValid() || (Bridge.NativeValidMask & (1 << Hand)) == 0
-            || (!InputState[Hand].bSelectorOpen && !Selectors[Hand].Collapsing()))
+        if (!ContextValid() || (Bridge.NativeValidMask & (1 << Hand)) == 0 || !WheelShown(Hand))
             Selectors[Hand].HideSelector();
         else Selectors[Hand].PlaceSelector();
     }
@@ -2100,4 +2187,11 @@ function DestroySelectors()
     Inventory = None;
     Bridge = None;
     bInitialized = false;
+}
+
+defaultproperties
+{
+    SharedWheelWindow=0.2
+    // Under the 0.25 s holds of B (wheel) and A (fire mode).
+    SharedWheelChord=0.12
 }

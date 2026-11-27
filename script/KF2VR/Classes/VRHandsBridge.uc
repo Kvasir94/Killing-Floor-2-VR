@@ -406,7 +406,7 @@ var VRHeldInventory HeldInventory;
 var config bool bIndependentHands, bToggleGrip;
 var config bool bHoldSupportGrip;
 var config bool bSupportHandCarry;
-var config bool bBodySlotsEnabled; // Legacy compatibility only; holsters are inactive.
+var config bool bBodySlotsEnabled; // Body holsters (VRBodySlots), off by default.
 // Physical-stock option: the primary controller alone aims/anchors firearms.
 // Support ownership, sighted handling and braced recoil remain grip-driven.
 // False also preserves the existing alignment for profiles missing this key.
@@ -516,8 +516,48 @@ var config bool bSightPointAim;
 // Legacy holster layout, relative to head minus 42 UU. Read only when
 // BodyHolsterOffsets is unset; BodyHolsterOffset() converts it.
 var config array<vector> BodySlotOffsets;
-// Preserved inactive holster layout in the shared body frame.
+// Holster layout in the shared body frame (VRBodySlots.DefaultOffsets order).
 var config array<vector> BodyHolsterOffsets;
+// HOLSTER FIT, per slot, placed by hand in the VR menu: the grab point and the
+// hand's rotation, both in the body frame. A zero offset means "not placed"
+// (the neck pivot itself is never a holster) and keeps the default.
+var config array<vector> HolsterFitOffsets;
+var config array<rotator> HolsterFitRotations;
+// Per slot: 0 body, 1 left forearm, 2 right forearm (the offset and rotation
+// are then in that wrist's frame); and the model's size (0 = the default).
+var config array<byte> HolsterFitAnchors;
+var config array<float> HolsterFitScales;
+// After the syringe or knife goes back to its slot (or a grenade is thrown),
+// hand back the gun that was put away to take it. Off: it stays holstered.
+var config bool bHolsterRestoreGun;
+// Off: one shared ammo pouch unless a pistol is in each hand (AmmoPouchPosition).
+// On: the old per-hand hip pouches always.
+var config bool bPerHandPouches;
+// HOLSTER FIT indices of the pouches, after the holsters (0-5) and grenade (6).
+const POUCH_SHARED = 7;
+const POUCH_LEFT = 8;
+const POUCH_RIGHT = 9;
+var vector SharedPouchDefault;
+var float SharedPouchSpread;
+// The hover ring per holster group (0 long guns, 1 sidearms, 2 syringe,
+// 3 knife, 4 grenade): VRBodySlots palette colour, brightness and size in
+// percent, and whether it shows (0 the default, 1 on, 2 off).
+var config array<byte> HolsterRingColors, HolsterRingModes;
+var config array<int> HolsterRingBrightness, HolsterRingSizes;
+var byte DefaultRingColor[5], DefaultRingOn[5];
+var int DefaultRingBrightness[5], DefaultRingSize[5];
+const RING_GROUPS = 5;
+// Knife tilt: the knife (hand and blade, so its cutting edge too) turned
+// forward about the controller's right axis by this many degrees, so a
+// natural wrist cuts. Negative tilts it back.
+var config float KnifeTiltDegrees;
+// The magazines shown in the ammo pouch, in percent of their real size (0:
+// DefaultPouchMagazineSize). Their grab reach grows by half as much.
+var config int PouchMagazineSize;
+// B and A pressed together open one wheel for both hands (off: not at all;
+// Y and B keep their own wheels either way).
+var config bool bNoSharedWheel;
+var int DefaultPouchMagazineSize;
 // Belt pouch fit in the body frame; positive Y widens both hip offsets.
 var config vector AmmoPouchAdjustment;
 // Shared body frame for holsters, the chest grenade and the dosh pocket; see
@@ -974,10 +1014,82 @@ simulated function rotator BodyYaw()
 // slide toward wherever the player looks.
 // The belt ammo pouch on one hip, from the reload's belt offset in the torso
 // frame. Physical reloads reach for it; the HUD pins the reserve count to it.
+//
+// Two modes. With a pistol in each hand (akimbo) each hand keeps its own hip
+// pouch, as before; HOLSTER FIT can place each (POUCH_LEFT/RIGHT). Otherwise
+// (unless bPerHandPouches) one shared pouch in front of the belly serves every gun:
+// two guns' loads sit side by side in it, and a secondary load (VRBelt-
+// ShellPresentation) stays beside its magazine. Offset keeps each caller's
+// own displacement from the standard belt offset (the cylinder loader).
 simulated function vector AmmoPouchPosition(int Hand, vector Offset)
 {
-    return class'VRAmmoPouchAnchor'.static.Position(HeadPosition, NativeHeadRotation, BodyYaw(),
-        Offset, AmmoPouchAdjustment, BodyNeckLength, Hand, NativeHeadTracked != 0);
+    local vector PouchAt, Delta;
+    local int Slot;
+    Delta = Offset - class'VRInteractiveReload'.default.BeltOffset;
+    if (Hand == 1) Delta.Y = -Delta.Y;
+    if (bPerHandPouches || AkimboPouches())
+    {
+        Slot = Hand == 0 ? POUCH_LEFT : POUCH_RIGHT;
+        if (!HolsterFitPlaced(Slot))
+            return class'VRAmmoPouchAnchor'.static.Position(HeadPosition, NativeHeadRotation, BodyYaw(),
+                Offset, AmmoPouchAdjustment, BodyNeckLength, Hand, NativeHeadTracked != 0);
+        PouchAt = HolsterFitOffsets[Slot];
+    }
+    else
+    {
+        PouchAt = HolsterFitPlaced(POUCH_SHARED) ? HolsterFitOffsets[POUCH_SHARED] : SharedPouchDefault;
+        // Two guns' loads sit side by side; one gun's sits where it was placed.
+        if (TwoFirearmsHeld()) PouchAt.Y += Hand == 0 ? -SharedPouchSpread : SharedPouchSpread;
+    }
+    return BodyPivot() + ((PouchAt + Delta) >> BodyYaw());
+}
+
+// A one-handed firearm in each hand: the per-hand hip pouches.
+simulated function bool AkimboPouches()
+{
+    local VRWeaponRuntime Left, Right;
+    if (HandInventory == None || HandInventory.Registry == None) return false;
+    Left = HandInventory.Registry.GetPrimary(0);
+    Right = HandInventory.Registry.GetPrimary(1);
+    return Left != None && Right != None && Left.Item != Right.Item
+        && OneHandedFirearm(Left.Item) && OneHandedFirearm(Right.Item);
+}
+
+simulated function bool TwoFirearmsHeld()
+{
+    local VRWeaponRuntime Left, Right;
+    local int P;
+    if (HandInventory == None || HandInventory.Registry == None) return false;
+    Left = HandInventory.Registry.GetPrimary(0);
+    Right = HandInventory.Registry.GetPrimary(1);
+    if (Left == None || Right == None || Left.Item == Right.Item) return false;
+    P = FindWeaponProfile(Left.Item);
+    if (P < 0 || P >= WeaponProfiles.Length || !WeaponProfiles[P].bFirearm) return false;
+    P = FindWeaponProfile(Right.Item);
+    return P >= 0 && P < WeaponProfiles.Length && WeaponProfiles[P].bFirearm;
+}
+
+simulated function bool OneHandedFirearm(KFWeapon W)
+{
+    local int P;
+    P = FindWeaponProfile(W);
+    return P >= 0 && P < WeaponProfiles.Length && WeaponProfiles[P].bFirearm && WeaponProfiles[P].bOneHanded;
+}
+
+simulated function int PouchMagazinePercent()
+{
+    return PouchMagazineSize > 0 ? Clamp(PouchMagazineSize, 50, 300) : DefaultPouchMagazineSize;
+}
+
+// The magazines' display scale and the matching grab reach.
+simulated function float PouchMagazineScale() { return PouchMagazinePercent() / 100.0; }
+simulated function float PouchReachScale() { return 1.0 + (PouchMagazineScale() - 1.0) * 0.5; }
+
+// The current pouch's HOLSTER FIT size: the grab reach and the ammo shown.
+simulated function float PouchSize(int Hand)
+{
+    if (bPerHandPouches || AkimboPouches()) return HolsterFitScale(Hand == 0 ? POUCH_LEFT : POUCH_RIGHT, 1.0);
+    return HolsterFitScale(POUCH_SHARED, 1.0);
 }
 
 simulated function vector BodyPivot()
@@ -992,9 +1104,92 @@ simulated function vector BodyPivot()
 // head minus 42 UU; the level-head pivot is head minus BodyNeckLength.
 simulated function vector BodyHolsterOffset(int I, vector Fallback)
 {
-    if (BodyHolsterOffsets.Length == 5) return BodyHolsterOffsets[I];
-    if (BodySlotOffsets.Length == 5) return BodySlotOffsets[I] - vect(0,0,1) * (42 - BodyNeckLength);
+    if (HolsterFitPlaced(I)) return HolsterFitOffsets[I];
+    if (BodyHolsterOffsets.Length == 5 && I < 5) return BodyHolsterOffsets[I];
+    if (BodySlotOffsets.Length == 5 && I < 5) return BodySlotOffsets[I] - vect(0,0,1) * (42 - BodyNeckLength);
     return Fallback;
+}
+
+simulated function bool HolsterFitPlaced(int I)
+{
+    return I >= 0 && I < HolsterFitOffsets.Length && HolsterFitOffsets[I] != vect(0,0,0);
+}
+
+simulated function int HolsterFitAnchor(int I)
+{
+    if (HolsterFitPlaced(I) && I < HolsterFitAnchors.Length) return HolsterFitAnchors[I];
+    return 0;
+}
+
+simulated function float HolsterFitScale(int I, float Fallback)
+{
+    return (I >= 0 && I < HolsterFitScales.Length && HolsterFitScales[I] > 0) ? HolsterFitScales[I] : Fallback;
+}
+
+// Saves a hand-placed holster; bClear forgets it (back to the default).
+simulated function SetHolsterFit(int I, vector Offset, rotator Rotation, int Anchor, float Scale, optional bool bClear)
+{
+    if (I < 0) return;
+    if (HolsterFitOffsets.Length <= I) HolsterFitOffsets.Length = I + 1;
+    if (HolsterFitRotations.Length <= I) HolsterFitRotations.Length = I + 1;
+    if (HolsterFitAnchors.Length <= I) HolsterFitAnchors.Length = I + 1;
+    if (HolsterFitScales.Length <= I) HolsterFitScales.Length = I + 1;
+    HolsterFitOffsets[I] = bClear ? vect(0,0,0) : Offset;
+    HolsterFitRotations[I] = bClear ? rot(0,0,0) : Rotation;
+    if (bClear) Anchor = 0;
+    HolsterFitAnchors[I] = Anchor;
+    HolsterFitScales[I] = bClear ? 0.0 : Scale;
+    SavePreferences();
+}
+
+// Hover ring look per holster group; unset entries take the defaults.
+simulated function int RingColor(int Group)
+{
+    Group = Clamp(Group, 0, RING_GROUPS - 1);
+    if (Group < HolsterRingColors.Length && HolsterRingColors[Group] > 0) return HolsterRingColors[Group] - 1;
+    return DefaultRingColor[Group];
+}
+
+simulated function int RingBrightness(int Group)
+{
+    Group = Clamp(Group, 0, RING_GROUPS - 1);
+    if (Group < HolsterRingBrightness.Length && HolsterRingBrightness[Group] > 0) return HolsterRingBrightness[Group];
+    return DefaultRingBrightness[Group];
+}
+
+simulated function int RingSize(int Group)
+{
+    Group = Clamp(Group, 0, RING_GROUPS - 1);
+    if (Group < HolsterRingSizes.Length && HolsterRingSizes[Group] > 0) return HolsterRingSizes[Group];
+    return DefaultRingSize[Group];
+}
+
+simulated function bool RingOn(int Group)
+{
+    Group = Clamp(Group, 0, RING_GROUPS - 1);
+    if (Group < HolsterRingModes.Length && HolsterRingModes[Group] > 0) return HolsterRingModes[Group] == 1;
+    return DefaultRingOn[Group] != 0;
+}
+
+simulated function SetRingOn(int Group, bool bOn)
+{
+    Group = Clamp(Group, 0, RING_GROUPS - 1);
+    if (HolsterRingModes.Length <= Group) HolsterRingModes.Length = Group + 1;
+    HolsterRingModes[Group] = bOn ? 1 : 2;
+    SavePreferences();
+}
+
+// Stored +1 so a zero entry means "default".
+simulated function SetRing(int Group, int Tint, int Brightness, int Size)
+{
+    Group = Clamp(Group, 0, RING_GROUPS - 1);
+    if (HolsterRingColors.Length <= Group) HolsterRingColors.Length = Group + 1;
+    if (HolsterRingBrightness.Length <= Group) HolsterRingBrightness.Length = Group + 1;
+    if (HolsterRingSizes.Length <= Group) HolsterRingSizes.Length = Group + 1;
+    HolsterRingColors[Group] = Tint + 1;
+    HolsterRingBrightness[Group] = Brightness;
+    HolsterRingSizes[Group] = Size;
+    SavePreferences();
 }
 
 // The native tracking consumer supplies a bounded request before stock
@@ -1312,6 +1507,11 @@ simulated function CopyPreferencesTo(class<VRHandsBridge> To)
     To.default.bLegacyMeleeParry = bLegacyMeleeParry;
     To.default.bLegacyMeleeDismemberGate = bLegacyMeleeDismemberGate;
     To.default.bLegacyMeleePalmShove = bLegacyMeleePalmShove;
+    To.default.bPerHandPouches = bPerHandPouches; To.default.HolsterRingColors = HolsterRingColors;
+    To.default.HolsterRingBrightness = HolsterRingBrightness; To.default.HolsterRingSizes = HolsterRingSizes;
+    To.default.HolsterRingModes = HolsterRingModes; To.default.KnifeTiltDegrees = KnifeTiltDegrees;
+    To.default.PouchMagazineSize = PouchMagazineSize;
+    To.default.bNoSharedWheel = bNoSharedWheel;
     To.default.bLegacyMeleeImpactReaction = bLegacyMeleeImpactReaction;
     To.default.bLegacyMeleePommel = bLegacyMeleePommel;
     To.default.bLegacyMeleeWallStop = bLegacyMeleeWallStop;
@@ -1344,6 +1544,9 @@ simulated function CopyPreferencesTo(class<VRHandsBridge> To)
     To.default.bUnlockDeferredReloads = bUnlockDeferredReloads;
     To.default.bSightLineConvergence = bSightLineConvergence; To.default.bSightPointAim = bSightPointAim;
     To.default.BodySlotOffsets = BodySlotOffsets; To.default.BodyHolsterOffsets = BodyHolsterOffsets;
+    To.default.HolsterFitOffsets = HolsterFitOffsets; To.default.HolsterFitRotations = HolsterFitRotations;
+    To.default.HolsterFitAnchors = HolsterFitAnchors; To.default.HolsterFitScales = HolsterFitScales;
+    To.default.bHolsterRestoreGun = bHolsterRestoreGun;
     To.default.AmmoPouchAdjustment = AmmoPouchAdjustment; To.default.SelectorFavorites = SelectorFavorites;
     To.default.bControllerRelativeMovement = bControllerRelativeMovement;
     To.default.MovementHand = MovementHand; To.default.PreferredWeaponHand = PreferredWeaponHand;
@@ -1450,6 +1653,16 @@ static function CopyDefaultPreferencesTo(class<VRHandsBridge> To)
     To.default.bSightLineConvergence = default.bSightLineConvergence;
     To.default.bSightPointAim = default.bSightPointAim; To.default.BodySlotOffsets = default.BodySlotOffsets;
     To.default.BodyHolsterOffsets = default.BodyHolsterOffsets;
+    To.default.HolsterFitOffsets = default.HolsterFitOffsets;
+    To.default.HolsterFitRotations = default.HolsterFitRotations;
+    To.default.HolsterFitAnchors = default.HolsterFitAnchors;
+    To.default.HolsterFitScales = default.HolsterFitScales;
+    To.default.bHolsterRestoreGun = default.bHolsterRestoreGun;
+    To.default.bPerHandPouches = default.bPerHandPouches; To.default.HolsterRingColors = default.HolsterRingColors;
+    To.default.HolsterRingBrightness = default.HolsterRingBrightness; To.default.HolsterRingSizes = default.HolsterRingSizes;
+    To.default.HolsterRingModes = default.HolsterRingModes; To.default.KnifeTiltDegrees = default.KnifeTiltDegrees;
+    To.default.PouchMagazineSize = default.PouchMagazineSize;
+    To.default.bNoSharedWheel = default.bNoSharedWheel;
     To.default.AmmoPouchAdjustment = default.AmmoPouchAdjustment;
     To.default.SelectorFavorites = default.SelectorFavorites;
     To.default.bControllerRelativeMovement = default.bControllerRelativeMovement;
@@ -2908,6 +3121,21 @@ simulated function rotator ControllerAimRotation(rotator RawAim, KFWeapon W)
     Correction.Pitch = int(FClamp(FirearmAimPitchDegrees, -80, 80) * 65536.0 / 360.0);
     Correction.Yaw = int(FClamp(FirearmAimYawDegrees, -80, 80) * 65536.0 / 360.0);
     Correction.Roll = int(FClamp(FirearmAimRollDegrees, -80, 80) * 65536.0 / 360.0);
+    return QuatToRotator(QuatProduct(QuatFromRotator(RawAim), QuatFromRotator(Correction)));
+}
+
+// The knife turned forward (KnifeTiltDegrees) about the controller's own right
+// axis. The blade's contact points are read from this mesh, so the edge that
+// cuts tilts with the model. Other melee keeps its authored angle for now.
+simulated function rotator MeleeTiltRotation(rotator RawAim, KFWeapon W)
+{
+    local rotator Correction;
+    local float Tilt;
+    Tilt = RootBridge != None ? RootBridge.KnifeTiltDegrees : KnifeTiltDegrees;
+    if (W == None || !W.IsA('KFWeap_Edged_Knife') || Tilt ~= 0.0) return RawAim;
+    // A positive pitch lifts the controller's forward axis and swings its up
+    // axis (the blade) back, so forward is the negative pitch.
+    Correction.Pitch = int(-FClamp(Tilt, -90, 90) * 65536.0 / 360.0);
     return QuatToRotator(QuatProduct(QuatFromRotator(RawAim), QuatFromRotator(Correction)));
 }
 
@@ -4522,7 +4750,7 @@ simulated function PlaceWeapon()
             PrimaryGripQ = class'VRHandRolePose'.static.RetargetWrist(self, AuthoredPrimaryHand, WeaponHand, PrimaryGripQ);
         DesiredQ = QuatProduct(FreeHandPose.WristRotation(WeaponHand,
             WeaponProfiles[ActiveProfile].bPrimaryWristAim ? Hands[WeaponHand].AimRotation
-                : (WeaponHand == 0 ? LeftRotation : RightRotation)), QuatInvert(PrimaryGripQ));
+                : MeleeTiltRotation(WeaponHand == 0 ? LeftRotation : RightRotation, W)), QuatInvert(PrimaryGripQ));
         DesiredRot = QuatToRotator(DesiredQ);
     }
     bCaptureSupportAim = W.Class == class'KFWeap_AssaultRifle_MKB42'
@@ -5390,6 +5618,35 @@ simulated function SelectNextItem()
 
 defaultproperties
 {
+    // A shared pouch in front of the belly, from the body pivot 15 below the
+    // eyes: about where the old hip pouches meet in the middle.
+    SharedPouchDefault=(X=22,Y=0,Z=-45)
+    SharedPouchSpread=4.0
+    // Real-size magazines read small at the belt and are easy to miss.
+    DefaultPouchMagazineSize=150
+    // Hover rings: long guns red, sidearms red and a little larger, syringe
+    // turquoise and smaller, knife red (palette in VRBodySlots).
+    DefaultRingColor(0)=0
+    DefaultRingColor(1)=0
+    DefaultRingColor(2)=1
+    DefaultRingColor(3)=0
+    DefaultRingBrightness(0)=70
+    DefaultRingBrightness(1)=70
+    DefaultRingBrightness(2)=70
+    DefaultRingBrightness(3)=70
+    DefaultRingSize(0)=100
+    DefaultRingSize(1)=120
+    DefaultRingSize(2)=80
+    DefaultRingSize(3)=100
+    // The grenade: orange. The knife ring starts off: it sits in plain reach.
+    DefaultRingColor(4)=5
+    DefaultRingBrightness(4)=70
+    DefaultRingSize(4)=100
+    DefaultRingOn(0)=1
+    DefaultRingOn(1)=1
+    DefaultRingOn(2)=1
+    DefaultRingOn(3)=0
+    DefaultRingOn(4)=1
     bExperimentalInteractions=false
     bSupportHandCarry=true
     bRealisticAmmo=false

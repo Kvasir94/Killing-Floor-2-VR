@@ -46,6 +46,11 @@ static function bool Configure(SkeletalMeshComponent M, class<KFWeapon> W, int S
         Set = AnimSet(DynamicLoadObject(W.default.FirstPersonAnimSetNames[I], class'AnimSet', true));
         if (Set != None) Sets.AddItem(Set);
     }
+    // Perk knives name no anim sets; their 1P mesh template carries them.
+    if (Sets.Length == 0 && SkeletalMeshComponent(W.default.Mesh) != None)
+        for (I = 0; I < SkeletalMeshComponent(W.default.Mesh).AnimSets.Length; ++I)
+            if (SkeletalMeshComponent(W.default.Mesh).AnimSets[I] != None)
+                Sets.AddItem(SkeletalMeshComponent(W.default.Mesh).AnimSets[I]);
     if (Sets.Length == 0) return false;
     M.SetSkeletalMesh(Model);
     M.AnimSets = Sets;
@@ -77,6 +82,55 @@ static function HideHands(SkeletalMeshComponent M, class<KFWeapon> W)
         if (Parent != Bone) class'VRBoneVisibility'.static.SetVisible(M, Bone, false);
     }
     if (W == class'KFWeap_SMG_G18') class'VRBoneVisibility'.static.SetVisible(M, 'LW_Weapon', false);
+}
+
+// A display copy shows only the gun. KF2 parks spare loads (magazines,
+// speedloaders, shells, medic vials and batteries) in the 1P skeleton off the
+// flat camera; in VR they hang in mid air beside a holstered or dropped copy.
+// Hide VRReloadMeshPresentation's spare bones under its own parent rule, and
+// any other ammunition-like bone the idle pose parks away from the grip.
+static function HideSpareLoads(SkeletalMeshComponent M, class<KFWeapon> W)
+{
+    local array<name> Bones, Spares, Loaded;
+    local name Bone, Parent, Root, Kept;
+    local string Lower;
+    local vector RootAt;
+    local int I, P, Index;
+    P = Profile(W);
+    if (M == None || P < 0) return;
+    Root = class'VRHandsBridge'.default.WeaponProfiles[P].RootBone;
+    Spares = class'VRReloadMeshPresentation'.default.SpareBoneNames;
+    Loaded = class'VRReloadMeshPresentation'.default.LoadedBoneNames;
+    // A spare-named bone a catalogued gun keeps loaded (VRReloadCatalog.KeptBone).
+    for (I = 0; I < class'VRReloadCatalog'.default.Profiles.Length; ++I)
+        if (class'VRReloadCatalog'.default.Profiles[I].WeaponClass == W) Kept = class'VRReloadCatalog'.default.Profiles[I].KeepBone;
+    for (I = 0; I < Spares.Length; ++I)
+    {
+        if (M.MatchRefBone(Spares[I]) < 0 || (Kept != '' && Spares[I] == Kept)) continue;
+        Parent = M.GetParentBone(Spares[I]);
+        if (I < class'VRReloadMeshPresentation'.const.PoppedSpareCount && Parent != 'RW_Weapon' && Spares.Find(Parent) < 0) continue;
+        class'VRBoneVisibility'.static.SetVisible(M, Spares[I], false);
+    }
+    RootAt = M.GetBoneLocation(Root);
+    M.GetBoneNames(Bones);
+    for (I = 0; I < Bones.Length; ++I)
+    {
+        Bone = Bones[I];
+        if (Bone == Root || Loaded.Find(Bone) >= 0) continue;
+        Lower = Locs(string(Bone));
+        if (InStr(Lower, "mag") < 0 && InStr(Lower, "shell") < 0 && InStr(Lower, "bullet") < 0
+            && InStr(Lower, "vial") < 0 && InStr(Lower, "dart") < 0 && InStr(Lower, "ammo") < 0
+            && InStr(Lower, "batter") < 0 && InStr(Lower, "clip") < 0 && InStr(Lower, "round") < 0
+            && InStr(Lower, "charge") < 0 && InStr(Lower, "syringe") < 0 && InStr(Lower, "canister") < 0) continue;
+        // A loaded part sits on the receiver, within a hand's width of the
+        // grip; spare loads are parked 54-160 UU away (rig audit, see above).
+        Index = M.MatchRefBone(Bone);
+        if (Index < 0 || VSize(M.GetBoneLocation(Bone) - RootAt) < 30) continue;
+        // Never hide an ancestor of the gun itself.
+        Parent = Root;
+        while (Parent != '' && Parent != Bone) Parent = M.GetParentBone(Parent);
+        if (Parent != Bone) class'VRBoneVisibility'.static.SetVisible(M, Bone, false);
+    }
 }
 
 static function AnimNodeSequence Idle(Actor Owner, SkeletalMeshComponent M, class<KFWeapon> W, optional bool bKeepHands)
