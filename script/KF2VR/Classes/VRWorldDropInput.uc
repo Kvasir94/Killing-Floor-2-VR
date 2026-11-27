@@ -518,7 +518,11 @@ function ObserveHeld(float Now)
             Held[Slot].ArmedHands = Held[Slot].ArmedHands | (1 << R.SupportHand);
         if (Held[Slot].ArmedHands != 0 && AllOpen(R) && Actions[H].QueuedRuntime == None)
         {
-            if (QueueRelease(R, H, Now)) Held[Slot].ArmedHands = 0;
+            // Let go at (or just past) a body holster that takes the gun:
+            // it goes into the holster, not into the world.
+            if (R.PrimaryHand >= 0 && Inventory.BodySlots != None
+                && Inventory.BodySlots.TakeRelease(R.PrimaryHand)) Held[Slot].ArmedHands = 0;
+            else if (QueueRelease(R, H, Now)) Held[Slot].ArmedHands = 0;
         }
     }
 }

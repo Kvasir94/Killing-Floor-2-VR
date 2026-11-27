@@ -291,7 +291,8 @@ function PlaceSecondary(int Hand, VRWeaponRuntime R)
         }
     }
     if (SecondaryProps[Hand] == None || SecondaryExtents[Hand] < 0.5) return;
-    Scale = FMin(Owner.ScaleOf(R.Item), 3.5 / SecondaryExtents[Hand]);
+    Scale = FMin(Owner.ScaleOf(R.Item), 3.5 / SecondaryExtents[Hand]) * Owner.Bridge.PouchSize(PouchHand(Hand))
+        * Owner.Bridge.PouchMagazineScale();
     Q = Owner.PouchRotationFor(R.Item, PouchHand(Hand));
     At = PositionForHand(Hand) + (vect(0,8,0) >> Owner.Bridge.BodyYaw());
     At -= QuatRotateVector(Q, SecondaryCentres[Hand] * Scale);
@@ -325,7 +326,9 @@ function Place()
         if (!Flags[Hand].Prepared) continue;
         Alpha = SupplyAlpha(Hand, R, false, Hovered(W, Hand));
         // This display cap never changes the carried prop or an ammo pool.
-        Scale = FMin(Owner.ScaleOf(W), 4.5 / Extents[Hand]);
+        // HOLSTER FIT sizes the pouch: its reach and the ammo shown in it.
+        Scale = FMin(Owner.ScaleOf(W), 4.5 / Extents[Hand]) * Owner.Bridge.PouchSize(PouchHand(Hand))
+            * Owner.Bridge.PouchMagazineScale();
         Q = Owner.PouchRotationFor(W, PouchHand(Hand));
         At = PositionForHand(Hand);
         if (Owner.Secondary != None && Owner.Secondary.bActive && Owner.Secondary.Gun == W)

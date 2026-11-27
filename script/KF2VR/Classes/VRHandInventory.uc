@@ -1844,9 +1844,15 @@ function Update(float DeltaTime)
         }
     }
     if (ReleasedSupport) PlaceAll();
-    // Body holsters are withdrawn. Ignore legacy enabled profiles while
-    // retaining their saved offsets for a possible future reintroduction.
-    if (BodySlots != None)
+    // Body holsters are optional (HOLSTERS in the grip settings, off by
+    // default). The rig updates before input so a fresh grip sees this
+    // frame's hover.
+    if (Bridge.bBodySlotsEnabled && !bDiagnostic)
+    {
+        if (BodySlots == None) { BodySlots = new(self) class'VRBodySlots'; BodySlots.Initialize(self); }
+        BodySlots.Update(DeltaTime);
+    }
+    else if (BodySlots != None)
     { BodySlots.Shutdown(); BodySlots = None; }
     if (!bDiagnostic) Input.Update(DeltaTime);
     SyncHands();
@@ -2154,6 +2160,7 @@ function PlaceAll()
     if (Input != None && Input.Reloads != None && Input.Reloads.Recovery != None) Input.Reloads.Recovery.LatePlace();
     if (Input != None && Input.Bow != None) Input.Bow.PlaceLate();
     if (Input != None && Input.Grenade != None) Input.Grenade.PlaceMarker();
+    if (BodySlots != None) BodySlots.PlaceLate();
     bPlacing = false;
 }
 

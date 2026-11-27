@@ -103,8 +103,10 @@ and world weapon drops are ON. Other saved preferences override starting default
   the gun without firing. The original hand can work its action or squeeze at
   the primary contact to regrip; firing requires a fresh trigger pull. Releasing
   the final support grip safely stows the gun in inventory.
-- Body holsters and HOLSTER FIT are withdrawn. Saved holster settings and
-  offsets are retained but inactive; use the weapon wheel to equip and stow.
+- Body holsters (optional, **VR SETTINGS > HOLSTERS & POUCHES**): stow a gun
+  by letting it go (or squeezing, in toggle grip) at its holster, draw it with a
+  grip there. Syringe, knife and grenade slots work as pockets. See
+  [Body holsters and pouches](#body-holsters-and-pouches).
 - Dosh: open a wheel, choose **DROP**, then **DROP DOSH**. Each click tosses one
   stock wad from that hand forward along its aim; the wheel stays open for more.
 - Y/B beside that controller's temple toggles the flashlight instead of swapping.
@@ -252,10 +254,11 @@ slot to recall. Behavior, tuning and pending acceptance.
 | Y / B, hold 250 ms then release | Open spatial inventory for that same hand; it stays open. The opening hand's stick is idle while it is open; the other stick keeps its locomotion role |
 | Point or move the opening controller toward an icon, then squeeze and release its trigger | Equip into that same hand on release and close the wheel automatically; stick tilt never highlights a sector |
 | Trigger with the hand back at the centre (nothing highlighted), or Y / B while the wheel is open | Cancel |
+| B + A held together on the right controller | One shared wheel for both hands, centred: the left hand's cursor is red, the right hand's turquoise, and each hand's grip draws into that hand. Pages turn for both; it closes once both hands have chosen, or on Y / B. Off: **HOLSTERS & POUCHES > B + A TOGETHER** |
 | Wheel > DROP > DROP (weapon) | Throw that hand's item as the stock pickup a teammate can collect. Stock rules apply: the knife, 9mm backup, welder and VR pair members cannot be dropped |
 | Wheel > DROP > DROP DOSH | Toss one stock wad (stock amount and debit) from that hand's palm forward along its aim; the wheel stays open for repeated tosses |
 | >> sector + trigger click (only with more than eight carried items) | Cycle carried-weapon pages and keep the wheel open |
-| Grip | Hold support contact while squeezed by default; primary stays equipped. Emptying a primary uses OPEN HAND or double-tap Y/B. A valid support contact takes priority over a chest grenade; body holsters remain inactive. No active wrist syringe or hip wallet |
+| Grip | Hold support contact while squeezed by default; primary stays equipped. Emptying a primary uses OPEN HAND or double-tap Y/B. A valid support contact takes priority over a chest grenade. At a body holster the grip stows or draws instead (see Body holsters and pouches). No active wrist syringe or hip wallet |
 | Draw syringe from wheel, or double-tap Y/B on an already empty hand | Syringe remains equipped until stowed/switched. Trigger with the hand near the upper chest (32 UU around a point 35 UU below the head) self-heals; outside that zone trigger uses teammate healing along its aim. X/A plus a fresh trigger invokes its secondary/self-heal action |
 | Empty hand: grip the visible chest grenade, swing, release grip | Hold-to-carry even with latched primary grip. Grip release throws/drops; trigger does not. Invalid/very short sampling can cancel without spending a grenade |
 | Optional support-hand carry: squeeze/release primary grip while braced | Support carries the gun; it cannot fire. Original hand can operate the action or squeeze at the primary contact to regrip. Final support release leaves a local cosmetic drop with automatic return; toggle support uses its toggle-off squeeze |
@@ -945,17 +948,78 @@ BlinkScale=1.0
 Design, numbers and open acceptance are in
 teleport locomotion.
 
-## Withdrawn body holsters
+## Body holsters and pouches
 
-Body holsters and HOLSTER FIT are inactive and absent from the VR menus.
-Saved `bBodySlotsEnabled`, `BodyHolsterOffsets` and legacy `BodySlotOffsets`
-remain compatible profile data; an enabled value does not activate body grab
-zones. The weapon wheel continues to equip/stow items. Ammo POUCH FIT and the
-chest grenade retain their shared body frame and calibration.
+Optional and off until **VR SETTINGS > HOLSTERS & POUCHES > HOLSTERS** is
+switched on. Holsters are cosmetic copies of the stowed weapon's own
+first-person model; ownership still goes through the normal inventory, so
+nothing here creates, drops or pays for an item.
 
-The inactive prototype and the AS2 rig study
-remain available for future design work. Primary-hand latched holding remains
-the default; the other grip/drop modes have not received user headset acceptance.
+**Slots.** Long guns hang behind the left and right shoulder, sidearms at the
+left and right hip, the syringe on the left chest, the knife on the right
+chest; the perk grenade can be placed as a slot too. A dual pistol hangs as its
+two single pistols, one per hip. New weapons (bought, picked up) fill empty
+slots by themselves: the first long gun goes behind the right shoulder, the
+second behind the left; the first pistol on the left hip, the second on the
+right. A dual pistol on both hips gives the right hip up to another pistol.
+
+**Draw and stow.** Reach to a slot: a light pulse and a ring (see below) mark
+it. Grip there to draw. To stow, let the gun go at its holster (HOLD grip) or
+squeeze again there (TOGGLE grip); a quick flick past the shoulder still counts
+for 0.3 s. The welder never holsters.
+
+**Pocket items: syringe, knife, grenade.** Grip at their slot even with a gun in
+that hand: the gun goes to its own holster and the item comes out. The item
+goes back by itself when you let it go at its slot, when you squeeze grip again
+(TOGGLE grip), or 3 s after you let it go anywhere else (a heal or a slash
+already under way finishes first). **AFTER SYRINGE, KNIFE, GRENADE** decides
+whether the gun that was put away comes back to the hand (off by default: it
+stays holstered).
+
+**Placing slots (HOLSTER FIT).** **PLACE HOLSTERS** lists every slot. Pick one:
+the menu closes and that slot's model rides in both hands (your own item, or a
+stock stand-in when you do not own one: an AR-15, the 9mm, the syringe, the
+Commando knife, the perk grenade). Turn it the way it should hang and pull
+either trigger where it should be; the stick sizes it (30-160%), Y/B cancels,
+and the list comes back. Dropping the syringe, knife or grenade at the other
+wrist puts it **on that forearm** instead, where the other hand takes it. The
+slot's ring rides with the model so its reach shows while placing. A grenade
+slot shows at one size whatever the perk (stock bodies range from a frag to a
+nail bomb several times its size); the placed size applies on top.
+
+**Rings.** **HOLSTER RINGS** sets, per group (long guns, sidearms, syringe,
+knife, grenade), whether a hovered slot shows a ring and its colour (eight),
+brightness and size. Defaults: sidearms red at 120%, syringe turquoise at 80%,
+grenade orange, knife off.
+
+**Ammo pouches.** With a pistol in each hand (akimbo) each hand keeps its own
+hip pouch, as before. Otherwise one shared pouch in front of the belly serves
+every gun: two guns' magazines sit side by side in it, and alt-fire ammunition
+sits beside its magazine. **AMMO POUCHES** switches back to the hip pouches for
+everything. **PLACE POUCHES** places the shared pouch and the two akimbo
+pouches like holsters (a magazine stands in for the pouch; the shared pouch
+snaps onto the body's centre line within 4 UU), and **MAGAZINE SIZE** sets how
+large the magazines show (150% by default; their grab reach grows by half as
+much).
+
+**Knife tilt.** **CUSTOMIZE / MELEE > KNIFE TILT** turns the knife forward (or
+back) in the hand in 5 degree steps. Hand, blade and its cutting edge tilt
+together, because melee contact is read from the model's own bones.
+
+**Saved data.** `[KF2VR.VRHandsBridge]` `bBodySlotsEnabled`,
+`HolsterFitOffsets`, `HolsterFitRotations`, `HolsterFitAnchors` (0 body, 1 left
+forearm, 2 right forearm), `HolsterFitScales` (index 0-5 holsters, 6 grenade,
+7 shared pouch, 8/9 akimbo pouches), `HolsterRingColors`,
+`HolsterRingBrightness`, `HolsterRingSizes`, `HolsterRingModes`,
+`bHolsterRestoreGun`, `bPerHandPouches`, `PouchMagazineSize`,
+`KnifeTiltDegrees`, `bNoSharedWheel`. **RESET HOLSTERS & POUCHES** clears the
+placements and rings. Older `BodyHolsterOffsets` / `BodySlotOffsets` are still
+read for an unplaced long gun or sidearm. The rig logs the placements it
+loaded (`KF2VR holsters: loaded slot`).
+
+The body frame follows the Arizona Sunshine 2 rig study: a neck pivot 15 UU
+below the eyes, turned with the head's yaw. Primary-hand latched holding
+remains the default grip mode.
 
 ## VR Calibration & Practice Mode (In-VR)
 
@@ -1064,12 +1128,13 @@ ammunition. Tracking/context loss, recenter or opening the selector cancels the
 held preview. There is no selector fallback throw.
 
 The slot and held preview keep authored size except for the EMP, whose display
-is reduced to the standard frag's measured length. Gameplay remains stock. The slot shows the
+is reduced to the standard frag's measured length. A grenade placed as a body
+slot (HOLSTER FIT) is also scaled down to a frag's size when its body is larger. Gameplay remains stock. The slot shows the
 perk's own grenade whenever another remains; grabbing the last one clears it,
 cancelling restores it without a debit, and a perk change re-templates it.
 
 A squeeze with the palm centre (the OpenXR grip origin) within 12 UU of the
-visible grenade centre takes it, with no dwell. An optional body slot may also
+visible grenade centre takes it, with no dwell. A body holster or pocket slot may also
 answer; the shared grip arbiter selects the usable target. There is no live
 syringe-pocket target. Entering the
 sphere pulses the reaching hand; a 16 UU exit radius keeps the boundary from

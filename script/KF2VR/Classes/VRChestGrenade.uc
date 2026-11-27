@@ -14,6 +14,11 @@ var KFInventoryManager HeldInventory;
 var KFWeapon HeldOwner;
 var ParticleSystemComponent Preview;
 var array<StaticMeshComponent> ZoneBodies;
+// A grenade placed as a body slot (HOLSTER FIT) shows at one size whatever
+// the perk: stock bodies range from a frag to a nail bomb several times its
+// size. Measured from the slot body's own bounds when it is built.
+var class<KFProj_Grenade> SlotFitClass;
+var float SlotFit, SlotGrenadeRadius;
 var class<KFProj_Grenade> MarkerClass;
 var class<KFProj_Grenade> UnsupportedMarkerClass;
 var string UnsupportedBodyReason;
@@ -138,7 +143,12 @@ function vector ChestOrigin() { return Bridge.BodyPivot() - vect(0,0,1) * (38 - 
 // centre-based offsets. Old saved pivot calibration keeps its exact placement.
 function vector ChestPosition()
 {
-    local vector Offset;
+    local vector Offset, GrabAt;
+    local quat Q;
+    local float Size;
+    // Placed with the body holsters (chest, belt or a forearm): the grab
+    // point is the slot, the visible centre sits on it.
+    if (SlotFrame(GrabAt, Q, Size)) return GrabAt - QuatRotateVector(Q, DisplayCenter() * Size);
     Offset = Bridge.ChestGrenadeOffset;
     if (Bridge.bChestGrenadeCentered) Offset -= DisplayCenter();
     return ChestOrigin() + (Offset >> Torso);
@@ -203,7 +213,44 @@ function bool FreeHand(int Hand)
 // The visible grenade centre: the slot origin plus the mesh centre.
 function vector SlotGrabPosition()
 {
+    local vector GrabAt;
+    local quat Q;
+    local float Size;
+    if (SlotFrame(GrabAt, Q, Size)) return GrabAt;
     return ChestPosition() + (DisplayCenter() >> Torso);
+}
+
+function bool PlacingSlot()
+{
+    return InputOwner != None && InputOwner.Inventory != None && InputOwner.Inventory.BodySlots != None
+        && InputOwner.Inventory.BodySlots.PlacingSlot == class'VRBodySlots'.const.GRENADE_SLOT;
+}
+
+// The grenade's place when HOLSTER FIT has placed it (VRBodySlots.GrenadeFrame).
+function bool SlotFrame(out vector GrabAt, out quat Q, out float Size)
+{
+    if (InputOwner == None || InputOwner.Inventory == None || InputOwner.Inventory.BodySlots == None) return false;
+    if (!InputOwner.Inventory.BodySlots.GrenadeFrame(GrabAt, Q, Size)) return false;
+    if (SlotFitClass != None && SlotFitClass == ChestGrenadeClass()) Size *= SlotFit;
+    return true;
+}
+
+// The slot body's size at scale 1, against SlotGrenadeRadius: only larger
+// bodies shrink, so a frag keeps its placed size.
+function MeasureSlotFit(class<KFProj_Grenade> GrenadeClass)
+{
+    local int I;
+    local float Radius;
+    for (I = 0; I < ZoneBodies.Length; ++I)
+    {
+        ZoneBodies[I].SetScale(GrenadeDisplayScale(GrenadeClass));
+        ZoneBodies[I].SetTranslation(vect(0,0,0));
+        ZoneBodies[I].ForceUpdate(true);
+        Radius = FMax(Radius, ZoneBodies[I].Bounds.SphereRadius);
+    }
+    SlotFitClass = GrenadeClass;
+    SlotFit = Radius > SlotGrenadeRadius ? SlotGrenadeRadius / Radius : 1.0;
+    `log("KF2VR holsters: grenade slot body" @ GrenadeClass @ "radius=" $ Radius @ "fit=" $ SlotFit,,'KF2VR');
 }
 
 // Display and grab admission share this scaled centre, including the EMP fit.
@@ -232,6 +279,9 @@ function bool HasVisibleSlot()
 
 function bool InGrabZone(int Hand, optional bool bWasNear)
 {
+    // A grenade on a forearm is taken by the other hand.
+    if (InputOwner != None && InputOwner.Inventory != None && InputOwner.Inventory.BodySlots != None
+        && InputOwner.Inventory.BodySlots.GrenadeOnForearmOf(Hand)) return false;
     return HasVisibleSlot()
         && VSize(GrabPoint(Hand) - SlotGrabPosition()) <= (bWasNear ? ChestGrabExitRadius() : ChestGrabRadius());
 }
@@ -616,6 +666,7 @@ function UpdateZoneMarker(class<KFProj_Grenade> GrenadeClass)
         }
         UnsupportedMarkerClass = None;
         MarkerClass = GrenadeClass;
+        MeasureSlotFit(GrenadeClass);
     }
     PlaceMarker();
 }
@@ -624,15 +675,20 @@ function UpdateZoneMarker(class<KFProj_Grenade> GrenadeClass)
 function PlaceMarker()
 {
     local int I;
+    local vector GrabAt;
+    local quat Q;
+    local float Size;
+    local bool bSlot;
+    bSlot = SlotFrame(GrabAt, Q, Size);
     // The root wrist has now been evaluated for this frame. Tick runs before
     // PlaceAll, so using only its rendered wrist leaves the held body one
     // frame behind the hand during locomotion and controller movement.
     if (HoldingHand >= 0 && HeldClass != None) PlaceHeldPreview(HoldingHand);
     for (I = 0; I < ZoneBodies.Length; ++I)
     {
-        ZoneBodies[I].SetScale(GrenadeDisplayScale(MarkerClass));
+        ZoneBodies[I].SetScale(GrenadeDisplayScale(MarkerClass) * (bSlot ? Size : 1.0));
         ZoneBodies[I].SetTranslation(ChestPosition());
-        ZoneBodies[I].SetRotation(Torso);
+        ZoneBodies[I].SetRotation(bSlot ? QuatToRotator(Q) : Torso);
         ZoneBodies[I].ForceUpdate(true);
     }
 }
@@ -660,7 +716,9 @@ function UpdateChestProximity()
     // Publish the model before testing reach, including perk/count changes.
     // Reserving the last grenade removes the chest body immediately. Cancelling
     // restores it without any inventory debit; extra grenades remain visible.
-    if (AvailableCount() > (HoldingHand >= 0 ? 1 : 0))
+    // HOLSTER FIT shows the perk grenade while it is being placed, even with
+    // none left to throw (it cannot be taken meanwhile: Retrievable counts).
+    if (AvailableCount() > (HoldingHand >= 0 ? 1 : 0) || PlacingSlot())
     {
         Perk = Bridge.PC.GetPerk();
         if (Perk != None) GrenadeClass = Perk.GetGrenadeClass();
@@ -707,4 +765,10 @@ function Update(float Delta)
     {
         if (Samples >= 3) Throw(); else CancelHand(HoldingHand);
     }
+}
+
+defaultproperties
+{
+    // About a frag grenade's own size.
+    SlotGrenadeRadius=7.0
 }

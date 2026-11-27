@@ -3811,7 +3811,8 @@ function Update(float Delta)
     }
     // Donor acquisition reach; insertion snap and rack exit inflation keep
     // their separate policies, and the bridge applies saved pouch fit.
-    BeltRadius = class'VRInteractiveReload'.default.BeltRadius * FClamp(Bridge.AmmoPouchScale, 0.5, 1.5);
+    BeltRadius = class'VRInteractiveReload'.default.BeltRadius * FClamp(Bridge.AmmoPouchScale, 0.5, 1.5)
+        * FClamp(Bridge.PouchSize(OffHand()), 0.3, 1.6) * Bridge.PouchReachScale();
     RackRadius = class'VRInteractiveReload'.default.RackRadius;
     UpdatePendingPulse();
     UpdateMagazineFeeds();

@@ -37,6 +37,8 @@ var bool bAnimating;
 var int IconDiagnosticFrames;
 var rotator SlashRotation;
 var color HandInk, SlashRed, HealCharge, AmmoLow;
+// The right hand's cursor, choice and HELD mark in the shared wheel.
+var color PartnerInk;
 // Ten 36-degree sectors at most: OPEN HAND, TOOLS and eight carried items, or
 // seven plus a fixed NEXT sector when the inventory needs a second page.
 const MaxSectors = 10;
@@ -223,9 +225,9 @@ function OpenSelection()
     // steps aside when the other hand's wheel is already open beside it.
     AnchorOffset = InputOwner.Bridge.HeadPosition - InputOwner.Bridge.Human.Location
         + AxisForward * 80 + AxisUp * -20
-        + AxisRight * (Hand == 0 ? -12 : 12);
+        + AxisRight * (InputOwner.bSharedWheel ? 0 : (Hand == 0 ? -12 : 12));
     bSteppedAside = false;
-    if (InputOwner.IsSelectorOpen(1 - Hand))
+    if (InputOwner.IsSelectorOpen(1 - Hand) && !InputOwner.bSharedWheel)
     {
         StepAside();
         if (InputOwner.Selectors[1 - Hand] != None) InputOwner.Selectors[1 - Hand].StepAside();
@@ -501,7 +503,31 @@ function ReadSelection(optional bool bHoldCursor)
             NewKey @= W.WeaponContentLoaded @ string(Icon);
             if (Icon != None) NewKey @= Icon.SizeX @ Icon.SizeY @ Icon.ResidentMips;
         }
-    if (ContentKey != NewKey) { ContentKey = NewKey; Display.bNeedsUpdate = true; }
+    if (ContentKey != NewKey)
+    {
+        ContentKey = NewKey; Display.bNeedsUpdate = true;
+        // The right hand's cursor is drawn on the shared (left) wheel.
+        if (InputOwner.bSharedWheel && Hand == 1 && InputOwner.Selectors[0] != None)
+            InputOwner.Selectors[0].Display.bNeedsUpdate = true;
+    }
+}
+
+// The other hand's selector in the shared wheel, if it is still choosing.
+simulated function VRHandSelector SharedPartner()
+{
+    if (InputOwner == None || !InputOwner.bSharedWheel) return None;
+    return InputOwner.IsSelectorOpen(1 - Hand) ? InputOwner.Selectors[1 - Hand] : None;
+}
+
+// Page and tool changes in the shared wheel turn both hands' wheel.
+function SyncPartnerPage()
+{
+    local VRHandSelector Partner;
+    Partner = SharedPartner();
+    if (Partner == None) return;
+    Partner.Page = Page; Partner.bUtilities = bUtilities;
+    Partner.HoverHand = -1; Partner.HoverRow = -1;
+    if (InputOwner.Selectors[0] != None) InputOwner.Selectors[0].Display.bNeedsUpdate = true;
 }
 
 // True closes the wheel. Page/utility changes consume a click but stay open.
@@ -530,12 +556,13 @@ function bool CommitSelection()
         bUtilities = false;
         return false;
     }
-    if (HoverRow == UtilitiesRow) { bUtilities = true; HoverRow = -1; return false; }
+    if (HoverRow == UtilitiesRow) { bUtilities = true; HoverRow = -1; SyncPartnerPage(); return false; }
     if (HoverRow == PreviousPageRow || HoverRow == NextPageRow)
     {
         Page = (Page + PageCount() + (HoverRow == NextPageRow ? 1 : -1)) % PageCount();
         HoverHand = -1; HoverRow = -1;
         InputOwner.Inventory.Pulse(Hand);
+        SyncPartnerPage();
         return false;
     }
     W = RowItem(HoverRow);
@@ -548,7 +575,7 @@ function bool CommitSelection()
             InputOwner.ModeFeedback(Hand, false);
             return false;
         }
-        if (InputOwner.IsSelectorOpen(1 - HoverHand))
+        if (InputOwner.IsSelectorOpen(1 - HoverHand) && !InputOwner.bSharedWheel)
         {
             InputOwner.SelectionMessage[Hand] = "CLOSE OTHER WEAPON WHEEL";
             InputOwner.ModeFeedback(Hand, false);
@@ -563,6 +590,8 @@ function bool CommitSelection()
             return false;
         }
         InputOwner.SelectionMessage[Hand] = "";
+        // A pair fills both hands: the shared wheel is done for both.
+        if (InputOwner.bSharedWheel) InputOwner.CloseSelector(1 - Hand);
         InputOwner.RefreshWeapon(0); InputOwner.RefreshWeapon(1);
         InputOwner.Inventory.PlaceAll();
         InputOwner.ModeFeedback(Hand, true);
@@ -625,7 +654,7 @@ simulated function PlaceSelector()
     local vector Position, Scale3D;
     local rotator Facing;
     local float Now, Grow, Travel, Size, Opacity;
-    if (InputOwner == None || !InputOwner.ContextValid() || (!InputOwner.IsSelectorOpen(Hand) && !Collapsing()))
+    if (InputOwner == None || !InputOwner.ContextValid() || !InputOwner.WheelShown(Hand))
     { HideSelector(); return; }
     Now = WorldInfo.RealTimeSeconds;
     Position = InputOwner.Bridge.Human.Location + AnchorOffset;
@@ -887,9 +916,12 @@ simulated function RenderRadial(Canvas C)
     local VRWeaponPair Pair;
     local Texture2D Icon;
     local color Tint, Fill;
-    local bool Selected, Usable, DiagnoseIcons;
+    local bool Selected, Usable, DiagnoseIcons, Own, PartnerSelected;
     local string ItemLocation;
+    local VRHandSelector Partner;
     Now = WorldInfo.RealTimeSeconds;
+    Own = InputOwner.IsSelectorOpen(Hand) || Collapsing();
+    Partner = SharedPartner();
     Count = RadialCount(); Sector = 2 * Pi / Count;
     // One initial and one settled sample per selector lifetime. This identifies
     // the actors/textures behind GPU draws without logging every frame.
@@ -910,7 +942,8 @@ simulated function RenderRadial(Canvas C)
     Pop = FClamp((Now - HoverTime) / PopSeconds, 0, 1);
     for (Slot = 0; Slot < Count; ++Slot)
     {
-        Row = SectorRow(Slot); Selected = Row == HoverRow;
+        Row = SectorRow(Slot); Selected = Own && Row == HoverRow;
+        PartnerSelected = Partner != None && Row == Partner.HoverRow;
         Angle = Sector * Slot;
         X = 384 + Sin(Angle) * WheelRadius; Y = 364 - Cos(Angle) * WheelRadius;
         if (SprayTexture != None)
@@ -924,8 +957,9 @@ simulated function RenderRadial(Canvas C)
         if (!RowSelectable(Row)) continue;
         W = bUtilities ? None : RowItem(Row);
         Pair = RowPair(Row);
-        Usable = Pair != None ? (InputOwner.Inventory.PairHandsFree(Pair) && !InputOwner.IsSelectorOpen(1 - Hand))
-            : (W == None || Available(W, Hand));
+        Usable = Pair != None ? (InputOwner.Inventory.PairHandsFree(Pair)
+                && (!InputOwner.IsSelectorOpen(1 - Hand) || InputOwner.bSharedWheel))
+            : (W == None || Available(W, Own ? Hand : 1 - Hand));
         Tint = Usable ? Ink : Muted;
         // An empty gun stays selectable but fades back.
         if (AmmoShare(W, Fill, Pair) == 0) Tint = MakeColor(Tint.R, Tint.G, Tint.B, 90);
@@ -934,6 +968,11 @@ simulated function RenderRadial(Canvas C)
             Tint = Usable ? MakeColor(255,255,255,255) : Red;
             if (!SpraySlash(C, X, Y, 0.6 + 0.4 * BackOut(Pop)))
                 Arc(C, 180, Angle - Sector * 0.33, Angle + Sector * 0.33, Red, 3);
+        }
+        if (PartnerSelected)
+        {
+            if (!Selected) Tint = MakeColor(255,255,255,255);
+            Arc(C, 205, Angle - Sector * 0.36, Angle + Sector * 0.36, PartnerInk, 5);
         }
         Icon = RowIcon(Row, W);
         if (DiagnoseIcons && W != None)
@@ -962,6 +1001,9 @@ simulated function RenderRadial(Canvas C)
             if (InputOwner.Inventory.Registry.GetPrimary(Hand) != None
                 && InputOwner.Inventory.Registry.GetPrimary(Hand).Item == W)
                 Box(C, X - 13, Y + 78, 26, 4, Red);
+            if (InputOwner.bSharedWheel && InputOwner.Inventory.Registry.GetPrimary(1 - Hand) != None
+                && InputOwner.Inventory.Registry.GetPrimary(1 - Hand).Item == W)
+                Box(C, X - 13, Y + 85, 26, 4, PartnerInk);
         }
         else if (!bUtilities && Row == 0) OpenHandIcon(C, X, Y, Tint);
         else if (Row == UtilitiesRow) Text(C, "TOOLS", X - 48, Y - 16, 96, 32, Tint, true);
@@ -978,10 +1020,29 @@ simulated function RenderRadial(Canvas C)
         else Text(C, RowLabel(Hand, Row), X - 70, Y - 15, 140, 28, Tint);
     }
     // Pointing pip: the exact cursor direction inside the highlighted wedge.
-    if (HoverRow >= 0)
+    if (Own && HoverRow >= 0)
     {
         Angle = Atan2(CursorX, CursorY);
         Box(C, 384 + Sin(Angle) * 165 - 6, 364 - Cos(Angle) * 165 - 6, 12, 12, Red);
+    }
+    if (Partner != None && Partner.HoverRow >= 0)
+    {
+        Angle = Atan2(Partner.CursorX, Partner.CursorY);
+        Box(C, 384 + Sin(Angle) * 165 - 6, 364 - Cos(Angle) * 165 - 6, 12, 12, PartnerInk);
+    }
+    if (InputOwner.bSharedWheel)
+    {
+        // Both hands' choices, each in its hand's colour; grip takes it.
+        Text(C, "BOTH HANDS", 284, 280, 200, 16, HandInk, true);
+        if (Own) Text(C, WeaponLabel != "" ? "LEFT HAND: " $ WeaponLabel : "LEFT HAND", 216, 300, 336, 26, Red, true);
+        else Text(C, "LEFT HAND: DONE", 216, 300, 336, 26, Muted, true);
+        if (Partner != None) Text(C, Partner.WeaponLabel != "" ? "RIGHT HAND: " $ Partner.WeaponLabel : "RIGHT HAND", 216, 332, 336, 26, PartnerInk, true);
+        else Text(C, "RIGHT HAND: DONE", 216, 332, 336, 26, Muted, true);
+        Text(C, "GRIP: INTO THAT HAND", 254, 436, 260, 16, Muted, true);
+        if (PageCount() > 1 && !bUtilities)
+            Text(C, string(Page + 1) $ " / " $ PageCount(), 352, 711, 96, 20, Muted);
+        Text(C, InputOwner.SelectionMessage[Own ? Hand : 1 - Hand], 144, 745, 480, 20, Red);
+        return;
     }
     Text(C, Hand == 0 ? "LEFT HAND" : "RIGHT HAND", 284, 280, 200, 16, HandInk, true);
     if (bUtilities && HoverRow == 2 && (class'VRWorldWeaponPolicy'.static.Enabled() && InputOwner.Bridge.bWorldWeaponDrops))
@@ -1057,6 +1118,7 @@ defaultproperties
     SlashRed=(R=168,G=32,B=26,A=235)
     HealCharge=(R=95,G=182,B=214,A=255)
     AmmoLow=(R=224,G=160,B=48,A=255)
+    PartnerInk=(R=40,G=196,B=176,A=255)
     SlashRotation=(Pitch=0,Yaw=-2548,Roll=0)
     Begin Object Class=StaticMeshComponent Name=SelectorSurface
         StaticMesh=StaticMesh'EngineMeshes.Cube'

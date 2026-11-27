@@ -92,8 +92,11 @@ var int NativeMenuTransitionEpoch;
 var bool bCalibrationPending;
 var int PendingCalibrationPage, PendingCalibrationEpoch;
 var float PendingCalibrationUntil;
-var int PageParents[56];
-var byte PageParentValid[56];
+var int PageParents[61];
+var byte PageParentValid[61];
+// HOLSTERS & POUCHES: the ring group being edited and the list a placement
+// came from (it reopens there).
+var int RingGroupEdit, PlacementListPage;
 var array<string> MatchMaps;
 var int MapListPage, ResetTarget;
 
@@ -150,7 +153,12 @@ const PAGE_GLOW_COLOR = 52;
 const PAGE_GLOW_ADVANCED = 53;
 const PAGE_GRIP = 54;
 const PAGE_MELEE = 55;
-const PAGE_COUNT = 56;
+const PAGE_HOLSTERS = 56;
+const PAGE_HOLSTER_LIST = 57;
+const PAGE_POUCH_LIST = 58;
+const PAGE_RINGS = 59;
+const PAGE_RING_GROUP = 60;
+const PAGE_COUNT = 61;
 
 enum MenuAction
 {
@@ -164,7 +172,7 @@ enum MenuAction
     MA_AutoReturn, MA_ReturnSeconds, MA_SightMode, MA_AimAssist, MA_LaserOrigin,
     MA_AimStrength, MA_AimTolerance, MA_AimMinRange, MA_AimMaxRange,
     MA_ComfortPreset, MA_GripPreset, MA_Focus, MA_FocusSpeed, MA_Posture, MA_GunAngle, MA_GraphicsPreset, MA_Gore, MA_AudioLevel, MA_AudioOption, MA_Mic, MA_ResetCategory, MA_MirrorHands, MA_Haptics, MA_Cinematic, MA_Stock, MA_Dlss, MA_Sharpen, MA_GraphicsEffect, MA_FadeTime, MA_Physics, MA_ShadowTuning, MA_Training,
-    MA_GlowColor, MA_GlowChannel, MA_GlowPreset, MA_GlowDefault, MA_LaserSize, MA_LaserSmallDot, MA_AmmoPreset, MA_HudPreset
+    MA_GlowColor, MA_GlowChannel, MA_GlowPreset, MA_GlowDefault, MA_LaserSize, MA_LaserSmallDot, MA_AmmoPreset, MA_HudPreset, MA_HolsterPlace, MA_HolsterReset, MA_RingGroup, MA_RingColor, MA_RingBright, MA_RingSize, MA_RingToggle, MA_KnifeTilt, MA_PouchMagazine
 };
 
 struct MenuRow
@@ -919,6 +927,11 @@ function float HandValue(name Key)
         case 'WorldDropReturnPolicy': return (Hands != None ? Hands.WorldDropReturnPolicy : C.default.WorldDropReturnPolicy);
         case 'WorldDropReturnSeconds': return (Hands != None ? Hands.WorldDropReturnSeconds : C.default.WorldDropReturnSeconds);
         case 'bSupportHandCarry': return int(Hands != None ? Hands.bSupportHandCarry : C.default.bSupportHandCarry);
+        case 'bBodySlotsEnabled': return int(Hands != None ? Hands.bBodySlotsEnabled : C.default.bBodySlotsEnabled);
+        case 'bHolsterRestoreGun': return int(Hands != None ? Hands.bHolsterRestoreGun : C.default.bHolsterRestoreGun);
+        case 'bPerHandPouches': return int(Hands != None ? Hands.bPerHandPouches : C.default.bPerHandPouches);
+        case 'bNoSharedWheel': return int(Hands != None ? Hands.bNoSharedWheel : C.default.bNoSharedWheel);
+        case 'KnifeTiltDegrees': return (Hands != None ? Hands.KnifeTiltDegrees : C.default.KnifeTiltDegrees);
         case 'bDisableGravityPull': return int(Hands != None ? Hands.bDisableGravityPull : C.default.bDisableGravityPull);
         case 'bDisableSupportHandAim': return int(Hands != None ? Hands.bDisableSupportHandAim : C.default.bDisableSupportHandAim);
         case 'bControllerRelativeMovement': return int(Hands != None ? Hands.bControllerRelativeMovement : C.default.bControllerRelativeMovement);
@@ -1016,6 +1029,26 @@ function SetHandValue(name Key, float Value)
         case 'bSupportHandCarry':
             if (Hands != None) Hands.bSupportHandCarry = Value != 0;
             else C.default.bSupportHandCarry = Value != 0;
+            break;
+        case 'bBodySlotsEnabled':
+            if (Hands != None) Hands.bBodySlotsEnabled = Value != 0;
+            else C.default.bBodySlotsEnabled = Value != 0;
+            break;
+        case 'bHolsterRestoreGun':
+            if (Hands != None) Hands.bHolsterRestoreGun = Value != 0;
+            else C.default.bHolsterRestoreGun = Value != 0;
+            break;
+        case 'bPerHandPouches':
+            if (Hands != None) Hands.bPerHandPouches = Value != 0;
+            else C.default.bPerHandPouches = Value != 0;
+            break;
+        case 'bNoSharedWheel':
+            if (Hands != None) Hands.bNoSharedWheel = Value != 0;
+            else C.default.bNoSharedWheel = Value != 0;
+            break;
+        case 'KnifeTiltDegrees':
+            if (Hands != None) Hands.KnifeTiltDegrees = Value;
+            else C.default.KnifeTiltDegrees = Value;
             break;
         case 'bDisableGravityPull':
             if (Hands != None) Hands.bDisableGravityPull = Value != 0;
@@ -1227,6 +1260,37 @@ function AddGlowRole(int Row, int Role)
 }
 
 // Calibration editors open on the hands, so they exist only in a match.
+// After a holster is placed: straight back to the holster list.
+function ReopenHolsters()
+{
+    if (!LocalContext() || HolsterRig() == None) return;
+    if (NativeShellActive == 0) ToggleMenu();
+    SetPage(PlacementListPage == PAGE_POUCH_LIST ? PAGE_POUCH_LIST : PAGE_HOLSTER_LIST);
+    RefreshMenuState();
+}
+
+function AddHolsterRigNotice()
+{
+    if (HandValue('bBodySlotsEnabled') == 0) AddRow(0, "TURN HOLSTERS ON FIRST", MA_None, 0, 4);
+    else if (!CalibrationAvailable()) AddRow(0, "PLACEMENT WORKS IN A MATCH, ALIVE", MA_None, 0, 4);
+    else AddRow(0, "CLOSE THE MENU ONCE, THEN PLACE THEM HERE", MA_None, 0, 4);
+}
+
+function string RingLabel(int Group)
+{
+    if (Hands == None) return "";
+    if (!Hands.RingOn(Group)) return "OFF";
+    return class'VRBodySlots'.default.RingPaletteNames[Hands.RingColor(Group)] $ ", "
+        $ Hands.RingBrightness(Group) $ "%, SIZE " $ Hands.RingSize(Group) $ "%";
+}
+
+// The live holster rig: holsters on, alive, hands running.
+function VRBodySlots HolsterRig()
+{
+    if (!CalibrationAvailable() || Hands.HandInventory == None) return None;
+    return Hands.HandInventory.BodySlots;
+}
+
 function bool CalibrationAvailable()
 {
     return LivingView() && Hands != None;
@@ -1276,6 +1340,7 @@ function BuildMenuRows()
         AddRow(3, "GRAPHICS & HUD", MA_Page, PAGE_GRAPHICS);
         AddRow(4, "AUDIO", MA_Page, PAGE_AUDIO);
         AddRow(5, "VIEW CONTROLS", MA_Page, PAGE_CONTROLS);
+        AddRow(6, "HOLSTERS & POUCHES", MA_Page, PAGE_HOLSTERS);
         AddBack(PAGE_ROOT);
         break;
     case PAGE_QUICK:
@@ -1369,9 +1434,66 @@ function BuildMenuRows()
         AddRow(5, "GUN ANGLE: " $ GunAngleLabel(), MA_GunAngle, 0, 1);
         AddBack(PAGE_HANDS_ADVANCED);
         break;
+    case PAGE_HOLSTERS:
+        AddRow(0, "HOLSTERS: " $ OnOff('bBodySlotsEnabled'), MA_HandToggle, 0, 1, 'bBodySlotsEnabled');
+        AddRow(1, "PLACE HOLSTERS", MA_Page, PAGE_HOLSTER_LIST);
+        AddRow(2, "AMMO POUCHES: " $ (HandValue('bPerHandPouches') != 0 ? "ONE PER HIP" : "SHARED, ONE PER HIP WITH TWO PISTOLS"),
+            MA_HandToggle, 0, 1, 'bPerHandPouches');
+        AddRow(3, "PLACE POUCHES", MA_Page, PAGE_POUCH_LIST);
+        AddRow(4, "HOLSTER RINGS", MA_Page, PAGE_RINGS);
+        AddRow(5, "AFTER SYRINGE, KNIFE, GRENADE: " $ (HandValue('bHolsterRestoreGun') != 0 ? "GUN BACK TO HAND" : "GUN STAYS HOLSTERED"),
+            MA_HandToggle, 0, 1, 'bHolsterRestoreGun');
+        AddRow(7, "B + A TOGETHER: " $ (HandValue('bNoSharedWheel') != 0 ? "OFF" : "ONE WHEEL FOR BOTH HANDS"),
+            MA_HandToggle, 0, 1, 'bNoSharedWheel');
+        AddRow(8, "RESET HOLSTERS & POUCHES", MA_HolsterReset, -1, 3);
+        AddBack(PAGE_SETTINGS);
+        break;
+    case PAGE_HOLSTER_LIST:
+        if (HolsterRig() == None) { AddHolsterRigNotice(); AddBack(PAGE_HOLSTERS); break; }
+        // Pick one: the menu closes, its model rides in both hands, either
+        // trigger puts it down, and this list comes back.
+        AddRow(0, "PLACE: LONG GUN, LEFT", MA_HolsterPlace, 0);
+        AddRow(1, "PLACE: LONG GUN, RIGHT", MA_HolsterPlace, 1);
+        AddRow(2, "PLACE: SIDEARM, LEFT", MA_HolsterPlace, 2);
+        AddRow(3, "PLACE: SIDEARM, RIGHT", MA_HolsterPlace, 3);
+        AddRow(4, Hands.HolsterFitAnchor(4) != 0 ? "PLACE: SYRINGE (FOREARM)" : "PLACE: SYRINGE", MA_HolsterPlace, 4);
+        AddRow(5, Hands.HolsterFitAnchor(5) != 0 ? "PLACE: KNIFE (FOREARM)" : "PLACE: KNIFE", MA_HolsterPlace, 5);
+        AddRow(6, Hands.HolsterFitAnchor(6) != 0 ? "PLACE: GRENADE (FOREARM)" : "PLACE: GRENADE", MA_HolsterPlace, 6);
+        AddBack(PAGE_HOLSTERS);
+        break;
+    case PAGE_POUCH_LIST:
+        if (HolsterRig() == None) { AddHolsterRigNotice(); AddBack(PAGE_HOLSTERS); break; }
+        AddRow(0, "PLACE: AMMO POUCH", MA_HolsterPlace, 7);
+        AddRow(1, "PLACE: AKIMBO POUCH, LEFT", MA_HolsterPlace, 8);
+        AddRow(2, "PLACE: AKIMBO POUCH, RIGHT", MA_HolsterPlace, 9);
+        AddRow(3, "MAGAZINE SIZE: " $ Hands.PouchMagazinePercent() $ "%", MA_PouchMagazine, 10, 5);
+        AddRow(4, "AMMO POUCH: ANY GUNS BUT A PISTOL IN EACH HAND", MA_None, 0, 4);
+        AddRow(5, "AKIMBO POUCHES: A PISTOL IN EACH HAND", MA_None, 0, 4);
+        AddRow(6, "ALT-FIRE AMMO SITS BESIDE THE MAGAZINE", MA_None, 0, 4);
+        AddBack(PAGE_HOLSTERS);
+        break;
+    case PAGE_RINGS:
+        AddRow(0, "LONG GUNS: " $ RingLabel(0), MA_RingGroup, 0);
+        AddRow(1, "SIDEARMS: " $ RingLabel(1), MA_RingGroup, 1);
+        AddRow(2, "SYRINGE: " $ RingLabel(2), MA_RingGroup, 2);
+        AddRow(3, "KNIFE: " $ RingLabel(3), MA_RingGroup, 3);
+        AddRow(4, "GRENADE: " $ RingLabel(4), MA_RingGroup, 4);
+        AddRow(6, "THE RING SHOWS WHERE A HAND CAN DRAW OR STOW", MA_None, 0, 4);
+        AddBack(PAGE_HOLSTERS);
+        break;
+    case PAGE_RING_GROUP:
+        if (Hands == None) { AddBack(PAGE_RINGS); break; }
+        AddRow(0, "RING: " $ (Hands.RingOn(RingGroupEdit) ? "ON" : "OFF"), MA_RingToggle, 0, 1);
+        AddRow(1, "COLOR: " $ class'VRBodySlots'.default.RingPaletteNames[Hands.RingColor(RingGroupEdit)], MA_RingColor, 1, 5);
+        AddRow(2, "BRIGHTNESS: " $ Hands.RingBrightness(RingGroupEdit) $ "%", MA_RingBright, 10, 5);
+        AddRow(3, "SIZE: " $ Hands.RingSize(RingGroupEdit) $ "%", MA_RingSize, 10, 5);
+        AddBack(PAGE_RINGS);
+        break;
     case PAGE_MELEE:
         AddRow(0, "MELEE HIT STOP: " $ OnOff('bMeleeHitStop'), MA_HandToggle, 0, 1, 'bMeleeHitStop');
         AddRow(1, "PHYSICAL MELEE: " $ OnOff('bExperimentalInteractions'), MA_HandToggle, 0, 1, 'bExperimentalInteractions');
+        AddRow(2, "KNIFE TILT: " $ KnifeTiltLabel(), MA_KnifeTilt, 5, 5);
+        AddRow(3, "TILTS THE BLADE AND ITS CUTTING EDGE IN YOUR HAND", MA_None, 0, 4);
         AddBack(PAGE_HANDS_ADVANCED);
         break;
     case PAGE_CONTROLS:
@@ -1873,6 +1995,15 @@ function string GripPresetLabel()
     switch (GripPresetIndex()) { case 0: return "MIXED"; case 1: return "HOLD"; case 2: return "TOGGLE"; }
     return "CUSTOM";
 }
+function string KnifeTiltLabel()
+{
+    local int Tilt;
+    Tilt = int(HandValue('KnifeTiltDegrees') + (HandValue('KnifeTiltDegrees') >= 0 ? 0.5 : -0.5));
+    if (Tilt == 0) return "STRAIGHT UP";
+    if (Tilt > 0) return "FORWARD " $ Tilt $ " DEGREES";
+    return "BACK " $ (-Tilt) $ " DEGREES";
+}
+
 function string GunAngleLabel()
 {
     if (!(HandValue('FirearmAimYawDegrees') ~= 0.0) || !(HandValue('FirearmAimRollDegrees') ~= 0.0)) return "CUSTOM";
@@ -2616,6 +2747,49 @@ function ActivateRow(int Row)
             class'VRGraphicsMenu'.default.ResetGammaString, class'VRGraphicsMenu'.default.SetGammaString);
         SuspendForSettingsPopup(PAGE_SCREEN_EFFECTS); return;
     case MA_Calibration: OpenCalibration(Selected.Argument); return;
+    case MA_RingGroup: RingGroupEdit = Clamp(Selected.Argument, 0, 4); SetPage(PAGE_RING_GROUP, true); return;
+    case MA_PouchMagazine:
+        if (Hands == None) return;
+        Hands.PouchMagazineSize = Clamp(Hands.PouchMagazinePercent() + Selected.Argument, 80, 250);
+        Hands.SavePreferences();
+        return;
+    case MA_RingToggle:
+        if (Hands != None) Hands.SetRingOn(RingGroupEdit, !Hands.RingOn(RingGroupEdit));
+        return;
+    case MA_KnifeTilt:
+        SetHandValue('KnifeTiltDegrees', FClamp(HandValue('KnifeTiltDegrees') + Selected.Argument, -60, 90));
+        return;
+    case MA_RingColor:
+        if (Hands == None) return;
+        Hands.SetRing(RingGroupEdit, (Hands.RingColor(RingGroupEdit) + Selected.Argument + 8) % 8,
+            Hands.RingBrightness(RingGroupEdit), Hands.RingSize(RingGroupEdit));
+        return;
+    case MA_RingBright:
+        if (Hands == None) return;
+        Hands.SetRing(RingGroupEdit, Hands.RingColor(RingGroupEdit),
+            Clamp(Hands.RingBrightness(RingGroupEdit) + Selected.Argument, 10, 100), Hands.RingSize(RingGroupEdit));
+        return;
+    case MA_RingSize:
+        if (Hands == None) return;
+        Hands.SetRing(RingGroupEdit, Hands.RingColor(RingGroupEdit), Hands.RingBrightness(RingGroupEdit),
+            Clamp(Hands.RingSize(RingGroupEdit) + Selected.Argument, 50, 200));
+        return;
+    case MA_HolsterPlace:
+        if (HolsterRig() == None) return;
+        PlacementListPage = Page;
+        // Close first: the placement runs on the live hands, unpaused.
+        ToggleMenu();
+        HolsterRig().BeginPlacement(Selected.Argument, MenuHand);
+        return;
+    case MA_HolsterReset:
+        if (Hands == None) return;
+        Hands.HolsterRingColors.Length = 0; Hands.HolsterRingBrightness.Length = 0; Hands.HolsterRingSizes.Length = 0;
+        Hands.HolsterRingModes.Length = 0; Hands.PouchMagazineSize = 0;
+        for (Index = 0; Index < 10; ++Index) Hands.SetHolsterFit(Index, vect(0,0,0), rot(0,0,0), 0, 0, true);
+        // The chest grenade's own default (as RESET GRENADE ZONE in calibration).
+        Hands.ChestGrenadeOffset = vect(10.5,9.5,6.0); Hands.bChestGrenadeCentered = true;
+        Hands.SavePreferences();
+        return;
 
     case MA_Training: ActivateTraining(Selected.Argument); return;
     case MA_Practice: OpenPractice(); return;
@@ -2674,6 +2848,11 @@ function string PageTitle()
         case PAGE_AIM_ADVANCED: return "CUSTOMIZE / AIM";
         case PAGE_GRIP: return "CUSTOMIZE / GRIP";
         case PAGE_MELEE: return "CUSTOMIZE / MELEE";
+        case PAGE_HOLSTERS: return "HOLSTERS & POUCHES";
+        case PAGE_HOLSTER_LIST: return "HOLSTERS & POUCHES / HOLSTERS";
+        case PAGE_POUCH_LIST: return "HOLSTERS & POUCHES / POUCHES";
+        case PAGE_RINGS: return "HOLSTERS & POUCHES / RINGS";
+        case PAGE_RING_GROUP: return "HOLSTERS & POUCHES / RINGS";
         case PAGE_GLOW_COLORS: return "CUSTOMIZE / GLOW COLORS & LASER";
         case PAGE_GLOW_ADVANCED: return "GLOW COLORS / EACH GLOW SEPARATELY";
         case PAGE_LASER: return "GLOW COLORS / LASER SIGHT";
