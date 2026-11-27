@@ -1031,6 +1031,15 @@ function bool TossDosh(int Hand)
     return Thrown;
 }
 
+// A resolved single Y/B tap: the previous weapon, unless switched off.
+function UpperTap(int Hand)
+{
+    if (Bridge.bNoUpperTapSwap) return;
+    QuickSwapHand(Hand);
+    RefreshWeapon(Hand);
+    Bridge.Hands[Hand].bTriggerArmed = false;
+}
+
 function UpdateSelection(float DeltaTime)
 {
     local int Hand, Bit, UpperBit;
@@ -1067,9 +1076,7 @@ function UpdateSelection(float DeltaTime)
         if (InputState[Hand].bUpperTapPending && Now >= UpperTapDeadline[Hand])
         {
             InputState[Hand].bUpperTapPending = false;
-            QuickSwapHand(Hand);
-            RefreshWeapon(Hand);
-            Bridge.Hands[Hand].bTriggerArmed = false;
+            UpperTap(Hand);
         }
         if (Edge && !IsSelectorOpen(Hand) && HandAtTemple(Hand))
         {
@@ -1101,7 +1108,7 @@ function UpdateSelection(float DeltaTime)
         if (Upper && InputState[Hand].bUpperGesture && !InputState[Hand].bUpperUsed)
         {
             UpperTime[Hand] += DeltaTime;
-            if (UpperTime[Hand] >= UPPER_HOLD_SECONDS && InputState[Hand].bUpperDoubleTap)
+            if (UpperTime[Hand] >= UPPER_HOLD_SECONDS && InputState[Hand].bUpperDoubleTap && !Bridge.bNoUpperTapHoldSyringe)
             {
                 // Tap then hold: quick heal rather than a second way to the wheel.
                 StopWeapon(Hand);
@@ -1176,11 +1183,16 @@ function UpdateSelection(float DeltaTime)
             // second short tap explicitly opens the hand.
             if (!InputState[Hand].bUpperUsed)
             {
-                if (InputState[Hand].bUpperDoubleTap)
+                // A switched-off gesture neither fires nor makes a tap wait:
+                // without double tap and tap-hold, a tap acts at once.
+                if (InputState[Hand].bUpperDoubleTap && !Bridge.bNoUpperDoubleTapOpen)
                 {
                     OpenHand(Hand);
                     Bridge.Hands[Hand].bTriggerArmed = false;
                 }
+                else if (InputState[Hand].bUpperDoubleTap
+                    || (Bridge.bNoUpperDoubleTapOpen && Bridge.bNoUpperTapHoldSyringe))
+                    UpperTap(Hand);
                 else
                 {
                     InputState[Hand].bUpperTapPending = true;
@@ -2050,7 +2062,9 @@ function UpdateEmptyInteraction()
             // press, whose stock hold also auto-buys at the trader and welds.
             // The same clench test as the charge, analog squeeze included, or
             // a partial squeeze would both charge and press use.
-            && (Inventory.FistCharge == None || !Inventory.FistCharge.IsFistClosed(Hand)))
+            && (Inventory.FistCharge == None || !Inventory.FistCharge.IsFistClosed(Hand))
+            // At the wristwatch the trigger skips the trader instead.
+            && (Bridge.SpatialHUD == None || !Bridge.SpatialHUD.WatchClaims(Hand)))
             WantedMask = WantedMask | (1 << Hand);
     bWanted = WantedMask != 0;
     if (bWanted != bInteracting && KFPlayerInput(Bridge.PC.PlayerInput) != None)

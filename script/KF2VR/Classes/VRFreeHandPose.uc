@@ -28,6 +28,9 @@ var byte GravityShape[2];
 var bool bReady;
 var VRHandsBridge BoundBridge;
 var byte bWorldCatchPose[2];
+// A pointing fist (index straight, the rest curled), e.g. at the wristwatch.
+var float PointBlend[2];
+var byte bPointing[2];
 var quat WorldCatchFingers[30];
 
 function SetWorldCatchFinger(int Hand, int Joint, quat Q)
@@ -48,6 +51,23 @@ function EndWorldCatchPose(int Hand)
     if (Hand < 0 || Hand > 1 || bWorldCatchPose[Hand] == 0) return;
     bWorldCatchPose[Hand] = 0;
     Apply();
+}
+
+function SetPointing(int Hand, bool bPoint)
+{
+    if (Hand >= 0 && Hand <= 1) bPointing[Hand] = byte(bPoint);
+}
+
+// The pointing fist for joint I: the index straight, every other digit curled
+// as the full grip curls it.
+function quat PointCurl(int I)
+{
+    local quat Curl;
+    if ((I % 15) / 3 == 1) return QuatFromAxisAndAngle(Joints[I].Axis, 0);
+    Curl = QuatFromAxisAndAngle(Joints[I].Axis, Joints[I].Degrees * Pi / 180.0);
+    if (Joints[I].OppositionDegrees != 0)
+        Curl = QuatProduct(QuatFromAxisAndAngle(Joints[I].OppositionAxis, Joints[I].OppositionDegrees * Pi / 180.0), Curl);
+    return Curl;
 }
 
 function name FingerBone(int Hand, int Finger, int Joint)
@@ -213,6 +233,8 @@ function Apply()
                 Joints[I].OppositionDegrees * Pi / 180.0 * Alpha), Curl);
         if (GravityBlend[Joints[I].Hand] > 0.001)
             Curl = QuatSlerp(Curl, GravityCurl(I), GravityBlend[Joints[I].Hand], true);
+        if (PointBlend[Joints[I].Hand] > 0.001)
+            Curl = QuatSlerp(Curl, PointCurl(I), PointBlend[Joints[I].Hand], true);
         // Only exact stock classes in the catalog receive an authored pose.
         if (class'VRGrenadeGripPose'.static.Read(GrenadeProfile[Joints[I].Hand],
             Joints[I].Hand, I % 15, Authored)) Curl = Authored;
@@ -286,6 +308,7 @@ function Advance(VRHandsBridge B, float DeltaTime)
         Shape = GravityPose(Hand);
         if (Shape != 0) GravityShape[Hand] = Shape;
         GravityBlend[Hand] += ((Shape != 0 ? 1.0 : 0.0) - GravityBlend[Hand]) * ShapeBlend;
+        PointBlend[Hand] += ((bPointing[Hand] != 0 ? 1.0 : 0.0) - PointBlend[Hand]) * ShapeBlend;
     }
     Apply();
 }

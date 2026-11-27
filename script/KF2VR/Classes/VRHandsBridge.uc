@@ -415,6 +415,9 @@ var config bool bDisableSupportHandAim;
 // or a corpse. Prototype gate; see docs/ZED_PHYSICS_GRAB_ROADMAP.md.
 // Shared launch defaults enable this; saved booleans remain authoritative.
 // Solo only; multiplayer admission stays closed.
+// Y/B gestures, each off when set: tap for the previous weapon, double tap to
+// free the hand, tap then hold for the syringe. Off gestures stop waiting.
+var config bool bNoUpperTapSwap, bNoUpperDoubleTapOpen, bNoUpperTapHoldSyringe;
 var config bool bZedGrabEnabled;
 var config int ZedGrabSettingsRevision;
 // Opt in to B&S-style interactions; missing preferences retain old melee.
@@ -1313,6 +1316,8 @@ simulated function CopyPreferencesTo(class<VRHandsBridge> To)
     To.default.bLegacyMeleeDismemberGate = bLegacyMeleeDismemberGate;
     To.default.bLegacyMeleePalmShove = bLegacyMeleePalmShove;
     To.default.bLegacyMeleeImpactReaction = bLegacyMeleeImpactReaction;
+    To.default.bNoUpperTapSwap = bNoUpperTapSwap; To.default.bNoUpperDoubleTapOpen = bNoUpperDoubleTapOpen;
+    To.default.bNoUpperTapHoldSyringe = bNoUpperTapHoldSyringe;
     To.default.bLegacyMeleePommel = bLegacyMeleePommel;
     To.default.bLegacyMeleeWallStop = bLegacyMeleeWallStop;
     To.default.bLegacyMeleeSlidingGrip = bLegacyMeleeSlidingGrip;
@@ -1411,6 +1416,8 @@ static function CopyDefaultPreferencesTo(class<VRHandsBridge> To)
     To.default.bLegacyMeleeDismemberGate = default.bLegacyMeleeDismemberGate;
     To.default.bLegacyMeleePalmShove = default.bLegacyMeleePalmShove;
     To.default.bLegacyMeleeImpactReaction = default.bLegacyMeleeImpactReaction;
+    To.default.bNoUpperTapSwap = default.bNoUpperTapSwap; To.default.bNoUpperDoubleTapOpen = default.bNoUpperDoubleTapOpen;
+    To.default.bNoUpperTapHoldSyringe = default.bNoUpperTapHoldSyringe;
     To.default.bLegacyMeleePommel = default.bLegacyMeleePommel;
     To.default.bLegacyMeleeWallStop = default.bLegacyMeleeWallStop;
     To.default.bLegacyMeleeSlidingGrip = default.bLegacyMeleeSlidingGrip;
